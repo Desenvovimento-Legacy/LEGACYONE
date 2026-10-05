@@ -77,3 +77,21 @@ verifica a procuração e-CAC e transforma em pendência só o que não pode ser
 | Pending Engine | |
 | Authorization Service (uso único, por procuração) | Workflow durável do onboarding no Temporal |
 | Metadados de certificados e procurações | Cadastro do responsável técnico e suas capacidades |
+
+## Receita Federal: busca mensal (Integra Contador)
+
+Toda consulta ao SERPRO é cobrada. Regras do IARIS:
+
+- **Abrir a tela não consulta nada.** Só o botão **Buscar** consulta, depois de confirmação.
+- **Busca da competência = 2 consultas por empresa**: PGDAS-D do período e pagamentos
+  arrecadados no mês da competência e no seguinte.
+- **Teto diário** de consultas cobradas por escritório: `SERPRO_DAILY_LIMIT` no cofre (padrão 20).
+  Se a busca não cabe no teto, nenhuma consulta sai.
+- **Carga histórica** (implantação, uma vez por cliente): `pnpm federal:sync <cnpj>` mostra
+  quantas consultas fará; só executa com `--confirmar`.
+- Procuração já verificada e vigente não é consultada de novo.
+
+```powershell
+pnpm web                            # tela local em http://127.0.0.1:3100
+pnpm federal:report 01210421000100  # relatório do que já foi buscado (sem consulta)
+```

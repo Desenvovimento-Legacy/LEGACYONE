@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
 import { createSecureContext } from "node:tls";
+import type { MeteringPolicy } from "../../platform/metering/metering.js";
 import type { SecretStore } from "../../shared/secrets/secrets-file.js";
 import { SerproIntegraContador } from "./serpro.js";
 
@@ -72,4 +73,14 @@ export function serproFromVault(store: SecretStore): SerproIntegraContador {
     officeCnpj: store.require("OFFICE_CNPJ"),
     certificate: { pfx: readFileSync(pfxPath), passphrase: store.require("CERT_PFX_PASSWORD") },
   });
+}
+
+export const SERPRO_PROVIDER = "serpro-integra-contador";
+const DEFAULT_DAILY_LIMIT = 20;
+
+/** Teto diário de consultas cobradas (SERPRO_DAILY_LIMIT no cofre; padrão 20). */
+export function serproMetering(store: SecretStore | null): MeteringPolicy {
+  const raw = store?.has("SERPRO_DAILY_LIMIT") ? Number(store.require("SERPRO_DAILY_LIMIT")) : DEFAULT_DAILY_LIMIT;
+  const dailyLimit = Number.isInteger(raw) && raw >= 0 ? raw : DEFAULT_DAILY_LIMIT;
+  return { provider: SERPRO_PROVIDER, dailyLimit };
 }

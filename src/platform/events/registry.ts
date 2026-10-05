@@ -69,6 +69,8 @@ export const EventContracts = {
     1: z.object({
       entity_id: z.uuid(),
       year: z.number().int(),
+      /** Presente na busca por competência; nulo na carga do ano inteiro. */
+      competence: z.iso.date().nullable().optional(),
       declarations: z.number().int(),
       das: z.number().int(),
       new_declarations: z.number().int(),

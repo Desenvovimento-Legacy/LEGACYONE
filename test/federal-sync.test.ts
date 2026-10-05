@@ -2,8 +2,16 @@ import { describe, expect, it } from "vitest";
 import { FakeIntegraContador } from "../src/integrations/integra-contador/fake.js";
 import { parsePayments, parsePgdasYear } from "../src/integrations/integra-contador/parsers.js";
 import type { FederalPayment } from "../src/integrations/integra-contador/types.js";
-import { competenceSummary, dasPaymentsOutsidePgdas, FederalAccessDeniedError, syncFederalData } from "../src/modules/federal/federal-sync.js";
+import {
+  competenceSummary,
+  COMPETENCE_CALLS,
+  dasPaymentsOutsidePgdas,
+  FederalAccessDeniedError,
+  syncCompetence,
+  syncFederalData,
+} from "../src/modules/federal/federal-sync.js";
 import { verifyAuditChain } from "../src/platform/audit/audit.js";
+import { billedCallsToday, DailyLimitExceededError } from "../src/platform/metering/metering.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
 import { CNPJ_MATRIZ } from "./fixtures/cnpj.js";
@@ -11,6 +19,7 @@ import { appPool, newEntity, newTenant } from "./helpers.js";
 
 const OFFICE = "11222333000181";
 const NOW = () => new Date("2026-10-05T15:00:00Z");
+const METER = { provider: "serpro", dailyLimit: 1000 };
 
 describe("interpretação das respostas do Integra Contador", () => {
   it("PGDAS-D: separa declarações e DAS por competência (exemplo oficial, chaves com caixa variável)", () => {
@@ -139,7 +148,7 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
   it("autoriza cada consulta, grava com evidência e resume por competência", async () => {
     const { t, entityId } = await entityWithPoa();
     const integra = new FakeIntegraContador(OFFICE, {}, data());
-    const r = await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
+    const r = await syncFederalData({ appPool, integra, now: NOW, metering: METER }, t, { entityId });
 
     // Início de atividade em 2025: não consulta anos anteriores.
     expect(r.years.map((y) => y.year)).toEqual([2025, 2026]);
@@ -177,8 +186,8 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
     const { t, entityId } = await entityWithPoa();
     const d = data();
     const integra = new FakeIntegraContador(OFFICE, {}, d);
-    await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
-    await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
+    await syncFederalData({ appPool, integra, now: NOW, metering: METER }, t, { entityId });
+    await syncFederalData({ appPool, integra, now: NOW, metering: METER }, t, { entityId });
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_declaration")).toBe(3);
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_das")).toBe(2);
     expect(await count(t, "SELECT count(*)::int AS n FROM federal_payment")).toBe(3);
@@ -186,7 +195,7 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
     expect(await count(t, "SELECT count(*)::int AS n FROM outbox WHERE type IN ('PGDAS_INDEX_SYNCED','FEDERAL_PAYMENTS_SYNCED')")).toBe(4);
 
     d[CNPJ_MATRIZ].das[1] = das("2025-06-01", "07202500000000002", true);
-    await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
+    await syncFederalData({ appPool, integra, now: NOW, metering: METER }, t, { entityId });
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_das_status")).toBe(3);
     await withTenant(appPool, t, async (tx) => {
       const s = await competenceSummary(tx, entityId, "2025-06-01", new Date("2025-07-10T12:00:00Z"));
@@ -200,7 +209,7 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
       payment(`7100000000000${String(i).padStart(3, "0")}`, "2025-05-01", "2025-06-20", "1.00", "4"),
     );
     const integra = new FakeIntegraContador(OFFICE, {}, { [CNPJ_MATRIZ]: { payments: many } });
-    const r = await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
+    const r = await syncFederalData({ appPool, integra, now: NOW, metering: METER }, t, { entityId });
     expect(r.payments).toMatchObject({ total: 150, created: 150, calls: 3 });
     expect(integra.calls.filter((c) => c.startsWith("pagamentos:") && c.includes("2025-01-01"))).toHaveLength(2);
   });
@@ -208,8 +217,31 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
   it("sem procuração para o serviço, não consulta nada", async () => {
     const { t, entityId } = await entityWithPoa(["Caixa Postal - Mensagens"]);
     const integra = new FakeIntegraContador(OFFICE, {}, data());
-    await expect(syncFederalData({ appPool, integra, now: NOW }, t, { entityId })).rejects.toBeInstanceOf(FederalAccessDeniedError);
+    await expect(syncFederalData({ appPool, integra, now: NOW, metering: METER }, t, { entityId })).rejects.toBeInstanceOf(FederalAccessDeniedError);
     expect(integra.calls).toEqual([]);
     expect(await count(t, "SELECT count(*)::int AS n FROM audit_log WHERE action = 'authorization.deny'")).toBe(1);
+  });
+  it("busca da competência: exatamente 2 consultas, só daquela competência, e medidas", async () => {
+    const { t, entityId } = await entityWithPoa();
+    const integra = new FakeIntegraContador(OFFICE, {}, data());
+    const r = await syncCompetence({ appPool, integra, now: NOW, metering: METER }, t, { entityId, competence: "2025-06-01" });
+    expect(r.calls).toBe(COMPETENCE_CALLS);
+    expect(integra.calls).toEqual([`pgdas-pa:${CNPJ_MATRIZ}:202506`, `pagamentos:${CNPJ_MATRIZ}:2025-06-01:2025-07-31:0`]);
+    expect(r.pgdas).toMatchObject({ competence: "2025-06-01", declarations: 2, das: 1 });
+    // Pagamentos arrecadados em 06 e 07/2025: o DAS de 05/2025 (pago em 20/06) também entra.
+    expect(r.payments).toMatchObject({ total: 3 });
+    expect(await billedCallsToday(appPool, t, "serpro", NOW())).toBe(2);
+  });
+
+  it("teto diário: se a busca não cabe, nenhuma consulta sai", async () => {
+    const { t, entityId } = await entityWithPoa();
+    const integra = new FakeIntegraContador(OFFICE, {}, data());
+    const deps = { appPool, integra, now: NOW, metering: { provider: "serpro", dailyLimit: 3 } };
+    await syncCompetence(deps, t, { entityId, competence: "2025-06-01" });
+    const err = await syncCompetence(deps, t, { entityId, competence: "2025-05-01" }).catch((e) => e);
+    expect(err).toBeInstanceOf(DailyLimitExceededError);
+    // A segunda busca precisaria de 2 e só cabia 1: nenhuma consulta saiu.
+    expect(integra.calls).toHaveLength(2);
+    expect(await billedCallsToday(appPool, t, "serpro", NOW())).toBe(2);
   });
 });

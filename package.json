@@ -19,7 +19,8 @@
     "onboard": "tsx --env-file-if-exists=.env src/cli/onboard.ts",
     "integra:check": "tsx --env-file-if-exists=.env src/cli/integra-check.ts",
     "federal:sync": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts",
-    "federal:report": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts --report"
+    "federal:report": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts --report",
+    "web": "tsx --env-file-if-exists=.env src/web/server.ts"
   },
   "dependencies": {
     "nats": "^2.29.3",

@@ -11,6 +11,7 @@ import { storeExternalSnapshot } from "../../platform/evidence/snapshot.js";
 import { openPendingItem, openPendingItems, resolvePendingItem, type PendingItemRow } from "../../platform/pending/pending.js";
 import { CnpjNotFoundError, type CnpjPublicDataSource, type PublicCompanyData } from "../../integrations/cnpj-public/types.js";
 import type { IntegraContador } from "../../integrations/integra-contador/types.js";
+import { reserveBilledCalls, type MeteringPolicy } from "../../platform/metering/metering.js";
 import { entityTypeFromLegalNature } from "../registry/legal-nature.js";
 import { createClient, createEntity, setEntityType, setTaxRegime } from "../registry/registry.js";
 
@@ -34,6 +35,8 @@ export interface OnboardingDeps {
   publicData: CnpjPublicDataSource;
   /** null enquanto o conector real não estiver configurado. */
   integra: IntegraContador | null;
+  /** Teto de consultas cobradas; a consulta de procuração é cobrada. */
+  metering?: MeteringPolicy;
 }
 
 export interface OnboardingResult {
@@ -220,6 +223,32 @@ async function checkPowerOfAttorney(
     return;
   }
 
+  // Procuração vigente já verificada: não consulta de novo (a consulta é cobrada).
+  const known = await withTenant(deps.appPool, tenantId, async (tx) => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+    const { rowCount } = await tx.query(
+      `SELECT 1 FROM power_of_attorney
+        WHERE entity_id = $1 AND system = 'ECAC' AND $2::date <@ daterange(valid_from, valid_to, '[]')`,
+      [entityId, today],
+    );
+    if (rowCount) {
+      for (const p of (await openPendingItems(tx, { entityId })).filter((x) => x.type === "POWER_OF_ATTORNEY_CHECK")) {
+        await resolvePendingItem(tx, { id: p.id, resolution: "procuração vigente já verificada" }, actor);
+      }
+    }
+    return Boolean(rowCount);
+  });
+  if (known) return;
+
+  if (deps.metering) {
+    await reserveBilledCalls(
+      deps.appPool,
+      tenantId,
+      deps.metering,
+      [{ entityId, system: "PROCURACOES", service: "OBTERPROCURACAO41", requestRef: { cnpj } }],
+      actor,
+    );
+  }
   // Consulta de procurações é feita com a identidade do escritório; não exige
   // procuração prévia do cliente.
   const result = await deps.integra.checkPowerOfAttorney(cnpj);

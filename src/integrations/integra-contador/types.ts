@@ -103,6 +103,8 @@ export interface IntegraContador {
   checkPowerOfAttorney(contributorCnpj: string): Promise<IntegraContadorResult<PowerOfAttorneyStatus>>;
   /** PGDAS-D: declarações e DAS do ano-calendário (CONSDECLARACAO13). */
   listPgdasDeclarations(contributorCnpj: string, year: number): Promise<IntegraContadorResult<PgdasYearIndex>>;
+  /** PGDAS-D: declarações e DAS de um período de apuração AAAAMM (CONSDECLARACAO13). */
+  listPgdasPeriod(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasYearIndex>>;
   /** PagtoWeb: pagamentos por data de arrecadação, paginado (PAGAMENTOS71). */
   listPayments(
     contributorCnpj: string,

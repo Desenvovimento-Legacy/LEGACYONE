@@ -56,6 +56,15 @@ export class FakeIntegraContador implements IntegraContador {
     return this.result({ contributor: cnpj, year, declarations: inYear(d.declarations), das: inYear(d.das) });
   }
 
+  async listPgdasPeriod(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasYearIndex>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
+    this.calls.push(`pgdas-pa:${cnpj}:${period}`);
+    const d = this.data[cnpj] ?? {};
+    const comp = `${period.slice(0, 4)}-${period.slice(4, 6)}-01`;
+    const inPa = <T extends { competence: string }>(xs: T[] = []) => xs.filter((x) => x.competence === comp);
+    return this.result({ contributor: cnpj, year: Number(period.slice(0, 4)), declarations: inPa(d.declarations), das: inPa(d.das) });
+  }
+
   async listPayments(
     contributorCnpj: string,
     q: { from: string; to: string; first?: number; size?: number },

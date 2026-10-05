@@ -2,7 +2,7 @@ import { config } from "../config.js";
 import { BrasilApiCnpjSource } from "../integrations/cnpj-public/brasilapi.js";
 import { CnpjaOpenSource } from "../integrations/cnpj-public/cnpja.js";
 import { FallbackCnpjSource } from "../integrations/cnpj-public/fallback.js";
-import { serproFromVault } from "../integrations/integra-contador/from-vault.js";
+import { serproFromVault, serproMetering } from "../integrations/integra-contador/from-vault.js";
 import { onboardByCnpj } from "../modules/onboarding/onboarding.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
@@ -40,6 +40,7 @@ if (isMain(import.meta.url)) {
           console.log(`  aviso: ${m}`),
         ),
         integra,
+        metering: serproMetering(vault),
       },
       tenantId,
       { cnpj, requester: process.env.USERNAME ?? process.env.USER ?? "cli", origin: "cli" },

@@ -1,19 +1,25 @@
 import { config } from "../config.js";
-import { serproFromVault } from "../integrations/integra-contador/from-vault.js";
-import { competenceSummary, dasPaymentsOutsidePgdas, syncFederalData } from "../modules/federal/federal-sync.js";
+import { SERPRO_PROVIDER, serproFromVault, serproMetering } from "../integrations/integra-contador/from-vault.js";
+import { competenceSummary, dasPaymentsOutsidePgdas, estimateHistoryCalls, syncFederalHistory } from "../modules/federal/federal-sync.js";
 import { formatCnpj, normalizeCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile } from "../shared/secrets/secrets-file.js";
+import { billedCallsToday } from "../platform/metering/metering.js";
 
 /**
  * Traz da Receita (Integra Contador) as declarações PGDAS-D, os DAS e os
  * pagamentos federais de uma empresa já cadastrada.
- * Uso: pnpm federal:sync <cnpj> [ano-inicial]
- *      pnpm federal:report <cnpj>     (só o relatório, sem consultar o SERPRO)
+ * Carga histórica — usar UMA vez por cliente, na implantação. A rotina mensal é
+ * o botão Buscar da tela (pnpm web), 2 consultas por competência.
+ *
+ * Uso: pnpm federal:sync <cnpj> [ano-inicial]               mostra quantas consultas faria e para
+ *      pnpm federal:sync <cnpj> [ano-inicial] --confirmar   executa (consultas cobradas)
+ *      pnpm federal:report <cnpj>                           só o relatório, sem consultar o SERPRO
  */
 const REPORT_ONLY = process.argv.includes("--report");
+const CONFIRMED = process.argv.includes("--confirmar");
 
 /** PGDAS-D vence no dia 20 do mês seguinte ao período de apuração. */
 function pgdasDeadline(competence: string): string {
@@ -29,7 +35,7 @@ const mmYYYY = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 const ddmmyyyy = (iso: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
 
 if (isMain(import.meta.url)) {
-  const [cnpjArg, yearArg] = process.argv.slice(2).filter((a) => a !== "--report");
+  const [cnpjArg, yearArg] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   if (!cnpjArg) {
     console.error("Uso: pnpm federal:sync <cnpj> [ano-inicial]");
     process.exit(1);
@@ -59,10 +65,26 @@ if (isMain(import.meta.url)) {
     if (!REPORT_ONLY) {
       const vault = openSecretsFile();
       if (!vault) throw new Error("Cofre não encontrado: rode pnpm integra:check");
+      const metering = serproMetering(vault);
+      const fromYear = yearArg ? Number(yearArg) : undefined;
+      const est = await estimateHistoryCalls({ appPool: app }, tenantId, entity.id, fromYear);
+      const used = await billedCallsToday(app, tenantId, SERPRO_PROVIDER);
+      console.log(
+        `Carga histórica ${est.years[0]}–${est.years.at(-1)}: no mínimo ${est.calls} consultas cobradas ` +
+          `(+1 a cada 100 pagamentos num mesmo ano). Hoje: ${used} de ${metering.dailyLimit}.`,
+      );
+      if (!CONFIRMED) {
+        console.log("Nada foi consultado. Para executar, repita o comando com --confirmar.");
+      }
+    }
+    if (!REPORT_ONLY && CONFIRMED) {
+      const vault = openSecretsFile()!;
+      const metering = serproMetering(vault);
+      const fromYear = yearArg ? Number(yearArg) : undefined;
       const integra = serproFromVault(vault);
-      const r = await syncFederalData({ appPool: app, integra }, tenantId, {
+      const r = await syncFederalHistory({ appPool: app, integra, metering }, tenantId, {
         entityId: entity.id,
-        fromYear: yearArg ? Number(yearArg) : undefined,
+        fromYear,
         caseId: caseRow.rows[0]?.id ?? null,
       });
       console.log(`Consultas ao SERPRO: ${r.calls}`);

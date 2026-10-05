@@ -313,6 +313,19 @@ export class SerproIntegraContador implements IntegraContador {
     return { value, raw: { httpStatus: r.status, body: r.body }, source: this.name, fetchedAt: this.now() };
   }
 
+  async listPgdasPeriod(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasYearIndex>> {
+    if (!/^\d{6}$/.test(period)) throw new Error("Período de apuração deve ser AAAAMM");
+    const cnpj = normalizeCnpj(contributorCnpj);
+    const r = await this.consult(
+      "Consultar",
+      cnpj,
+      { idSistema: "PGDASD", idServico: "CONSDECLARACAO13", versaoSistema: "1.0", dados: { periodoApuracao: period } },
+      ["MSG_ISN_005", "MSG_ISN_027"],
+    );
+    const value = parsePgdasYear(r.dados, { contributor: cnpj, year: Number(period.slice(0, 4)) });
+    return { value, raw: { httpStatus: r.status, body: r.body }, source: this.name, fetchedAt: this.now() };
+  }
+
   async listPayments(
     contributorCnpj: string,
     q: { from: string; to: string; first?: number; size?: number },
