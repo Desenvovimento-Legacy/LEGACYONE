@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: legacy_owner
+          POSTGRES_PASSWORD: legacy_owner_dev
+          POSTGRES_DB: legacy_one
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legacy_owner -d legacy_one"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      ADMIN_DATABASE_URL: postgres://legacy_owner:legacy_owner_dev@localhost:5432/legacy_one
+      DATABASE_URL: postgres://legacy_app_login:legacy_app_dev@localhost:5432/legacy_one
+      RELAY_DATABASE_URL: postgres://legacy_relay_login:legacy_relay_dev@localhost:5432/legacy_one
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
