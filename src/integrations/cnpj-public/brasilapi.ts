@@ -102,7 +102,10 @@ export class BrasilApiCnpjSource implements CnpjPublicDataSource {
     // Base pública gratuita limita a taxa de consultas (429) e oscila (5xx):
     // nova tentativa com espera crescente, respeitando Retry-After.
     for (let attempt = 1; ; attempt++) {
-      const res = await fetch(`${this.baseUrl}/${cnpj}`, { signal: AbortSignal.timeout(30_000) });
+      const res = await fetch(`${this.baseUrl}/${cnpj}`, {
+        signal: AbortSignal.timeout(30_000),
+        headers: { accept: "application/json", "user-agent": "legacy-one/0.1 (+https://github.com/Desenvovimento-Legacy)" },
+      });
       if (res.status === 404) throw new CnpjNotFoundError(cnpj);
       if (res.ok) {
         const raw: unknown = await res.json();

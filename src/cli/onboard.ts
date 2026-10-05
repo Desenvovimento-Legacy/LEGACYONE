@@ -1,5 +1,7 @@
 import { config } from "../config.js";
 import { BrasilApiCnpjSource } from "../integrations/cnpj-public/brasilapi.js";
+import { CnpjaOpenSource } from "../integrations/cnpj-public/cnpja.js";
+import { FallbackCnpjSource } from "../integrations/cnpj-public/fallback.js";
 import { onboardByCnpj } from "../modules/onboarding/onboarding.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
@@ -25,7 +27,13 @@ if (isMain(import.meta.url)) {
     if (!tenantId) throw new Error(`Escritório ${slug} não existe. Crie com: pnpm tenant:create "Nome" ${slug}`);
 
     const r = await onboardByCnpj(
-      { appPool: app, publicData: new BrasilApiCnpjSource(), integra: null },
+      {
+        appPool: app,
+        publicData: new FallbackCnpjSource([new BrasilApiCnpjSource(undefined, 2), new CnpjaOpenSource()], (m) =>
+          console.log(`  aviso: ${m}`),
+        ),
+        integra: null,
+      },
       tenantId,
       { cnpj, requester: process.env.USERNAME ?? process.env.USER ?? "cli", origin: "cli" },
     );
@@ -34,6 +42,7 @@ if (isMain(import.meta.url)) {
     console.log("");
     console.log(`Case CLIENT_ONBOARDING ${r.caseId}`);
     console.log(`Status: ${r.caseStatus}${r.entityCreated ? " (entidade criada)" : ""}`);
+    if (r.profileSource) console.log(`Fonte: ${r.profileSource}`);
     if (p) {
       console.log("");
       console.log(`${p.legalName} — ${formatCnpj(p.cnpj)}`);

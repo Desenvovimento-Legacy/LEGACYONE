@@ -42,6 +42,8 @@ export interface OnboardingResult {
   entityId: string | null;
   entityCreated: boolean;
   profile: PublicCompanyData | null;
+  /** Fonte que respondeu a consulta pública. */
+  profileSource?: string;
   pending: PendingItemRow[];
 }
 
@@ -422,6 +424,14 @@ export async function onboardByCnpj(
     if (status !== target) {
       status = (await transitionCase(tx, { caseId: c.id, to: target, reason: `${pending.length} pendência(s)` }, actor)).case.status;
     }
-    return { caseId: c.id, caseStatus: status, entityId: built.entityId, entityCreated: built.created, profile: d, pending };
+    return {
+      caseId: c.id,
+      caseStatus: status,
+      entityId: built.entityId,
+      entityCreated: built.created,
+      profile: d,
+      profileSource: lookup.source,
+      pending,
+    };
   });
 }
