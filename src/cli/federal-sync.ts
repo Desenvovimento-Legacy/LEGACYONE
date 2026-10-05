@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { serproFromVault } from "../integrations/integra-contador/from-vault.js";
-import { competenceSummary, syncFederalData } from "../modules/federal/federal-sync.js";
+import { competenceSummary, dasPaymentsOutsidePgdas, syncFederalData } from "../modules/federal/federal-sync.js";
 import { formatCnpj, normalizeCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
@@ -97,6 +97,18 @@ if (isMain(import.meta.url)) {
             ? "sem DAS emitido"
             : "PAGAMENTO AINDA NÃO IDENTIFICADO";
         console.log(`  ${mmYYYY(c.competence)}  ${dec.padEnd(18)}  ${String(c.das).padStart(3)}   ${paidFlag.padEnd(13)}  ${pay}${c.malha ? ` · malha: ${c.malha}` : ""}`);
+      }
+
+      const outside = await dasPaymentsOutsidePgdas(tx, entity.id, from);
+      if (outside.length) {
+        console.log("");
+        console.log("DAS pagos que não saíram do PGDAS-D (parcelamento, cobrança ou avulso):");
+        for (const o of outside) {
+          const acr = Number(o.amount_fine ?? 0) + Number(o.amount_interest ?? 0);
+          console.log(
+            `  ${ddmmyyyy(o.collected_on)}  ${brl(o.amount_total)}${acr ? ` (multa+juros ${brl(acr.toFixed(2))})` : ""}  doc ${o.document_number}`,
+          );
+        }
       }
 
       const other = await tx.query<{ doc: string | null; code: string | null; descr: string | null; n: number; total: string }>(

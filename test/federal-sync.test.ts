@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FakeIntegraContador } from "../src/integrations/integra-contador/fake.js";
 import { parsePayments, parsePgdasYear } from "../src/integrations/integra-contador/parsers.js";
 import type { FederalPayment } from "../src/integrations/integra-contador/types.js";
-import { competenceSummary, FederalAccessDeniedError, syncFederalData } from "../src/modules/federal/federal-sync.js";
+import { competenceSummary, dasPaymentsOutsidePgdas, FederalAccessDeniedError, syncFederalData } from "../src/modules/federal/federal-sync.js";
 import { verifyAuditChain } from "../src/platform/audit/audit.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
@@ -129,7 +129,8 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
       declarations: [declaration("2025-05-01", "00000000202505001"), declaration("2025-06-01", "00000000202506001"), declaration("2025-06-01", "00000000202506002", "RETIFICADORA")],
       das: [das("2025-05-01", "07202500000000001", true), das("2025-06-01", "07202500000000002", false)],
       payments: [
-        payment("7000000000000001", "2025-05-01", "2025-06-20", "812.45"),
+        payment("7202500000000001", "2025-05-01", "2025-06-20", "812.45"),
+        payment("7182500000000009", "2025-06-01", "2025-07-01", "300.00"),
         payment("7000000000000002", "2025-06-01", "2025-07-18", "15.00", "4"),
       ],
     },
@@ -148,7 +149,7 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
       `pagamentos:${CNPJ_MATRIZ}:2025-01-01:2025-12-31:0`,
       `pagamentos:${CNPJ_MATRIZ}:2026-01-01:2026-10-05:0`,
     ]);
-    expect(r.payments).toMatchObject({ total: 2, created: 2 });
+    expect(r.payments).toMatchObject({ total: 3, created: 3 });
 
     await withTenant(appPool, t, async (tx) => {
       const s = await competenceSummary(tx, entityId, "2025-01-01");
@@ -156,6 +157,9 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
         expect.objectContaining({ competence: "2025-05-01", declarations: 1, rectifications: 0, das: 1, dasPaidFlag: true, dasPayments: 1, dasPaidAmount: "812.45", dasPaidOn: "2025-06-20" }),
         expect.objectContaining({ competence: "2025-06-01", declarations: 2, rectifications: 1, das: 1, dasPaidFlag: false, dasPayments: 0, dasPaidAmount: null }),
       ]);
+      // DAS pago que não saiu do PGDAS-D (ex.: parcela) não é confundido com o DAS da competência.
+      const outside = await dasPaymentsOutsidePgdas(tx, entityId, "2025-01-01");
+      expect(outside.map((o) => o.document_number)).toEqual(["7182500000000009"]);
       const grants = await tx.query("SELECT count(*)::int AS n FROM authorization_grant WHERE consumed_at IS NOT NULL");
       expect(grants.rows[0].n).toBe(4);
       const noEvidence = await tx.query(
@@ -174,7 +178,7 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
     await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_declaration")).toBe(3);
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_das")).toBe(2);
-    expect(await count(t, "SELECT count(*)::int AS n FROM federal_payment")).toBe(2);
+    expect(await count(t, "SELECT count(*)::int AS n FROM federal_payment")).toBe(3);
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_das_status")).toBe(2);
     expect(await count(t, "SELECT count(*)::int AS n FROM outbox WHERE type IN ('PGDAS_INDEX_SYNCED','FEDERAL_PAYMENTS_SYNCED')")).toBe(4);
 

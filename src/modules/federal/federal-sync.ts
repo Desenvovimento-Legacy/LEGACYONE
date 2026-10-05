@@ -272,7 +272,13 @@ export async function syncFederalData(
   return result;
 }
 
-/** Resumo por competência: declaração, DAS e pagamento do DAS encontrado no PagtoWeb. */
+/** Número do DAS no PGDAS-D tem 17 posições com zero à esquerda; no PagtoWeb, sem o zero. */
+const DAS_MATCH = "ltrim(s.das_number, '0') = ltrim(p.document_number, '0')";
+
+/**
+ * Resumo por competência: declaração, DAS emitido e pagamento desse DAS no
+ * PagtoWeb (casado pelo número do documento, não por valor ou data).
+ */
 export interface CompetenceSummary {
   competence: string;
   declarations: number;
@@ -302,8 +308,11 @@ export async function competenceSummary(tx: PoolClient, entityId: string, from: 
     `WITH comps AS (
        SELECT competence FROM pgdas_declaration WHERE entity_id = $1 AND competence >= $2
        UNION SELECT competence FROM pgdas_das WHERE entity_id = $1 AND competence >= $2
-       UNION SELECT competence FROM federal_payment
-              WHERE entity_id = $1 AND competence >= $2 AND (document_type_code = '9' OR document_type ILIKE '%SIMPLES NACIONAL%')
+     ),
+     paid AS (
+       SELECT s.competence, p.amount_total, p.collected_on
+         FROM pgdas_das s JOIN federal_payment p ON p.entity_id = s.entity_id AND ${DAS_MATCH}
+        WHERE s.entity_id = $1
      )
      SELECT c.competence::text,
             (SELECT count(*)::int FROM pgdas_declaration d WHERE d.entity_id = $1 AND d.competence = c.competence) AS declarations,
@@ -318,12 +327,9 @@ export async function competenceSummary(tx: PoolClient, entityId: string, from: 
                JOIN LATERAL (SELECT paid FROM pgdas_das_status x WHERE x.das_id = s.id
                              ORDER BY observed_at DESC, created_at DESC LIMIT 1) st ON true
               WHERE s.entity_id = $1 AND s.competence = c.competence) AS das_paid_flag,
-            (SELECT count(*)::int FROM federal_payment p WHERE p.entity_id = $1 AND p.competence = c.competence
-                AND (p.document_type_code = '9' OR p.document_type ILIKE '%SIMPLES NACIONAL%')) AS das_payments,
-            (SELECT sum(amount_total)::text FROM federal_payment p WHERE p.entity_id = $1 AND p.competence = c.competence
-                AND (p.document_type_code = '9' OR p.document_type ILIKE '%SIMPLES NACIONAL%')) AS das_paid_amount,
-            (SELECT max(collected_on)::text FROM federal_payment p WHERE p.entity_id = $1 AND p.competence = c.competence
-                AND (p.document_type_code = '9' OR p.document_type ILIKE '%SIMPLES NACIONAL%')) AS das_paid_on
+            (SELECT count(*)::int FROM paid WHERE paid.competence = c.competence) AS das_payments,
+            (SELECT sum(amount_total)::text FROM paid WHERE paid.competence = c.competence) AS das_paid_amount,
+            (SELECT max(collected_on)::text FROM paid WHERE paid.competence = c.competence) AS das_paid_on
        FROM comps c
       ORDER BY c.competence`,
     [entityId, from],
@@ -340,4 +346,26 @@ export async function competenceSummary(tx: PoolClient, entityId: string, from: 
     dasPaidAmount: r.das_paid_amount,
     dasPaidOn: r.das_paid_on,
   }));
+}
+
+/** Pagamentos em DAS que não correspondem a nenhum DAS do PGDAS-D (ex.: parcelamento, cobrança). */
+export async function dasPaymentsOutsidePgdas(tx: PoolClient, entityId: string, from: string) {
+  const { rows } = await tx.query<{
+    document_number: string;
+    competence: string | null;
+    collected_on: string;
+    amount_total: string;
+    amount_fine: string | null;
+    amount_interest: string | null;
+  }>(
+    `SELECT p.document_number, p.competence::text, p.collected_on::text, p.amount_total::text,
+            p.amount_fine::text, p.amount_interest::text
+       FROM federal_payment p
+      WHERE p.entity_id = $1 AND p.collected_on >= $2
+        AND (p.document_type_code = '9' OR p.document_type ILIKE '%SIMPLES NACIONAL%')
+        AND NOT EXISTS (SELECT 1 FROM pgdas_das s WHERE s.entity_id = p.entity_id AND ${DAS_MATCH})
+      ORDER BY p.collected_on`,
+    [entityId, from],
+  );
+  return rows;
 }
