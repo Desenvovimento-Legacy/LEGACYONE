@@ -6,6 +6,9 @@
 # Depois: pnpm db:migrate && pnpm db:dev-roles
 # Armazenamento de documentos (S3) entra na Fase 2, com imagem definida na época.
 
+# Nome fixo do projeto: renomear a pasta não cria um banco novo vazio.
+name: legacyone
+
 services:
   postgres:
     image: postgres:16
