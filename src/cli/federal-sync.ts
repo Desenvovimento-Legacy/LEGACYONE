@@ -11,14 +11,25 @@ import { openSecretsFile } from "../shared/secrets/secrets-file.js";
  * Traz da Receita (Integra Contador) as declarações PGDAS-D, os DAS e os
  * pagamentos federais de uma empresa já cadastrada.
  * Uso: pnpm federal:sync <cnpj> [ano-inicial]
+ *      pnpm federal:report <cnpj>     (só o relatório, sem consultar o SERPRO)
  */
+const REPORT_ONLY = process.argv.includes("--report");
+
+/** PGDAS-D vence no dia 20 do mês seguinte ao período de apuração. */
+function pgdasDeadline(competence: string): string {
+  const y = Number(competence.slice(0, 4));
+  const m = Number(competence.slice(5, 7));
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  return `${ny}-${String(nm).padStart(2, "0")}-20`;
+}
 const brl = (v: string | null) =>
   v === null ? "—" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const mmYYYY = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 const ddmmyyyy = (iso: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
 
 if (isMain(import.meta.url)) {
-  const [cnpjArg, yearArg] = process.argv.slice(2);
+  const [cnpjArg, yearArg] = process.argv.slice(2).filter((a) => a !== "--report");
   if (!cnpjArg) {
     console.error("Uso: pnpm federal:sync <cnpj> [ano-inicial]");
     process.exit(1);
@@ -27,9 +38,6 @@ if (isMain(import.meta.url)) {
   const admin = createPool(config.adminDatabaseUrl(), 1);
   const app = createPool(config.databaseUrl(), 4);
   try {
-    const vault = openSecretsFile();
-    if (!vault) throw new Error("Cofre não encontrado: rode pnpm integra:check");
-    const integra = serproFromVault(vault);
 
     const t = await admin.query<{ id: string }>("SELECT id FROM tenant WHERE slug = $1", [slug]);
     const tenantId = t.rows[0]?.id;
@@ -48,30 +56,47 @@ if (isMain(import.meta.url)) {
     );
 
     console.log(`${entity.legal_name} — ${formatCnpj(cnpj)}`);
-    const r = await syncFederalData({ appPool: app, integra }, tenantId, {
-      entityId: entity.id,
-      fromYear: yearArg ? Number(yearArg) : undefined,
-      caseId: caseRow.rows[0]?.id ?? null,
-    });
-    console.log(`Consultas ao SERPRO: ${r.calls}`);
-    console.log("");
-    console.log("PGDAS-D por ano:");
-    for (const y of r.years) {
-      console.log(`  ${y.year}: ${y.declarations} declaração(ões), ${y.das} DAS (${y.newDeclarations + y.newDas} novos)`);
+    if (!REPORT_ONLY) {
+      const vault = openSecretsFile();
+      if (!vault) throw new Error("Cofre não encontrado: rode pnpm integra:check");
+      const integra = serproFromVault(vault);
+      const r = await syncFederalData({ appPool: app, integra }, tenantId, {
+        entityId: entity.id,
+        fromYear: yearArg ? Number(yearArg) : undefined,
+        caseId: caseRow.rows[0]?.id ?? null,
+      });
+      console.log(`Consultas ao SERPRO: ${r.calls}`);
+      console.log("");
+      console.log("PGDAS-D por ano:");
+      for (const y of r.years) {
+        console.log(`  ${y.year}: ${y.declarations} declaração(ões), ${y.das} DAS (${y.newDeclarations + y.newDas} novos)`);
+      }
+      console.log(
+        `Pagamentos federais ${ddmmyyyy(r.payments.from)} a ${ddmmyyyy(r.payments.to)}: ${r.payments.total} (${r.payments.created} novos)`,
+      );
     }
-    console.log(`Pagamentos federais ${ddmmyyyy(r.payments.from)} a ${ddmmyyyy(r.payments.to)}: ${r.payments.total} (${r.payments.created} novos)`);
 
     await withTenant(app, tenantId, async (tx) => {
       const from = `${new Date().getFullYear() - 1}-01-01`;
       const rows = await competenceSummary(tx, entity.id, from);
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
       console.log("");
       console.log("Simples Nacional por competência (desde " + mmYYYY(from) + "):");
-      console.log("  PA       Declaração        DAS   Pago no PGDAS  Pagamento identificado");
+      console.log("  PA       Declaração          DAS   Pago no PGDAS  Pagamento identificado (PagtoWeb)");
       for (const c of rows) {
-        const dec = c.declarations ? `${c.declarations - c.rectifications} orig + ${c.rectifications} ret` : "NÃO DECLARADO";
+        const deadline = pgdasDeadline(c.competence);
+        const dec = c.declarations
+          ? `${c.declarations - c.rectifications} orig + ${c.rectifications} ret`
+          : today <= deadline
+            ? `a declarar até ${ddmmyyyy(deadline).slice(0, 5)}`
+            : "NÃO DECLARADO";
         const paidFlag = c.das === 0 ? "—" : c.dasPaidFlag === true ? "sim" : c.dasPaidFlag === false ? "não" : "?";
-        const pay = c.dasPayments ? `${brl(c.dasPaidAmount)} em ${ddmmyyyy(c.dasPaidOn)}` : "AINDA NÃO IDENTIFICADO";
-        console.log(`  ${mmYYYY(c.competence)}  ${dec.padEnd(16)}  ${String(c.das).padStart(3)}   ${paidFlag.padEnd(13)}  ${pay}${c.malha ? ` · malha: ${c.malha}` : ""}`);
+        const pay = c.dasPayments
+          ? `${brl(c.dasPaidAmount)} em ${ddmmyyyy(c.dasPaidOn)}${c.dasPayments > 1 ? ` (${c.dasPayments} guias)` : ""}`
+          : c.das === 0
+            ? "sem DAS emitido"
+            : "PAGAMENTO AINDA NÃO IDENTIFICADO";
+        console.log(`  ${mmYYYY(c.competence)}  ${dec.padEnd(18)}  ${String(c.das).padStart(3)}   ${paidFlag.padEnd(13)}  ${pay}${c.malha ? ` · malha: ${c.malha}` : ""}`);
       }
 
       const other = await tx.query<{ doc: string | null; code: string | null; descr: string | null; n: number; total: string }>(
