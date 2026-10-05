@@ -1,7 +1,15 @@
 import { request } from "node:https";
 import { z } from "zod";
 import { isValidCnpj, normalizeCnpj } from "../../shared/br/documents.js";
-import type { IntegraContador, IntegraContadorResult, PowerOfAttorneyGrant, PowerOfAttorneyStatus } from "./types.js";
+import { parsePayments, parsePgdasYear } from "./parsers.js";
+import type {
+  FederalPaymentPage,
+  IntegraContador,
+  IntegraContadorResult,
+  PgdasYearIndex,
+  PowerOfAttorneyGrant,
+  PowerOfAttorneyStatus,
+} from "./types.js";
 
 /**
  * Conector real do SERPRO Integra Contador.
@@ -242,31 +250,83 @@ export class SerproIntegraContador implements IntegraContador {
     }
   }
 
-  async checkPowerOfAttorney(contributorCnpj: string): Promise<IntegraContadorResult<PowerOfAttorneyStatus>> {
+  /**
+   * Chamada de negócio: devolve a resposta interpretada ou lança
+   * IntegraContadorError. Códigos em `emptyCodes` significam "nada encontrado"
+   * (não é erro) e resultam em `empty: true`.
+   */
+  private async consult(
+    path: "Consultar" | "Emitir" | "Apoiar" | "Monitorar",
+    contributorCnpj: string,
+    pedido: { idSistema: string; idServico: string; versaoSistema: string; dados: unknown },
+    emptyCodes: string[] = [],
+  ): Promise<{ status: number; body: unknown; dados: unknown; empty: boolean }> {
     const cnpj = normalizeCnpj(contributorCnpj);
     if (!isValidCnpj(cnpj)) throw new Error(`CNPJ inválido: ${contributorCnpj}`);
+    const { status, body } = await this.call(path, { numero: cnpj, tipo: 2 }, pedido);
+    const parsed = GatewayResponse.safeParse(body);
+    const msgs = parsed.data?.mensagens ?? [];
+    const empty = msgs.some((m) => emptyCodes.some((c) => m.codigo.includes(c)));
+    if (status !== 200 && !empty) {
+      const detail = msgs.map((m) => `${m.codigo} ${m.texto}`).join("; ") || "sem mensagem";
+      throw new IntegraContadorError(
+        `Integra Contador respondeu HTTP ${status} em ${pedido.idSistema}/${pedido.idServico}: ${detail}`,
+        status,
+        msgs,
+      );
+    }
+    return { status, body, dados: empty ? null : (parsed.data?.dados ?? null), empty };
+  }
+
+  async checkPowerOfAttorney(contributorCnpj: string): Promise<IntegraContadorResult<PowerOfAttorneyStatus>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
     // Regra do serviço: outorgante = contribuinte e outorgado = autor do pedido.
-    const { status, body } = await this.call(
+    const r = await this.consult(
       "Consultar",
-      { numero: cnpj, tipo: 2 },
+      cnpj,
       {
         idSistema: "PROCURACOES",
         idServico: "OBTERPROCURACAO41",
         versaoSistema: "1",
         dados: { outorgante: cnpj, tipoOutorgante: "2", outorgado: this.officeCnpj, tipoOutorgado: "2" },
       },
+      ["PROCURACOES-40400"],
     );
-    const msgs = GatewayResponse.safeParse(body).data?.mensagens ?? [];
-    const noPower = msgs.some((m) => m.codigo.includes("PROCURACOES-40400"));
-    if (status !== 200 && !noPower) {
-      const detail = msgs.map((m) => `${m.codigo} ${m.texto}`).join("; ") || "sem mensagem";
-      throw new IntegraContadorError(`Integra Contador respondeu HTTP ${status} na consulta de procuração: ${detail}`, status, msgs);
-    }
-    const value = parseObterProcuracao(body ?? {}, {
+    const value = parseObterProcuracao(r.body ?? {}, {
       contributor: cnpj,
       grantee: this.officeCnpj,
       today: todayInBrazil(this.now()),
     });
-    return { value, raw: { httpStatus: status, body }, source: this.name, fetchedAt: this.now() };
+    return { value, raw: { httpStatus: r.status, body: r.body }, source: this.name, fetchedAt: this.now() };
+  }
+
+  async listPgdasDeclarations(contributorCnpj: string, year: number): Promise<IntegraContadorResult<PgdasYearIndex>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
+    const r = await this.consult(
+      "Consultar",
+      cnpj,
+      { idSistema: "PGDASD", idServico: "CONSDECLARACAO13", versaoSistema: "1.0", dados: { anoCalendario: String(year) } },
+      // "Não há declaração transmitida para o período/parâmetro informado."
+      ["MSG_ISN_005", "MSG_ISN_027"],
+    );
+    const value = parsePgdasYear(r.dados, { contributor: cnpj, year });
+    return { value, raw: { httpStatus: r.status, body: r.body }, source: this.name, fetchedAt: this.now() };
+  }
+
+  async listPayments(
+    contributorCnpj: string,
+    q: { from: string; to: string; first?: number; size?: number },
+  ): Promise<IntegraContadorResult<FederalPaymentPage>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
+    const first = q.first ?? 0;
+    const size = Math.min(q.size ?? 100, 100);
+    const r = await this.consult("Consultar", cnpj, {
+      idSistema: "PAGTOWEB",
+      idServico: "PAGAMENTOS71",
+      versaoSistema: "1.0",
+      dados: { intervaloDataArrecadacao: { dataInicial: q.from, dataFinal: q.to }, primeiroDaPagina: first, tamanhoDaPagina: size },
+    });
+    const value: FederalPaymentPage = { contributor: cnpj, from: q.from, to: q.to, first, size, payments: parsePayments(r.dados) };
+    return { value, raw: { httpStatus: r.status, body: r.body }, source: this.name, fetchedAt: this.now() };
   }
 }

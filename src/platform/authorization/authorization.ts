@@ -32,17 +32,29 @@ export interface AuthorizationRequest {
   entityId: string;
   /** Data de referência para checar vigência de procuração. Padrão: hoje. */
   onDate?: string;
+  /**
+   * Serviço do e-CAC exigido, com o nome do cadastro de procuração
+   * (ex.: "PGDAS-D - a partir de 01/2018"). Procuração "TODOS" cobre qualquer um.
+   */
+  service?: string;
   scope?: Record<string, unknown>;
 }
 
-async function hasActivePowerOfAttorney(tx: PoolClient, entityId: string, onDate: string, scope: string) {
+async function hasActivePowerOfAttorney(
+  tx: PoolClient,
+  entityId: string,
+  onDate: string,
+  scope: string,
+  service: string | null,
+) {
   const { rows } = await tx.query(
     `SELECT 1 FROM power_of_attorney
       WHERE entity_id = $1 AND system = 'ECAC'
         AND $2::date <@ daterange(valid_from, valid_to, '[]')
         AND ($3 = 'ECAC' OR $3 = ANY (scopes))
+        AND ($4::text IS NULL OR 'TODOS' = ANY (scopes) OR $4 = ANY (scopes))
       LIMIT 1`,
-    [entityId, onDate, scope],
+    [entityId, onDate, scope, service],
   );
   return rows.length > 0;
 }
@@ -61,10 +73,16 @@ export async function requestAuthorization(
     result = { decision: "DENY", policy: "transmit.requires-l4@1", reason: "Transmissão exige aprovação humana nesta fase" };
   } else {
     const scope = REQUIRED_SCOPE[req.action] ?? "ECAC";
-    const ok = await hasActivePowerOfAttorney(tx, req.entityId, onDate, scope);
+    const ok = await hasActivePowerOfAttorney(tx, req.entityId, onDate, scope, req.service ?? null);
     result = ok
-      ? { decision: "ALLOW", grantId: newId(), expiresAt: new Date(Date.now() + GRANT_TTL_MS), policy: "integra.read.poa@1" }
-      : { decision: "DENY", policy: "integra.read.poa@1", reason: "Sem procuração eletrônica vigente para o escritório" };
+      ? { decision: "ALLOW", grantId: newId(), expiresAt: new Date(Date.now() + GRANT_TTL_MS), policy: "integra.read.poa@2" }
+      : {
+          decision: "DENY",
+          policy: "integra.read.poa@2",
+          reason: req.service
+            ? `Sem procuração eletrônica vigente para o escritório no serviço "${req.service}"`
+            : "Sem procuração eletrônica vigente para o escritório",
+        };
   }
 
   if (result.decision === "ALLOW") {
@@ -81,7 +99,7 @@ export async function requestAuthorization(
     resourceId: result.decision === "ALLOW" ? result.grantId : null,
     entityId: req.entityId,
     ruleRef: result.policy,
-    data: { action: req.action, ...(result.decision === "DENY" ? { reason: result.reason } : {}) },
+    data: { action: req.action, service: req.service ?? null, ...(result.decision === "DENY" ? { reason: result.reason } : {}) },
   });
   return result;
 }

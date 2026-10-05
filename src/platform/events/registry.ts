@@ -65,6 +65,27 @@ export const EventContracts = {
       source: z.string(),
     }),
   },
+  PGDAS_INDEX_SYNCED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      year: z.number().int(),
+      declarations: z.number().int(),
+      das: z.number().int(),
+      new_declarations: z.number().int(),
+      new_das: z.number().int(),
+      source: z.string(),
+    }),
+  },
+  FEDERAL_PAYMENTS_SYNCED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      from: z.iso.date(),
+      to: z.iso.date(),
+      payments: z.number().int(),
+      new_payments: z.number().int(),
+      source: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;
