@@ -2,10 +2,12 @@ import { config } from "../config.js";
 import { BrasilApiCnpjSource } from "../integrations/cnpj-public/brasilapi.js";
 import { CnpjaOpenSource } from "../integrations/cnpj-public/cnpja.js";
 import { FallbackCnpjSource } from "../integrations/cnpj-public/fallback.js";
+import { serproFromVault } from "../integrations/integra-contador/from-vault.js";
 import { onboardByCnpj } from "../modules/onboarding/onboarding.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
 import { isMain } from "../shared/is-main.js";
+import { openSecretsFile } from "../shared/secrets/secrets-file.js";
 
 /**
  * Onboarding pelo CNPJ. Uso: pnpm onboard <cnpj> [slug-do-escritorio]
@@ -26,13 +28,18 @@ if (isMain(import.meta.url)) {
     const tenantId = t.rows[0]?.id;
     if (!tenantId) throw new Error(`Escritório ${slug} não existe. Crie com: pnpm tenant:create "Nome" ${slug}`);
 
+    // Integra Contador real quando o cofre existir; sem cofre, a verificação vira pendência.
+    const vault = openSecretsFile();
+    const integra = vault ? serproFromVault(vault) : null;
+    console.log(integra ? `Integra Contador: SERPRO (escritório ${formatCnpj(integra.office)})` : "Integra Contador: não configurado");
+
     const r = await onboardByCnpj(
       {
         appPool: app,
         publicData: new FallbackCnpjSource([new BrasilApiCnpjSource(undefined, 2), new CnpjaOpenSource()], (m) =>
           console.log(`  aviso: ${m}`),
         ),
-        integra: null,
+        integra,
       },
       tenantId,
       { cnpj, requester: process.env.USERNAME ?? process.env.USER ?? "cli", origin: "cli" },

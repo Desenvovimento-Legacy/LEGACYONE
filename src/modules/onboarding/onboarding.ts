@@ -8,7 +8,7 @@ import { getCase, openCase, transitionCase, type CaseRow } from "../../platform/
 import type { CaseStatus } from "../../platform/cases/state-machine.js";
 import { appendEvent } from "../../platform/events/outbox.js";
 import { storeExternalSnapshot } from "../../platform/evidence/snapshot.js";
-import { openPendingItem, openPendingItems, type PendingItemRow } from "../../platform/pending/pending.js";
+import { openPendingItem, openPendingItems, resolvePendingItem, type PendingItemRow } from "../../platform/pending/pending.js";
 import { CnpjNotFoundError, type CnpjPublicDataSource, type PublicCompanyData } from "../../integrations/cnpj-public/types.js";
 import type { IntegraContador } from "../../integrations/integra-contador/types.js";
 import { entityTypeFromLegalNature } from "../registry/legal-nature.js";
@@ -232,17 +232,33 @@ async function checkPowerOfAttorney(
       entityId,
     });
     const v = result.value;
+    // Data civil de São Paulo: vencimento de procuração é contado por dia.
+    const verifiedOn = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(result.fetchedAt);
+
+    // A verificação aconteceu: a pendência de "verificar" deixa de existir.
+    const open = await openPendingItems(tx, { entityId });
+    for (const p of open.filter((x) => x.type === "POWER_OF_ATTORNEY_CHECK")) {
+      await resolvePendingItem(tx, { id: p.id, resolution: `verificada via ${result.source} (evidência ${snap.id})` }, actor);
+    }
+
     if (v.active) {
-      const exists = await tx.query(
-        "SELECT 1 FROM power_of_attorney WHERE entity_id = $1 AND system = 'ECAC' AND valid_to IS NULL",
-        [entityId],
-      );
-      if (!exists.rowCount) {
+      for (const p of open.filter((x) => x.type === "POWER_OF_ATTORNEY_MISSING")) {
+        await resolvePendingItem(tx, { id: p.id, resolution: `procuração vigente via ${result.source} (evidência ${snap.id})` }, actor);
+      }
+      // Uma linha por procuração vigente; reexecução não duplica.
+      for (const g of v.grants) {
+        const exists = await tx.query(
+          `SELECT 1 FROM power_of_attorney
+            WHERE entity_id = $1 AND system = 'ECAC' AND grantee_document = $2
+              AND valid_to IS NOT DISTINCT FROM $3::date AND scopes = $4::text[]`,
+          [entityId, v.grantee, g.validTo, g.services],
+        );
+        if (exists.rowCount) continue;
         await tx.query(
           `INSERT INTO power_of_attorney (id, tenant_id, entity_id, system, grantee_document, scopes, valid_from,
                                           valid_to, source, verified_at, snapshot_id)
            VALUES ($1, current_tenant(), $2, 'ECAC', $3, $4, $5, $6, $7, $8, $9)`,
-          [newId(), entityId, v.grantee, v.services, v.validFrom ?? today(), v.validTo, result.source, result.fetchedAt, snap.id],
+          [newId(), entityId, v.grantee, g.services, g.validFrom ?? verifiedOn, g.validTo, result.source, result.fetchedAt, snap.id],
         );
       }
     } else {
@@ -253,7 +269,9 @@ async function checkPowerOfAttorney(
           entityId,
           caseId: c.id,
           responsibleSource: "CLIENT",
-          requiredInformation: "Outorgar procuração eletrônica no e-CAC para o escritório",
+          requiredInformation:
+            `Outorgar procuração eletrônica no e-CAC para o CNPJ do escritório (${v.grantee}). ` +
+            "Se a procuração atual foi dada ao CPF do contador, é preciso outorgar ao CNPJ ou assinar o termo de autorização",
           impact: "Sem procuração o escritório não consulta nem transmite em nome da empresa",
           channel: "portal",
         },

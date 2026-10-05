@@ -6,15 +6,25 @@
  * API do SERPRO (OAuth + certificado do escritório, via Credential Vault); a
  * simulada serve para testes e para desenvolver sem consumir a API.
  */
-export interface PowerOfAttorneyStatus {
-  /** CNPJ do contribuinte (cliente). */
-  contributor: string;
-  /** CNPJ/CPF de quem recebeu a procuração (o escritório). */
-  grantee: string;
-  active: boolean;
+/** Uma procuração eletrônica vigente entre o contribuinte e o escritório. */
+export interface PowerOfAttorneyGrant {
+  /** O e-CAC não informa o início; quando ausente, vale a data da verificação. */
   validFrom: string | null;
   validTo: string | null;
-  /** Serviços cobertos, nos códigos do e-CAC. */
+  /** Serviços cobertos, com o nome do cadastro de procuração do e-CAC. */
+  services: string[];
+}
+
+export interface PowerOfAttorneyStatus {
+  /** CNPJ do contribuinte (cliente, outorgante). */
+  contributor: string;
+  /** CNPJ/CPF de quem recebeu a procuração (o escritório, outorgado). */
+  grantee: string;
+  /** Existe ao menos uma procuração não expirada. */
+  active: boolean;
+  /** Procurações vigentes (uma por data de expiração no e-CAC). */
+  grants: PowerOfAttorneyGrant[];
+  /** União dos serviços das procurações vigentes. */
   services: string[];
 }
 

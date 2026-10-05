@@ -22,8 +22,7 @@ export class FakeIntegraContador implements IntegraContador {
       contributor: cnpj,
       grantee: this.officeDocument,
       active: Boolean(p),
-      validFrom: p?.validFrom ?? null,
-      validTo: p?.validTo ?? null,
+      grants: p ? [{ validFrom: p.validFrom, validTo: p.validTo ?? null, services: p.services }] : [],
       services: p?.services ?? [],
     };
     return { value, raw: { simulated: true, ...value }, source: this.name, fetchedAt: new Date() };

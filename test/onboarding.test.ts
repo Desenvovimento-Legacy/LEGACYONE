@@ -154,6 +154,30 @@ describe("One Onboarding: Case CLIENT_ONBOARDING pelo CNPJ", () => {
     expect(await count(t, "SELECT count(*)::int AS n FROM power_of_attorney")).toBe(0);
   });
 
+  it("conector configurado depois: reexecutar verifica a procuração e encerra a pendência de verificação", async () => {
+    const t = await newTenant();
+    const before = await onboardByCnpj(deps({ integra: null }), t, { cnpj: CNPJ_MATRIZ, requester: "luan" });
+    expect(before.caseStatus).toBe("WAITING_HUMAN");
+    const after = await onboardByCnpj(deps(), t, { cnpj: CNPJ_MATRIZ, requester: "luan" });
+    expect(after.pending.map((p) => p.type)).toEqual(["CONTRACTED_SERVICES"]);
+    expect(await count(t, "SELECT count(*)::int AS n FROM power_of_attorney")).toBe(1);
+    expect(
+      await count(t, "SELECT count(*)::int AS n FROM pending_item WHERE type = 'POWER_OF_ATTORNEY_CHECK' AND status = 'RESOLVED'"),
+    ).toBe(1);
+  });
+
+  it("procuração outorgada depois: a pendência do cliente é resolvida na reexecução", async () => {
+    const t = await newTenant();
+    const first = await onboardByCnpj(deps({ integra: new FakeIntegraContador(OFFICE_CNPJ, {}) }), t, {
+      cnpj: CNPJ_MATRIZ,
+      requester: "luan",
+    });
+    expect(first.caseStatus).toBe("WAITING_CLIENT");
+    const second = await onboardByCnpj(deps(), t, { cnpj: CNPJ_MATRIZ, requester: "luan" });
+    expect(second.caseStatus).toBe("WAITING_HUMAN");
+    expect(second.pending.map((p) => p.type)).toEqual(["CONTRACTED_SERVICES"]);
+  });
+
   it("fora do Simples: registra o período histórico e pede o regime atual", async () => {
     const t = await newTenant();
     const r = await onboardByCnpj(deps(), t, { cnpj: CNPJ_PRESUMIDO, requester: "luan" });

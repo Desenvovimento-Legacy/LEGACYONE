@@ -58,13 +58,22 @@ pnpm tenant:create "Contabilidade Legacy" contabilidade-legacy
 pnpm onboard 12.ABC.345/01DE-35
 ```
 
+Integra Contador: as credenciais do SERPRO e o certificado A1 do escritório ficam no cofre local
+(`C:\IARIS-COFRE\segredos.env`, fora do repositório). Para conferir sem exibir segredos:
+
+```powershell
+pnpm integra:check                 # cofre, certificado e autenticação (não bilhetado)
+pnpm integra:check 01210421000100  # + consulta de procuração (bilhetada pelo SERPRO)
+```
+
 O `onboard` abre o Case `CLIENT_ONBOARDING`, busca os dados públicos do CNPJ, monta a
 entidade (tipo, regime, matriz, CNAEs, sócios) com a resposta guardada como evidência,
 verifica a procuração e-CAC e transforma em pendência só o que não pode ser inferido.
 
 | Entregue | Pendente na Fase 1 |
 | --- | --- |
-| Onboarding pela base pública de CNPJ | Conector real do SERPRO Integra Contador (hoje simulado nos testes) |
-| Pending Engine | Credential Vault com o certificado do escritório |
+| Onboarding pela base pública de CNPJ | Credential Vault gerenciado (hoje: arquivo local com ACL) |
+| Conector real do SERPRO Integra Contador (procuração e-CAC) | Termo de autorização para procuração dada ao CPF do contador |
+| Pending Engine | |
 | Authorization Service (uso único, por procuração) | Workflow durável do onboarding no Temporal |
 | Metadados de certificados e procurações | Cadastro do responsável técnico e suas capacidades |
