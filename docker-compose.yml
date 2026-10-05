@@ -1,5 +1,10 @@
 # Ambiente local de desenvolvimento do Legacy One.
-# Uso: docker compose up -d   (depois: pnpm db:migrate && pnpm db:dev-roles)
+#
+#   docker compose up -d                      Postgres + NATS (suficiente para a Fase 0)
+#   docker compose --profile workflow up -d   + Temporal e Temporal UI (Fase 1)
+#
+# Depois: pnpm db:migrate && pnpm db:dev-roles
+# Armazenamento de documentos (S3) entra na Fase 2, com imagem definida na época.
 
 services:
   postgres:
@@ -30,6 +35,7 @@ services:
 
   temporal:
     image: temporalio/auto-setup:1.25
+    profiles: ["workflow"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,6 +50,7 @@ services:
 
   temporal-ui:
     image: temporalio/ui:2.31.2
+    profiles: ["workflow"]
     depends_on:
       - temporal
     environment:
@@ -51,19 +58,6 @@ services:
     ports:
       - "8080:8080"
 
-  minio:
-    image: minio/minio:latest
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: legacy
-      MINIO_ROOT_PASSWORD: legacy_minio_dev
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - miniodata:/data
-
 volumes:
   pgdata:
   natsdata:
-  miniodata:

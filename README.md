@@ -39,8 +39,7 @@ Serviços locais:
 | --- | --- |
 | PostgreSQL | localhost:5432 |
 | NATS JetStream | localhost:4222 (monitor: http://localhost:8222) |
-| Temporal | localhost:7233 (UI: http://localhost:8080) |
-| MinIO | http://localhost:9001 |
+| Temporal (perfil `workflow`) | localhost:7233 (UI: http://localhost:8080) |
 
 ## Arquitetura
 
