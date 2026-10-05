@@ -1,6 +1,8 @@
-# Legacy One — instruções para agentes de código
+# IARIS — instruções para agentes de código
 
-Plataforma contábil autônoma, multi-tenant, orientada a eventos. Filosofia:
+Plataforma contábil autônoma, multi-tenant, orientada a eventos. Nome do produto: IARIS
+(Inteligência Artificial para Resultados, Integração e Soluções). Identificadores técnicos
+antigos (`legacy_one`, `legacy_*`, `legacy.t.*`) ficam como estão. Filosofia:
 **automação primeiro, evidência sempre, humano por exceção.**
 
 ## Regras invioláveis

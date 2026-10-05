@@ -1,8 +1,8 @@
 {
-  "name": "legacy-one",
+  "name": "iaris",
   "version": "0.1.0",
   "private": true,
-  "description": "Legacy One — Autonomous Accounting OS",
+  "description": "IARIS — Inteligência Artificial para Resultados, Integração e Soluções",
   "type": "module",
   "engines": {
     "node": ">=22"

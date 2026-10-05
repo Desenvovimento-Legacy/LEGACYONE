@@ -1,6 +1,11 @@
-# Legacy One — Autonomous Accounting OS
+<p align="center"><img src="docs/brand/iaris-logo.jpg" alt="IARIS" width="480"></p>
+
+# IARIS — Inteligência Artificial para Resultados, Integração e Soluções
 
 Sistema operacional contábil autônomo, multi-tenant e multiagente.
+
+> Os identificadores técnicos (banco `legacy_one`, papéis `legacy_*`, subjects `legacy.t.*`) mantêm o nome original para não quebrar ambientes já criados.
+
 **Automação primeiro. Evidência sempre. Humano por exceção.**
 
 ## Status: Fase 0 — Fundação
@@ -43,7 +48,7 @@ Serviços locais:
 
 ## Arquitetura
 
-Documento de arquitetura aprovado: Legacy One — Arquitetura para Aprovação (Claude Docs).
+Documento de arquitetura aprovado: IARIS — Arquitetura para Aprovação (Claude Docs).
 Convenções para quem escreve código neste repositório: [CLAUDE.md](CLAUDE.md).
 
 ## Fase 1 — Onboarding pelo CNPJ (em andamento)
