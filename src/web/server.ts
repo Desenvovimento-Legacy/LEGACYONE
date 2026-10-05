@@ -62,6 +62,10 @@ async function listEntities(deps: WebDeps, competence: string) {
       declarations: number;
       das: number;
       das_paid: number;
+      das_paid_total: string | null;
+      das_paid_on: string | null;
+      other_count: number;
+      other_total: string | null;
       last_fetch: Date | null;
     }>(
       `SELECT e.id, e.legal_name, e.trade_name, e.cnpj,
@@ -72,6 +76,20 @@ async function listEntities(deps: WebDeps, competence: string) {
               (SELECT count(*)::int FROM pgdas_das s JOIN federal_payment f
                   ON f.entity_id = s.entity_id AND ltrim(f.document_number, '0') = ltrim(s.das_number, '0')
                 WHERE s.entity_id = e.id AND s.competence = $1) AS das_paid,
+              (SELECT sum(f.amount_total)::text FROM pgdas_das s JOIN federal_payment f
+                  ON f.entity_id = s.entity_id AND ltrim(f.document_number, '0') = ltrim(s.das_number, '0')
+                WHERE s.entity_id = e.id AND s.competence = $1) AS das_paid_total,
+              (SELECT max(f.collected_on)::text FROM pgdas_das s JOIN federal_payment f
+                  ON f.entity_id = s.entity_id AND ltrim(f.document_number, '0') = ltrim(s.das_number, '0')
+                WHERE s.entity_id = e.id AND s.competence = $1) AS das_paid_on,
+              (SELECT count(*)::int FROM federal_payment f
+                WHERE f.entity_id = e.id AND f.competence = $1
+                  AND NOT EXISTS (SELECT 1 FROM pgdas_das s WHERE s.entity_id = f.entity_id
+                                   AND ltrim(s.das_number, '0') = ltrim(f.document_number, '0'))) AS other_count,
+              (SELECT sum(f.amount_total)::text FROM federal_payment f
+                WHERE f.entity_id = e.id AND f.competence = $1
+                  AND NOT EXISTS (SELECT 1 FROM pgdas_das s WHERE s.entity_id = f.entity_id
+                                   AND ltrim(s.das_number, '0') = ltrim(f.document_number, '0'))) AS other_total,
               (SELECT max(occurred_at) FROM audit_log a
                 WHERE a.action = 'federal.pgdas_synced' AND a.entity_id = e.id
                   AND (a.competence = $1 OR (a.competence IS NULL AND a.data->>'year' = to_char($1::date, 'YYYY'))))
@@ -90,6 +108,10 @@ async function listEntities(deps: WebDeps, competence: string) {
       declarations: r.declarations,
       das: r.das,
       dasPaid: r.das_paid,
+      dasPaidTotal: r.das_paid_total,
+      dasPaidOn: r.das_paid_on,
+      otherCount: r.other_count,
+      otherTotal: r.other_total,
       lastFetchedAt: r.last_fetch ? r.last_fetch.toISOString() : null,
     }));
   });

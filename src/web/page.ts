@@ -64,10 +64,10 @@ export const PAGE_HTML = /* html */ `<!doctype html>
     <span class="note" id="hint"></span>
   </div>
   <div class="wrap"><table>
-    <thead><tr><th>Empresa</th><th class="hide-sm">Procuração e-CAC</th><th>PGDAS-D</th><th>DAS</th><th class="hide-sm">Última busca</th><th></th></tr></thead>
-    <tbody id="rows"><tr><td colspan="6" class="empty">Carregando…</td></tr></tbody>
+    <thead><tr><th>Empresa</th><th class="hide-sm">Procuração e-CAC</th><th>PGDAS-D</th><th class="num">DAS pago</th><th class="num">Outros federais (DARF, parcelas)</th><th class="hide-sm">Última busca</th><th></th></tr></thead>
+    <tbody id="rows"><tr><td colspan="7" class="empty">Carregando…</td></tr></tbody>
   </table></div>
-  <div class="note" style="margin-top:8px">Abrir esta tela não consulta a Receita: mostra o que já foi buscado. Cada clique em <b>Buscar</b> faz <span id="cps">2</span> consultas cobradas pelo SERPRO para aquela empresa e competência.</div>
+  <div class="note" style="margin-top:8px">Clique na empresa para ver declarações, DAS e guias da competência. Valores = pagamentos registrados na Receita (PagtoWeb). Abrir esta tela não consulta a Receita: mostra o que já foi buscado. Cada clique em <b>Buscar</b> faz <span id="cps">2</span> consultas cobradas pelo SERPRO para aquela empresa e competência.</div>
   <section class="detail" id="detail" hidden></section>
 </main>
 <div class="toast" id="toast"></div>
@@ -108,7 +108,14 @@ function statusCell(e) {
 function dasCell(e) {
   if (!e.lastFetchedAt) return '<span class="mut">—</span>';
   if (e.das === 0) return '<span class="mut">sem DAS emitido</span>';
-  return e.dasPaid > 0 ? '<span class="st ok">pago</span>' : '<span class="st warn">pagamento ainda não identificado</span>';
+  return e.dasPaid > 0
+    ? '<span class="st ok">' + brl(e.dasPaidTotal) + '</span><div class="cnpj">em ' + d(e.dasPaidOn) + '</div>'
+    : '<span class="st warn">pagamento ainda não identificado</span>';
+}
+function otherCell(e) {
+  if (!e.lastFetchedAt) return '<span class="mut">—</span>';
+  if (!e.otherCount) return '<span class="mut">nenhum</span>';
+  return brl(e.otherTotal) + '<div class="cnpj">' + e.otherCount + ' guia(s)</div>';
 }
 
 function render() {
@@ -124,11 +131,11 @@ function render() {
     return '<tr class="row' + (selected === e.id ? " sel" : "") + '" data-id="' + e.id + '">' +
       '<td><div>' + esc(e.name) + '</div><div class="cnpj">' + esc(e.cnpj) + '</div></td>' +
       '<td class="hide-sm">' + (e.poaValidTo ? "até " + d(e.poaValidTo) : '<span class="bad">não verificada</span>') + '</td>' +
-      '<td>' + statusCell(e) + '</td><td>' + dasCell(e) + '</td>' +
+      '<td>' + statusCell(e) + '</td><td class="num">' + dasCell(e) + '</td><td class="num">' + otherCell(e) + '</td>' +
       '<td class="hide-sm">' + dt(e.lastFetchedAt) + '</td>' +
       '<td class="num"><button data-buscar="' + e.id + '"' + (can ? "" : " disabled") + '>Buscar</button></td></tr>';
   });
-  $("rows").innerHTML = rows.join("") || '<tr><td colspan="6" class="empty">Nenhuma empresa cadastrada.</td></tr>';
+  $("rows").innerHTML = rows.join("") || '<tr><td colspan="7" class="empty">Nenhuma empresa cadastrada.</td></tr>';
 }
 
 async function load() {
