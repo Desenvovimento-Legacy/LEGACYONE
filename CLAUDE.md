@@ -29,6 +29,8 @@ Plataforma contábil autônoma, multi-tenant, orientada a eventos. Filosofia:
 - `db/migrations/` — SQL versionado, aplicado em ordem por `pnpm db:migrate`.
 - `src/platform/` — plataforma: eventos, auditoria, Cases, tenancy.
 - `src/modules/` — domínios de negócio (registry; depois ledger, fiscal, tax...).
+- `src/integrations/` — conectores externos (base pública de CNPJ, Integra Contador). Sempre atrás de interface, com implementação simulada para testes.
+- `src/cli/` — comandos de operação (`pnpm tenant:create`, `pnpm onboard`).
 - `src/shared/` — utilidades sem regra de negócio de domínio.
 - `test/` — testes de integração contra Postgres real.
 

@@ -46,8 +46,20 @@ Serviços locais:
 Documento de arquitetura aprovado: Legacy One — Arquitetura para Aprovação (Claude Docs).
 Convenções para quem escreve código neste repositório: [CLAUDE.md](CLAUDE.md).
 
-## Próximo passo: Fase 1
+## Fase 1 — Onboarding pelo CNPJ (em andamento)
 
-Entidade e onboarding: Case `CLIENT_ONBOARDING` buscando dados pelo CNPJ,
-conector SERPRO Integra Contador, Digital Identity (certificados e procurações),
-Authorization Service e o primeiro workflow durável no Temporal.
+```powershell
+pnpm tenant:create "Contabilidade Legacy" contabilidade-legacy
+pnpm onboard 12.ABC.345/01DE-35
+```
+
+O `onboard` abre o Case `CLIENT_ONBOARDING`, busca os dados públicos do CNPJ, monta a
+entidade (tipo, regime, matriz, CNAEs, sócios) com a resposta guardada como evidência,
+verifica a procuração e-CAC e transforma em pendência só o que não pode ser inferido.
+
+| Entregue | Pendente na Fase 1 |
+| --- | --- |
+| Onboarding pela base pública de CNPJ | Conector real do SERPRO Integra Contador (hoje simulado nos testes) |
+| Pending Engine | Credential Vault com o certificado do escritório |
+| Authorization Service (uso único, por procuração) | Workflow durável do onboarding no Temporal |
+| Metadados de certificados e procurações | Cadastro do responsável técnico e suas capacidades |

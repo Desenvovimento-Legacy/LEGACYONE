@@ -35,6 +35,36 @@ export const EventContracts = {
   CASE_CANCELLED: {
     1: CaseRef.extend({ reason: z.string().nullable() }),
   },
+  ENTITY_PROFILE_CREATED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      cnpj: z.string().nullable(),
+      entity_type: z.string().nullable(),
+      regime: z.string().nullable(),
+      establishments: z.number().int(),
+      activities: z.number().int(),
+      partners: z.number().int(),
+      source: z.string(),
+    }),
+  },
+  PENDING_ITEM_CREATED: {
+    1: z.object({
+      pending_item_id: z.uuid(),
+      type: z.string(),
+      responsible_source: z.enum(["CLIENT", "OFFICE", "EXTERNAL"]),
+      required_information: z.string(),
+      impact: z.string(),
+    }),
+  },
+  POWER_OF_ATTORNEY_VERIFIED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      system: z.string(),
+      active: z.boolean(),
+      services: z.array(z.string()),
+      source: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

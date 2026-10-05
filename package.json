@@ -14,7 +14,9 @@
     "db:dev-roles": "tsx --env-file-if-exists=.env src/shared/db/dev-roles.ts",
     "relay": "tsx --env-file-if-exists=.env src/platform/events/relay-main.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tenant:create": "tsx --env-file-if-exists=.env src/cli/tenant-create.ts",
+    "onboard": "tsx --env-file-if-exists=.env src/cli/onboard.ts"
   },
   "dependencies": {
     "nats": "^2.29.3",
