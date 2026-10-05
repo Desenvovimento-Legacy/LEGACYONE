@@ -89,15 +89,32 @@ export function normalizeBrasilApi(raw: unknown): PublicCompanyLookup["data"] {
 export class BrasilApiCnpjSource implements CnpjPublicDataSource {
   readonly name = "brasilapi-cnpj";
 
-  constructor(private readonly baseUrl = "https://brasilapi.com.br/api/cnpj/v1") {}
+  constructor(
+    private readonly baseUrl = "https://brasilapi.com.br/api/cnpj/v1",
+    private readonly maxAttempts = 5,
+    private readonly sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  ) {}
 
   async lookup(input: string): Promise<PublicCompanyLookup> {
     const cnpj = normalizeCnpj(input);
     if (!isValidCnpj(cnpj)) throw new Error(`CNPJ inválido: ${input}`);
-    const res = await fetch(`${this.baseUrl}/${cnpj}`, { signal: AbortSignal.timeout(30_000) });
-    if (res.status === 404) throw new CnpjNotFoundError(cnpj);
-    if (!res.ok) throw new Error(`BrasilAPI respondeu ${res.status} para o CNPJ ${cnpj}`);
-    const raw: unknown = await res.json();
-    return { data: normalizeBrasilApi(raw), raw, source: this.name, fetchedAt: new Date() };
+
+    // Base pública gratuita limita a taxa de consultas (429) e oscila (5xx):
+    // nova tentativa com espera crescente, respeitando Retry-After.
+    for (let attempt = 1; ; attempt++) {
+      const res = await fetch(`${this.baseUrl}/${cnpj}`, { signal: AbortSignal.timeout(30_000) });
+      if (res.status === 404) throw new CnpjNotFoundError(cnpj);
+      if (res.ok) {
+        const raw: unknown = await res.json();
+        return { data: normalizeBrasilApi(raw), raw, source: this.name, fetchedAt: new Date() };
+      }
+      const retryable = res.status === 429 || res.status >= 500;
+      if (!retryable || attempt >= this.maxAttempts) {
+        throw new Error(`BrasilAPI respondeu ${res.status} para o CNPJ ${cnpj} (tentativa ${attempt})`);
+      }
+      const retryAfter = Number(res.headers.get("retry-after"));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * 2 ** (attempt - 1);
+      await this.sleep(Math.min(waitMs, 60_000));
+    }
   }
 }

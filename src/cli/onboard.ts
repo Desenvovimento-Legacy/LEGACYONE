@@ -47,6 +47,10 @@ if (isMain(import.meta.url)) {
     console.log("");
     console.log(r.pending.length ? "Pendências:" : "Sem pendências.");
     for (const it of r.pending) console.log(`  [${it.responsible_source}] ${it.type}: ${it.required_information}`);
+  } catch (err) {
+    console.error(`Falha no onboarding: ${(err as Error).message}`);
+    console.error("O Case continua aberto; rode o mesmo comando de novo para retomar.");
+    process.exitCode = 1;
   } finally {
     await Promise.all([admin.end(), app.end()]);
   }
