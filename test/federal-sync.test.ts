@@ -152,11 +152,14 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
     expect(r.payments).toMatchObject({ total: 3, created: 3 });
 
     await withTenant(appPool, t, async (tx) => {
-      const s = await competenceSummary(tx, entityId, "2025-01-01");
+      const s = await competenceSummary(tx, entityId, "2025-01-01", new Date("2025-07-10T12:00:00Z"));
       expect(s).toEqual([
         expect.objectContaining({ competence: "2025-05-01", declarations: 1, rectifications: 0, das: 1, dasPaidFlag: true, dasPayments: 1, dasPaidAmount: "812.45", dasPaidOn: "2025-06-20" }),
         expect.objectContaining({ competence: "2025-06-01", declarations: 2, rectifications: 1, das: 1, dasPaidFlag: false, dasPayments: 0, dasPaidAmount: null }),
       ]);
+      // Mês encerrado sem declaração aparece no resumo.
+      const later = await competenceSummary(tx, entityId, "2025-01-01", new Date("2025-08-10T12:00:00Z"));
+      expect(later.at(-1)).toMatchObject({ competence: "2025-07-01", declarations: 0, das: 0 });
       // DAS pago que não saiu do PGDAS-D (ex.: parcela) não é confundido com o DAS da competência.
       const outside = await dasPaymentsOutsidePgdas(tx, entityId, "2025-01-01");
       expect(outside.map((o) => o.document_number)).toEqual(["7182500000000009"]);
@@ -186,7 +189,7 @@ describe("One Search: dados federais do Simples e pagamentos", () => {
     await syncFederalData({ appPool, integra, now: NOW }, t, { entityId });
     expect(await count(t, "SELECT count(*)::int AS n FROM pgdas_das_status")).toBe(3);
     await withTenant(appPool, t, async (tx) => {
-      const s = await competenceSummary(tx, entityId, "2025-06-01");
+      const s = await competenceSummary(tx, entityId, "2025-06-01", new Date("2025-07-10T12:00:00Z"));
       expect(s[0]).toMatchObject({ competence: "2025-06-01", dasPaidFlag: true });
     });
   });

@@ -292,7 +292,12 @@ export interface CompetenceSummary {
   dasPaidOn: string | null;
 }
 
-export async function competenceSummary(tx: PoolClient, entityId: string, from: string): Promise<CompetenceSummary[]> {
+export async function competenceSummary(
+  tx: PoolClient,
+  entityId: string,
+  from: string,
+  now: Date = new Date(),
+): Promise<CompetenceSummary[]> {
   const { rows } = await tx.query<{
     competence: string;
     declarations: number;
@@ -305,9 +310,20 @@ export async function competenceSummary(tx: PoolClient, entityId: string, from: 
     das_paid_amount: string | null;
     das_paid_on: string | null;
   }>(
-    `WITH comps AS (
-       SELECT competence FROM pgdas_declaration WHERE entity_id = $1 AND competence >= $2
-       UNION SELECT competence FROM pgdas_das WHERE entity_id = $1 AND competence >= $2
+    `WITH known AS (
+       SELECT competence FROM pgdas_declaration WHERE entity_id = $1
+       UNION SELECT competence FROM pgdas_das WHERE entity_id = $1
+     ),
+     -- Todas as competências desde o primeiro dado conhecido até a última encerrada:
+     -- mês sem declaração aparece (pendente ou em falta), não some do resumo.
+     comps AS (
+       SELECT gs::date AS competence
+         FROM generate_series(
+                greatest($2::date, (SELECT min(competence) FROM known)),
+                greatest((SELECT max(competence) FROM known),
+                         (date_trunc('month', ($3::timestamptz AT TIME ZONE 'America/Sao_Paulo')) - interval '1 month')::date),
+                interval '1 month') gs
+        WHERE EXISTS (SELECT 1 FROM known)
      ),
      paid AS (
        SELECT s.competence, p.amount_total, p.collected_on
@@ -332,7 +348,7 @@ export async function competenceSummary(tx: PoolClient, entityId: string, from: 
             (SELECT max(collected_on)::text FROM paid WHERE paid.competence = c.competence) AS das_paid_on
        FROM comps c
       ORDER BY c.competence`,
-    [entityId, from],
+    [entityId, from, now],
   );
   return rows.map((r) => ({
     competence: r.competence,

@@ -106,7 +106,7 @@ if (isMain(import.meta.url)) {
         for (const o of outside) {
           const acr = Number(o.amount_fine ?? 0) + Number(o.amount_interest ?? 0);
           console.log(
-            `  ${ddmmyyyy(o.collected_on)}  ${brl(o.amount_total)}${acr ? ` (multa+juros ${brl(acr.toFixed(2))})` : ""}  doc ${o.document_number}`,
+            `  ${ddmmyyyy(o.collected_on)}  ${brl(o.amount_total)}${acr ? ` (inclui multa+juros do débito ${brl(acr.toFixed(2))})` : ""}  doc ${o.document_number}`,
           );
         }
       }
