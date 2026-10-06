@@ -103,7 +103,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   <nav class="side" aria-label="Menu principal">
     <div class="brand">
       <svg width="32" height="32" viewBox="0 0 30 30" fill="none" stroke="#3FC1B4" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="9" r="2.2"></circle><circle cx="21" cy="7" r="2.2"></circle><circle cx="15" cy="16" r="2.2"></circle><circle cx="23" cy="20" r="2.2"></circle><circle cx="9" cy="22" r="2.2"></circle><path d="M10 10l3.5 4.5M19.5 8.5L16 14M17 17l4.5 2M13.2 17.5L10.5 20.5M15 18.2V27"></path></svg>
-      <div><b>AIRES</b><small id="office">—</small></div>
+      <div><b>AIRES</b><small>Inteligência Artificial para Resultados, Integração e Soluções</small></div>
     </div>
     <div class="grp"><span>OPERAÇÃO</span>
       <a class="nav" href="#/central" data-r="central"><span class="dot" style="background:#3FC1B4"></span>Central de agentes</a>
@@ -150,7 +150,6 @@ var STATUS_LABEL = { OPERANDO: "operando", EM_CONSTRUCAO: "em construção", PLA
 
 function loadCentral() {
   return getJson("/api/central").then(function (c) {
-    $("office").textContent = c.office;
     $("meter").textContent = "SERPRO " + c.billedToday + "/" + c.dailyLimit + " hoje";
     var b = $("qbadge"); b.hidden = !c.human.length; b.textContent = c.human.length;
     return c;
