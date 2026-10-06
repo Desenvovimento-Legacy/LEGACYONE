@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { agentName, PIPELINE_STAGES, PROCESSES } from "../platform/agents/catalog.js";
 import { formatCnpj } from "../shared/br/documents.js";
+import { accessMap, entityFacts, nextDueDates } from "../modules/onboarding/plan.js";
 
 /**
  * Leituras da seção Operação (Central de agentes, Fila humana, Cases).
@@ -21,6 +22,8 @@ export const statusPt = (s: string) => STATUS_PT[s] ?? s;
 
 const CASE_PT: Record<string, string> = {
   CLIENT_ONBOARDING: "Implantação",
+  DOCUMENT_REQUEST: "Pedido de documentos",
+  ACCOUNTING_FIRM_MIGRATION: "Migração da contabilidade anterior",
   ACCOUNTING_CLOSING: "Fechamento contábil",
   TAX_CLOSING: "Fechamento fiscal",
   PAYROLL_CLOSING: "Fechamento da folha",
@@ -61,6 +64,8 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `${p.competence ? `PA ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}` : p.year} · ${p.declarations} declarações, ${p.das} DAS`;
     case "FEDERAL_PAYMENTS_SYNCED":
       return `${p.payments} pagamentos federais (${fmtDate(String(p.from))} a ${fmtDate(String(p.to))})`;
+    case "IMPLEMENTATION_PLAN_CREATED":
+      return `Plano de implantação: ${p.checklist_items} itens a receber, ${p.obligations_added} obrigações no mapa${p.migration_case_id ? ", migração aberta" : ""}${p.rules_pending_approval ? `, ${p.rules_pending_approval} regras aguardando aprovação` : ""}`;
     case "CONTRACTED_SERVICES_DEFINED":
       return `Serviços ${(p.services as string[]).map((s) => SERVICE_PT[s] ?? s).join(", ")} desde ${fmtDate(String(p.valid_from))}`;
     default:
@@ -180,7 +185,7 @@ export async function humanQueue(tx: PoolClient) {
   );
   return [
     ...pend.rows.map((p) => ({
-      kind: p.type === "CONTRACTED_SERVICES" ? "services" : "pending",
+      kind: p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       id: p.id,
       type: p.type,
       entityId: p.entity_id,
@@ -240,4 +245,86 @@ export async function casesList(tx: PoolClient) {
     updatedAt: r.updated_at.toISOString(),
     transitions: r.transitions.map((t) => ({ ...t, fromPt: statusPt(t.from), toPt: statusPt(t.to), actor: agentName(t.actor) })),
   }));
+}
+
+/** Regras do catálogo de obrigações, com a aprovação do escritório. */
+export async function rulesList(tx: PoolClient) {
+  const { rows } = await tx.query<{
+    id: string; code: string; version: number; name: string; sphere: string; periodicity: string;
+    due: unknown; legal_basis: string; notes: string | null; approved_by: string | null; approved_at: Date | null;
+  }>(
+    `SELECT r.id, r.code, r.version, r.name, r.sphere, r.periodicity, r.due, r.legal_basis, r.notes,
+            a.approved_by, a.approved_at
+       FROM obligation_rule r LEFT JOIN obligation_rule_approval a ON a.rule_id = r.id
+      WHERE r.valid_to IS NULL ORDER BY r.sphere, r.code`,
+  );
+  return rows.map((r) => ({ ...r, approved_at: r.approved_at ? r.approved_at.toISOString() : null }));
+}
+
+const SERVICE_NAMES: Record<string, string> = { CONTABIL: "Contábil", FISCAL: "Fiscal", FOLHA: "Folha", SOCIETARIO: "Societário", FINANCEIRO: "Financeiro", IRPF: "IRPF" };
+
+export async function entitiesList(tx: PoolClient) {
+  const { rows } = await tx.query<{ id: string; name: string; legal_name: string; cnpj: string; regime: string | null; start: string | null; open_items: number }>(
+    `SELECT e.id, coalesce(e.trade_name, e.legal_name) AS name, e.legal_name, e.cnpj,
+            (SELECT regime FROM tax_regime_history t WHERE t.entity_id = e.id ORDER BY valid_from DESC LIMIT 1) AS regime,
+            (SELECT min(valid_from)::text FROM contracted_service_history h WHERE h.entity_id = e.id) AS start,
+            (SELECT count(*)::int FROM pending_item p WHERE p.entity_id = e.id AND p.status = 'OPEN') AS open_items
+       FROM entity e WHERE e.cnpj IS NOT NULL ORDER BY e.legal_name`,
+  );
+  return rows.map((r) => ({ ...r, cnpj: formatCnpj(r.cnpj) }));
+}
+
+/** Ficha da empresa: perfil, responsabilidade, acessos, obrigações, checklist e Cases. */
+export async function entityDetail(tx: PoolClient, entityId: string) {
+  const e = await tx.query<{ id: string; legal_name: string; trade_name: string | null; cnpj: string; activity_started_at: string | null; uf: string | null; municipio_ibge: string | null }>(
+    `SELECT e.id, e.legal_name, e.trade_name, e.cnpj, e.activity_started_at,
+            s.uf, s.municipio_ibge
+       FROM entity e LEFT JOIN establishment s ON s.entity_id = e.id AND s.kind = 'MATRIZ'
+      WHERE e.id = $1`,
+    [entityId],
+  );
+  const ent = e.rows[0];
+  if (!ent) return null;
+  const facts = await entityFacts(tx, entityId);
+  const services = await tx.query<{ service: string; valid_from: string }>(
+    "SELECT service, valid_from::text FROM contracted_service_history WHERE entity_id = $1 AND valid_to IS NULL ORDER BY service",
+    [entityId],
+  );
+  const cnae = await tx.query<{ cnae: string; description: string | null; is_primary: boolean }>(
+    `SELECT a.cnae, a.description, a.is_primary FROM activity_history a JOIN establishment s ON s.id = a.establishment_id
+      WHERE s.entity_id = $1 AND a.valid_to IS NULL ORDER BY a.is_primary DESC, a.cnae`,
+    [entityId],
+  );
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+  const obl = await tx.query<{ code: string; name: string; sphere: string; periodicity: string; due: never; legal_basis: string; notes: string | null; valid_from: string; reason: Record<string, unknown> }>(
+    `SELECT o.rule_code AS code, r.name, r.sphere, r.periodicity, r.due, r.legal_basis, r.notes, o.valid_from::text, o.reason
+       FROM entity_obligation o JOIN obligation_rule r ON r.id = o.rule_id
+      WHERE o.entity_id = $1 AND o.valid_to IS NULL ORDER BY r.sphere, r.code`,
+    [entityId],
+  );
+  const pend = await tx.query<{ id: string; type: string; required_information: string; impact: string; responsible_source: string; status: string; case_type: string | null }>(
+    `SELECT p.id, p.type, p.required_information, p.impact, p.responsible_source, p.status, c.type AS case_type
+       FROM pending_item p LEFT JOIN "case" c ON c.id = p.case_id
+      WHERE p.entity_id = $1 ORDER BY p.status, p.created_at`,
+    [entityId],
+  );
+  const cases = await tx.query<{ id: string; type: string; status: string; updated_at: Date }>(
+    `SELECT id, type, status, updated_at FROM "case" WHERE entity_id = $1 ORDER BY created_at`,
+    [entityId],
+  );
+  return {
+    id: ent.id,
+    legalName: ent.legal_name,
+    tradeName: ent.trade_name,
+    cnpj: formatCnpj(ent.cnpj),
+    activityStartedAt: ent.activity_started_at,
+    uf: ent.uf,
+    facts,
+    services: services.rows.map((r) => ({ code: r.service, name: SERVICE_NAMES[r.service] ?? r.service, since: r.valid_from })),
+    cnaes: cnae.rows,
+    access: await accessMap(tx, entityId),
+    obligations: obl.rows.map((o) => ({ ...o, next: nextDueDates(o.due, today, 2, o.valid_from) })),
+    checklist: pend.rows.map((p) => ({ ...p, caseType: p.case_type ? caseTypePt(p.case_type) : null })),
+    cases: cases.rows.map((c) => ({ id: c.id, type: caseTypePt(c.type), status: c.status, statusPt: statusPt(c.status), updatedAt: c.updated_at.toISOString() })),
+  };
 }

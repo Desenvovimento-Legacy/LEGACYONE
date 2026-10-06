@@ -12,9 +12,9 @@ import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile } from "../shared/secrets/secrets-file.js";
-import { approveCase, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
+import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
-import { casesList, centralData } from "./ops.js";
+import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
 import { PAGE_HTML } from "./page.js";
 
 /**
@@ -221,6 +221,31 @@ export function createWebServer(deps: WebDeps) {
       }
       if (req.method === "GET" && url.pathname === "/api/cases") {
         json(res, 200, { cases: await withTenant(deps.appPool, deps.tenantId, (tx) => casesList(tx)) });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/empresas") {
+        json(res, 200, { entities: await withTenant(deps.appPool, deps.tenantId, (tx) => entitiesList(tx)) });
+        return;
+      }
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[2] && !parts[3]) {
+        const d = await withTenant(deps.appPool, deps.tenantId, (tx) => entityDetail(tx, parts[2]!));
+        if (!d) return json(res, 404, { erro: "Empresa não encontrada" });
+        json(res, 200, d);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/regras") {
+        json(res, 200, { rules: await withTenant(deps.appPool, deps.tenantId, (tx) => rulesList(tx)) });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/regras/aprovar") {
+        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          json(res, 200, await approveRules(deps.appPool, deps.tenantId, USER));
+        } catch (err) {
+          if (err instanceof HumanActionError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
 

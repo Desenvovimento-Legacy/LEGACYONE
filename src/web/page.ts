@@ -114,9 +114,11 @@ export const PAGE_HTML = /* html */ `<!doctype html>
       <a class="nav" href="#/processos" data-r="processos"><span class="dot" style="background:#3FC1B4"></span>Todos os processos</a>
     </div>
     <div class="grp"><span>CLIENTES</span>
+      <a class="nav" href="#/empresas" data-r="empresas"><span class="dot" style="background:#3FC1B4"></span>Empresas</a>
       <a class="nav" href="#/receita" data-r="receita"><span class="dot" style="background:#3FC1B4"></span>Receita Federal</a>
     </div>
     <div class="grp"><span>CONTROLE</span>
+      <a class="nav" href="#/regras" data-r="regras"><span class="dot" style="background:#3FC1B4"></span>Regras e legislação</a>
       <a class="nav dis" href="#/central"><span class="dot" style="background:#3A4F63"></span>Revisão independente</a>
       <a class="nav dis" href="#/central"><span class="dot" style="background:#3A4F63"></span>Auditoria</a>
     </div>
@@ -164,6 +166,9 @@ function queueItemHtml(q) {
       '<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap"><div><label for="ini-' + q.id + '" style="display:block;font-size:12px;color:#C9A86A;margin-bottom:4px">Início da responsabilidade</label>' +
       '<input type="month" id="ini-' + q.id + '"></div><button class="warn" data-act="services" data-id="' + q.id + '">Confirmar</button></div></div>';
   }
+  if (q.kind === "rules") {
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex;background:#E8A33D;color:#1B1206;font-weight:700" href="#/regras">Revisar e aprovar regras</a></div></div>';
+  }
   if (q.kind === "approve") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><button class="warn" data-act="approve" data-id="' + q.id + '">Aprovar conclusão</button></div></div>';
   }
@@ -194,7 +199,7 @@ function viewCentral() {
     }).join("");
     var pipe = '<div class="pipe"><span class="hd">Empresa</span>' + c.stages.map(function (s) { return '<span class="hd">' + esc(s) + '</span>'; }).join("") +
       c.pipeline.map(function (r) {
-        return '<div class="ent"><b>' + esc(r.name) + '</b><small class="mono">' + esc(r.cnpj) + '</small></div>' + r.cells.map(function (x) { return '<div class="cell ' + x.kind + '">' + esc(x.text) + '</div>'; }).join("");
+        return '<div class="ent"><a href="#/empresa/' + r.id + '" style="color:#E6EEF5"><b>' + esc(r.name) + '</b></a><small class="mono">' + esc(r.cnpj) + '</small></div>' + r.cells.map(function (x) { return '<div class="cell ' + x.kind + '">' + esc(x.text) + '</div>'; }).join("");
       }).join("") + '</div>';
     $("view").innerHTML =
       '<section class="kpis">' + kpis + '</section>' +
@@ -283,6 +288,69 @@ function buscar(id) {
     .then(function () { rf.busy = false; return loadCentral(); }).then(route);
 }
 
+
+/* ---------------- Empresas ---------------- */
+var SRC = { CLIENT: "cliente", OFFICE: "escritório", EXTERNAL: "órgão externo" };
+function viewEmpresas() {
+  setHead("Empresas", "Clientes do escritório e a situação da implantação de cada um");
+  return getJson("/api/empresas").then(function (r) {
+    var rows = r.entities.map(function (e) {
+      return '<tr class="row" data-goto="#/empresa/' + e.id + '"><td><b>' + esc(e.legal_name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td>' + esc((e.regime || "—").replace("_", " ").toLowerCase()) + '</td><td>' + (e.start ? d(e.start) : '<span class="wr st">a definir</span>') + '</td><td class="num">' + e.open_items + '</td></tr>';
+    }).join("");
+    $("view").innerHTML = '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>';
+  });
+}
+function viewEmpresa(id) {
+  return getJson("/api/empresa/" + id).then(function (e) {
+    setHead(e.legalName, e.cnpj + (e.uf ? " · " + e.uf : "") + (e.activityStartedAt ? " · desde " + d(e.activityStartedAt) : ""));
+    var f = e.facts;
+    var facts = [
+      ["Regime", (f.regime || "a definir").replace("_", " ").toLowerCase()],
+      ["Responsabilidade da Legacy desde", f.responsibilityStart ? d(f.responsibilityStart) : "a definir"],
+      ["Serviços", e.services.length ? e.services.map(function (s) { return s.name; }).join(", ") : "a definir"],
+      ["Remuneração (folha ou pró-labore)", f.remuneration ? "sim · pela DCTFWeb paga" : "não identificada"],
+      ["Empregados", f.employees ? "sim · INSS de empregados (1082)" : "não identificados"],
+      ["Atividade de serviço (ISS)", f.serviceActivity ? "sim" : "não"]
+    ].map(function (x) { return '<tr><td class="mut">' + x[0] + '</td><td>' + esc(x[1]) + '</td></tr>'; }).join("");
+    var acc = e.access.map(function (a) {
+      var cls = a.status === "OK" ? "ok" : a.status === "PENDENTE" ? "wr" : "mut";
+      return '<tr><td>' + esc(a.system) + '</td><td class="st ' + cls + '">' + esc(a.status.toLowerCase()) + '</td><td class="mut">' + esc(a.detail) + '</td></tr>';
+    }).join("");
+    var obl = e.obligations.length ? e.obligations.map(function (o) {
+      var nx = o.next.length ? o.next.map(function (n) { return d(n.due) + ' <span class="mut">(' + (o.periodicity === "ANUAL" ? n.competence.slice(0, 4) : mm(n.competence)) + ')</span>'; }).join("<br>") : '<span class="wr">prazo a cadastrar</span>';
+      return '<tr><td><b>' + esc(o.name) + '</b><div class="mut" style="font-size:12px">' + esc(o.legal_basis) + '</div></td><td>' + esc(o.sphere.toLowerCase()) + ' · ' + esc(o.periodicity.toLowerCase()) + '</td><td>' + d(o.valid_from) + '</td><td>' + nx + '</td></tr>';
+    }).join("") : '<tr><td colspan="4" class="empty">Mapa ainda não gerado: precisa da data de início e das regras aprovadas.</td></tr>';
+    var chk = e.checklist.map(function (p) {
+      var cls = p.status === "OPEN" ? "wr" : "ok";
+      return '<tr><td>' + esc(p.required_information) + '<div class="mut" style="font-size:12px">' + esc(p.impact) + '</div></td><td>' + esc(SRC[p.responsible_source] || p.responsible_source) + '</td><td>' + esc(p.caseType || "—") + '</td><td class="st ' + cls + '">' + (p.status === "OPEN" ? "pendente" : "resolvido") + '</td></tr>';
+    }).join("");
+    var cs = e.cases.map(function (c) { return '<tr><td>' + esc(c.type) + '</td><td class="st ' + (c.status === "COMPLETED" ? "ok" : "wr") + '">' + esc(c.statusPt) + '</td><td>' + dt(c.updatedAt) + '</td></tr>'; }).join("");
+    $("view").innerHTML =
+      '<div class="cols"><div class="wide">' +
+        '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
+        '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
+      '</div><div class="narrow">' +
+        '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
+        '<section class="card"><h2>Mapa de acessos</h2><table>' + acc + '</table></section>' +
+        '<section class="card"><h2>Cases</h2><table>' + cs + '</table></section>' +
+      '</div></div>';
+  });
+}
+
+/* ---------------- Regras ---------------- */
+function viewRegras() {
+  setHead("Regras e legislação", "Catálogo de obrigações. Nenhuma regra vale sem a aprovação do responsável técnico.");
+  return getJson("/api/regras").then(function (r) {
+    var pend = r.rules.filter(function (x) { return !x.approved_by; }).length;
+    var rows = r.rules.map(function (x) {
+      var due = !x.due ? '<span class="wr">a cadastrar</span>' : x.due.kind === "annual" ? "anual, " + String(x.due.day).padStart(2, "0") + "/" + String(x.due.month).padStart(2, "0") : "dia " + x.due.day + " do mês seguinte";
+      return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:11px">' + esc(x.code) + ' v' + x.version + '</div></td><td>' + esc(x.sphere.toLowerCase()) + '</td><td>' + due + '</td><td>' + esc(x.legal_basis) + (x.notes ? '<div class="mut" style="font-size:12px">' + esc(x.notes) + '</div>' : '') + '</td><td class="st ' + (x.approved_by ? "ok" : "wr") + '">' + (x.approved_by ? "aprovada por " + esc(x.approved_by) : "proposta") + '</td></tr>';
+    }).join("");
+    $("view").innerHTML = '<section class="card"><h2>' + r.rules.length + ' regras · ' + pend + ' aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Regra</th><th>Esfera</th><th>Prazo</th><th>Fundamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="rules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira prazos e fundamentos antes de aprovar. A aprovação fica na auditoria em seu nome e completa os mapas das empresas.</span></div>' : '') + '</section>';
+  });
+}
+
 /* ---------------- ações ---------------- */
 document.addEventListener("click", function (ev) {
   var b = ev.target.closest("button[data-act]");
@@ -301,6 +369,11 @@ document.addEventListener("click", function (ev) {
         .catch(function (err) { toast(err.message); b.disabled = false; })
         .then(route);
     }
+    if (b.dataset.act === "rules") {
+      if (!window.confirm("Aprovar as regras propostas?\\n\\nConfira prazos e fundamentos. A aprovação fica registrada na auditoria em seu nome.")) return;
+      b.disabled = true;
+      post("/api/regras/aprovar", "aprovar").then(function (r) { toast(r.approved + " regra(s) aprovada(s); " + r.obligationsAdded + " obrigação(ões) adicionada(s) aos mapas."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
+    }
     if (b.dataset.act === "approve") {
       if (!window.confirm("Aprovar a conclusão deste Case?\\n\\nA aprovação fica registrada na auditoria em seu nome.")) return;
       b.disabled = true;
@@ -312,16 +385,20 @@ document.addEventListener("click", function (ev) {
   if (bb) { ev.stopPropagation(); if (!bb.disabled) buscar(bb.dataset.buscar); return; }
   var tr = ev.target.closest("tr[data-ent]");
   if (tr) { showDetail(tr.dataset.ent); return; }
+  var tg = ev.target.closest("tr[data-goto]");
+  if (tg) { location.hash = tg.dataset.goto; return; }
   var tc = ev.target.closest("tr[data-tl]");
   if (tc) { var u = $("tl-" + tc.dataset.tl); if (u) u.hidden = !u.hidden; }
 });
 
-var ROUTES = { central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita };
+var ROUTES = { central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
 function route() {
-  var r = location.hash.replace(/^#\\/?/, "").split("/")[0] || "central";
+  var parts = location.hash.replace(/^#\\/?/, "").split("/");
+  var r = parts[0] || "central";
   if (!ROUTES[r]) r = "central";
-  Array.prototype.forEach.call(document.querySelectorAll(".nav[data-r]"), function (a) { a.classList.toggle("on", a.dataset.r === r); });
-  return ROUTES[r]().catch(function (err) { toast(err.message); });
+  var navR = r === "empresa" ? "empresas" : r;
+  Array.prototype.forEach.call(document.querySelectorAll(".nav[data-r]"), function (a) { a.classList.toggle("on", a.dataset.r === navR); });
+  return ROUTES[r](parts[1]).catch(function (err) { toast(err.message); });
 }
 window.addEventListener("hashchange", route);
 route();

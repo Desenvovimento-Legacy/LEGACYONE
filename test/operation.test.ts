@@ -43,6 +43,21 @@ describe("Fila humana: decisões que fecham a implantação", () => {
       LUAN,
     );
     expect(after.caseStatus).toBe("IN_REVIEW");
+    // Próximo passo automático: plano de implantação.
+    expect(after.plan.checklist).toBeGreaterThan(0);
+    expect(after.plan.migrationCaseId).not.toBeNull(); // empresa existia antes de 10/2026
+    expect(after.plan.rulesPendingApproval).toBeGreaterThan(0);
+    await withTenant(appPool, t, async (tx) => {
+      const types = await tx.query("SELECT type, responsible_source FROM pending_item WHERE status = 'OPEN' ORDER BY type");
+      expect(types.rows.map((x) => x.type)).toEqual(
+        expect.arrayContaining(["CLIENT_CERTIFICATE", "BANK_ACCOUNTS", "PREV_TRIAL_BALANCE", "OBLIGATION_RULES_APPROVAL"]),
+      );
+      const cases = await tx.query(`SELECT type, status FROM "case" ORDER BY type`);
+      expect(cases.rows).toEqual(expect.arrayContaining([
+        { type: "ACCOUNTING_FIRM_MIGRATION", status: "WAITING_CLIENT" },
+        { type: "DOCUMENT_REQUEST", status: "WAITING_CLIENT" },
+      ]));
+    });
 
     await withTenant(appPool, t, async (tx) => {
       expect((await profileAsOf(tx, r.entityId!, "2026-10-01")).services).toEqual(["CONTABIL", "FISCAL", "FOLHA", "SOCIETARIO"]);
@@ -108,13 +123,35 @@ describe("tela: Central e Fila humana", () => {
     expect(ok.status).toBe(200);
 
     const c2 = await (await fetch(`${base}/api/central`)).json();
-    expect(c2.human).toHaveLength(1);
-    expect(c2.human[0].kind).toBe("approve");
-    const ap = await fetch(`${base}/api/case/${c2.human[0].id}/aprovar`, { method: "POST", headers: { "X-AIRES-Acao": "aprovar" } });
+    expect(c2.human.map((h: { kind: string }) => h.kind).sort()).toEqual(["approve", "rules"]);
+    const approveItem = c2.human.find((h: { kind: string }) => h.kind === "approve");
+
+    // Regras propostas: aprovar completa o mapa de obrigações da empresa.
+    expect((await fetch(`${base}/api/regras/aprovar`, { method: "POST" })).status).toBe(403);
+    const rules = await (await fetch(`${base}/api/regras/aprovar`, { method: "POST", headers: { "X-AIRES-Acao": "aprovar" } })).json();
+    expect(rules.approved).toBe(6);
+    expect(rules.obligationsAdded).toBeGreaterThan(0);
+    const det = await (await fetch(`${base}/api/empresa/${c2.human[0].entityId ?? approveItem.entityId}`)).json();
+    expect(det.obligations.map((o: { code: string }) => o.code)).toEqual(expect.arrayContaining(["PGDAS_D", "DEFIS"]));
+    expect(det.access[0]).toMatchObject({ status: "OK" });
+
+    const ap = await fetch(`${base}/api/case/${approveItem.id}/aprovar`, { method: "POST", headers: { "X-AIRES-Acao": "aprovar" } });
     expect(ap.status).toBe(200);
     const cres = await fetch(`${base}/api/cases`);
     const cases = await cres.json();
     expect(cres.status, JSON.stringify(cases)).toBe(200);
     expect(cases.cases[0]).toMatchObject({ status: "COMPLETED", type: "Implantação" });
+  });
+});
+
+describe("prazos do mapa de obrigações", () => {
+  it("só competências sob responsabilidade do escritório", async () => {
+    const { nextDueDates } = await import("../src/modules/onboarding/plan.js");
+    expect(nextDueDates({ kind: "next_month_day", day: 20 }, "2026-10-06", 2, "2026-10-01")).toEqual([
+      { competence: "2026-10-01", due: "2026-11-20" },
+      { competence: "2026-11-01", due: "2026-12-20" },
+    ]);
+    expect(nextDueDates({ kind: "next_month_day", day: 20 }, "2026-10-06", 1)).toEqual([{ competence: "2026-09-01", due: "2026-10-20" }]);
+    expect(nextDueDates({ kind: "annual", month: 3, day: 31 }, "2026-10-06", 1, "2026-10-01")).toEqual([{ competence: "2026-01-01", due: "2027-03-31" }]);
   });
 });

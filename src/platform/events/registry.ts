@@ -73,6 +73,16 @@ export const EventContracts = {
       defined_by: z.string(),
     }),
   },
+  IMPLEMENTATION_PLAN_CREATED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      checklist_items: z.number().int(),
+      obligations_added: z.number().int(),
+      rules_pending_approval: z.number().int(),
+      migration_case_id: z.uuid().nullable(),
+      facts: z.record(z.string(), z.unknown()),
+    }),
+  },
   PGDAS_INDEX_SYNCED: {
     1: z.object({
       entity_id: z.uuid(),

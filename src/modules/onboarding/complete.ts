@@ -7,6 +7,7 @@ import { getCase, transitionCase } from "../../platform/cases/case-engine.js";
 import { appendEvent } from "../../platform/events/outbox.js";
 import { openPendingItems, resolvePendingItem } from "../../platform/pending/pending.js";
 import { addContractedService, ContractedService } from "../registry/registry.js";
+import { approveObligationRules, buildImplementationPlan, type PlanResult } from "./plan.js";
 
 /**
  * Decisões humanas que encerram a implantação:
@@ -38,7 +39,7 @@ export async function defineContractedServices(
   tenantId: string,
   raw: z.input<typeof ServicesInput>,
   actor: Actor,
-): Promise<{ caseId: string | null; caseStatus: string | null }> {
+): Promise<{ caseId: string | null; caseStatus: string | null; plan: PlanResult }> {
   const input = ServicesInput.parse(raw);
   return withTenant(pool, tenantId, async (tx) => {
     const { rows } = await tx.query<{ id: string; entity_id: string | null; case_id: string | null; type: string; status: string }>(
@@ -75,15 +76,18 @@ export async function defineContractedServices(
       payload: { entity_id: item.entity_id, services, valid_from: input.startDate, defined_by: actor.id },
     });
 
+    // Próximo passo automático: plano de implantação (checklist, migração, obrigações).
+    const plan = await buildImplementationPlan(tx, item.entity_id, item.case_id, actor);
+
     // O Case segue sozinho: sem pendência aberta, vai para revisão.
-    if (!item.case_id) return { caseId: null, caseStatus: null };
+    if (!item.case_id) return { caseId: null, caseStatus: null, plan };
     const open = await openPendingItems(tx, { caseId: item.case_id });
     let c = await getCase(tx, item.case_id);
     if (c && open.length === 0 && c.status.startsWith("WAITING_")) {
       c = (await transitionCase(tx, { caseId: c.id, to: "IN_PROGRESS", reason: "pendências resolvidas" }, actor)).case;
       c = (await transitionCase(tx, { caseId: c.id, to: "IN_REVIEW", reason: "implantação pronta para revisão" }, actor)).case;
     }
-    return { caseId: item.case_id, caseStatus: c?.status ?? null };
+    return { caseId: item.case_id, caseStatus: c?.status ?? null, plan };
   });
 }
 
@@ -108,5 +112,20 @@ export async function approveCase(pool: Pool, tenantId: string, caseId: string, 
       data: { type: c.type },
     });
     return done.case.status;
+  });
+}
+
+/** Aprovação, pelo responsável técnico, das regras propostas do catálogo de obrigações. */
+export async function approveRules(pool: Pool, tenantId: string, actor: Actor) {
+  if (actor.kind !== "USER") throw new HumanActionError("Só uma pessoa aprova regras");
+  return withTenant(pool, tenantId, async (tx) => {
+    const r = await approveObligationRules(tx, actor);
+    const open = await tx.query<{ id: string }>(
+      "SELECT id FROM pending_item WHERE status = 'OPEN' AND type = 'OBLIGATION_RULES_APPROVAL'",
+    );
+    for (const p of open.rows) {
+      await resolvePendingItem(tx, { id: p.id, resolution: `${r.approved} regra(s) aprovada(s) por ${actor.id}` }, actor);
+    }
+    return r;
   });
 }
