@@ -53,10 +53,12 @@ function monthPairs(section: string): Map<string, string> {
   return out;
 }
 
-export function parsePgdasDeclarationText(raw: string): PgdasDeclarationContent {
+export function parsePgdasDeclarationText(raw: string, fallbackCompetence?: string): PgdasDeclarationContent {
   const text = raw.replace(/ /g, " ").replace(/[ \t]+/g, " ");
   const flat = text.replace(/\s+/g, " ");
-  const pa = /Per[ií]odo de Apura[cç][aã]o(?: \(PA\))?:?\s*(\d{2}\/\d{4})/i.exec(flat)?.[1] ?? null;
+  // "Período de Apuração (PA): 08/2026" ou "Período de Apuração: 01/08/2026 a 31/08/2026"
+  const paM = /Per[ií]odo de Apura[cç][aã]o(?: \(PA\))?:?\s*(?:\d{2}\/)?(\d{2}\/\d{4})/i.exec(flat);
+  const pa = paM?.[1] ?? (fallbackCompetence ? `${fallbackCompetence.slice(5, 7)}/${fallbackCompetence.slice(0, 4)}` : null);
   const regimeTxt = /Regime de Apura[cç][aã]o:?\s*(Compet[eê]ncia|Caixa)/i.exec(flat)?.[1] ?? null;
   const regime = regimeTxt ? (/caixa/i.test(regimeTxt) ? "CAIXA" : "COMPETENCIA") : null;
 

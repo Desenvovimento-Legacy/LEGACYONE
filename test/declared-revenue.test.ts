@@ -19,6 +19,12 @@ describe("receita declarada no PGDAS-D (PDF oficial)", () => {
     expect(c.months).toHaveLength(13);
     expect(c.months.find((m) => m.competence === "2026-05-01")).toMatchObject({ total: "1234.56", source: "ANTERIOR" });
     expect(c.months.at(-1)).toMatchObject({ competence: "2026-08-01", source: "RPA" });
+    // leiaute real: "Período de Apuração: 01/08/2026 a 31/08/2026"
+    const real = parsePgdasDeclarationText(
+      "Período de Apuração: 01/08/2026 a 31/08/2026 . Regime de Apuração: Competência 2.1 Discriminativo de Receitas Total de Receitas Brutas (R$) Mercado Interno Mercado Externo Total Receita Bruta do PA (RPA) - Competência 522.228,12 0,00 522.228,12 Receita bruta acumulada nos doze meses anteriores ao PA (RBT12) 3.781.678,41 0,00 3.781.678,41 2.2) Receitas Brutas Anteriores (R$) 2.2.1) Mercado Interno 07/2026 688.626,61 2.2.2) Mercado Externo 07/2026 0,00 2.3) Folha",
+    );
+    expect(real).toMatchObject({ period: "2026-08-01", regime: "COMPETENCIA", rbt12: "3781678.41", rpa: { total: "522228.12" } });
+    expect(real.months.map((m) => [m.competence, m.total, m.source])).toEqual([["2026-07-01", "688626.61", "ANTERIOR"], ["2026-08-01", "522228.12", "RPA"]]);
   });
 
   it("1 consulta cobrada guarda o PDF, a receita mês a mês e cruza com as NFS-e prestadas", async () => {

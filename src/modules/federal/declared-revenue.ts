@@ -29,7 +29,7 @@ export interface DeclarationReadResult {
 }
 
 async function storeParsed(tx: PoolClient, entityId: string, competence: string, number: string | null, pdfId: string, pdf: Buffer) {
-  const content = parsePgdasDeclarationText(await pdfText(pdf));
+  const content = parsePgdasDeclarationText(await pdfText(pdf), competence);
   let months = 0;
   for (const m of content.months) {
     const ins = await tx.query(
