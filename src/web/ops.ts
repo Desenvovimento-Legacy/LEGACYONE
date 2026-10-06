@@ -68,6 +68,12 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `Plano de implantação: ${p.checklist_items} itens a receber, ${p.obligations_added} obrigações no mapa${p.migration_case_id ? ", migração aberta" : ""}${p.rules_pending_approval ? `, ${p.rules_pending_approval} regras aguardando aprovação` : ""}`;
     case "CONTRACTED_SERVICES_DEFINED":
       return `Serviços ${(p.services as string[]).map((s) => SERVICE_PT[s] ?? s).join(", ")} desde ${fmtDate(String(p.valid_from))}`;
+    case "USER_INVITED":
+      return `Convite de acesso enviado (perfil ${String(p.role).replace("_", " ").toLowerCase()})`;
+    case "USER_ENROLLED":
+      return "Usuário ativou o acesso (senha e autenticador)";
+    case "USER_ACCESS_CHANGED":
+      return p.active ? `Perfil de acesso: ${String(p.role).replace("_", " ").toLowerCase()}` : "Acesso revogado";
     default:
       return type;
   }

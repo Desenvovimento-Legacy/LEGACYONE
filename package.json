@@ -20,17 +20,23 @@
     "integra:check": "tsx --env-file-if-exists=.env src/cli/integra-check.ts",
     "federal:sync": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts",
     "federal:report": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts --report",
-    "web": "tsx --env-file-if-exists=.env src/web/server.ts"
+    "web": "tsx --env-file-if-exists=.env src/web/server.ts",
+    "auth:init": "tsx --env-file-if-exists=.env src/cli/users.ts init",
+    "user:invite": "tsx --env-file-if-exists=.env src/cli/users.ts invite",
+    "user:revoke": "tsx --env-file-if-exists=.env src/cli/users.ts revoke",
+    "user:list": "tsx --env-file-if-exists=.env src/cli/users.ts list"
   },
   "dependencies": {
     "nats": "^2.29.3",
     "pg": "^8.23.1",
+    "qrcode": "^1.5.4",
     "uuid": "^14.0.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"

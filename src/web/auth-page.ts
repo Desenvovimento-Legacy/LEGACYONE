@@ -1,0 +1,102 @@
+/**
+ * Tela de entrada da AIRES: login (e-mail + senha + código do autenticador) e
+ * primeiro acesso por convite (/convite#t=TOKEN). O token fica no fragmento
+ * (#), que o navegador não envia em requisições nem em Referer, e é retirado
+ * do endereço assim que lido.
+ * Atenção: o script vive dentro de um template literal — não use crase nem
+ * cifrão-chave nele.
+ */
+export const AUTH_HTML = /* html */ `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>AIRES — Entrar</title>
+<style>
+  :root { --bg: #0B1622; --panel: #111F2E; --line: #1E3247; --ink: #E6EEF5; --muted: #8FA5B8; --teal: #3FC1B4; --amber: #E8A33D; --red: #F7A39C; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .box { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px 26px; }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  .brand b { font-size: 24px; letter-spacing: .1em; color: #fff; display: block; }
+  .brand small { color: var(--muted); font-size: 11px; }
+  h1 { font-size: 17px; margin: 0 0 4px; } p.sub { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 5px; }
+  input { width: 100%; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid #2A3F55; background: #0E1B29; color: #fff; }
+  input:focus { outline: 2px solid var(--teal); outline-offset: 1px; }
+  input.code { letter-spacing: .4em; font-size: 20px; text-align: center; font-family: Consolas, ui-monospace, monospace; }
+  button { width: 100%; margin-top: 20px; font: inherit; font-weight: 700; padding: 11px 14px; border-radius: 8px; border: 0; background: #2E6DA4; color: #fff; cursor: pointer; }
+  button[disabled] { opacity: .5; cursor: wait; }
+  .err { color: var(--red); margin-top: 14px; min-height: 1em; font-size: 13px; }
+  .ok { color: #7FE0D4; }
+  .qr { background: #fff; border-radius: 10px; padding: 10px; width: 200px; margin: 6px auto 8px; }
+  .qr svg { display: block; width: 100%; height: auto; }
+  .key { font-family: Consolas, ui-monospace, monospace; font-size: 13px; text-align: center; color: #fff; word-break: break-all; }
+  ol { padding-left: 18px; color: var(--muted); font-size: 13px; margin: 0 0 6px; } ol li { margin: 4px 0; }
+  .foot { margin-top: 18px; font-size: 11px; color: #6F8496; text-align: center; }
+</style>
+</head>
+<body>
+<main class="box">
+  <div class="brand">
+    <svg width="34" height="34" viewBox="0 0 30 30" fill="none" stroke="#3FC1B4" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="9" r="2.2"></circle><circle cx="21" cy="7" r="2.2"></circle><circle cx="15" cy="16" r="2.2"></circle><circle cx="23" cy="20" r="2.2"></circle><circle cx="9" cy="22" r="2.2"></circle><path d="M10 10l3.5 4.5M19.5 8.5L16 14M17 17l4.5 2M13.2 17.5L10.5 20.5M15 18.2V27"></path></svg>
+    <div><b>AIRES</b><small>Inteligência Artificial para Resultados, Integração e Soluções</small></div>
+  </div>
+  <div id="view"></div>
+  <div class="foot">Acesso registrado na auditoria.</div>
+</main>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+function post(u, action, body) {
+  return fetch(u, { method: "POST", headers: { "X-AIRES-Acao": action, "content-type": "application/json" }, body: JSON.stringify(body || {}) })
+    .then(function (r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b.erro || "Falha (" + r.status + ")"); return b; }); });
+}
+function busy(form, on) { var b = form.querySelector("button"); b.disabled = on; }
+
+function viewLogin(msg) {
+  $("view").innerHTML = '<h1>Entrar</h1><p class="sub">Use o e-mail, a senha e o código de 6 dígitos do aplicativo autenticador.</p>' +
+    (msg ? '<p class="ok">' + esc(msg) + '</p>' : '') +
+    '<form id="f" autocomplete="on"><label for="email">E-mail</label><input id="email" type="email" autocomplete="username" required>' +
+    '<label for="pw">Senha</label><input id="pw" type="password" autocomplete="current-password" required>' +
+    '<label for="code">Código do autenticador</label><input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>' +
+    '<button type="submit">Entrar</button><div class="err" id="err" role="alert"></div></form>';
+  $("email").focus();
+  $("f").addEventListener("submit", function (ev) {
+    ev.preventDefault(); var f = ev.target; busy(f, true); $("err").textContent = "";
+    post("/api/login", "login", { email: $("email").value, password: $("pw").value, code: $("code").value })
+      .then(function () { location.replace("/"); })
+      .catch(function (e) { $("err").textContent = e.message; $("code").value = ""; busy(f, false); });
+  });
+}
+
+var inviteToken = null;
+function viewInvite() {
+  var m = /[#&]t=([A-Za-z0-9_-]+)/.exec(location.hash);
+  if (m) { inviteToken = m[1]; history.replaceState(null, "", "/convite"); }
+  if (!inviteToken) { $("view").innerHTML = '<h1>Convite</h1><p class="err">Link de convite incompleto. Abra o link exatamente como recebeu.</p>'; return; }
+  $("view").innerHTML = '<p class="sub">Abrindo o convite…</p>';
+  post("/api/convite/abrir", "convite", { token: inviteToken }).then(function (c) {
+    $("view").innerHTML = '<h1>Primeiro acesso</h1><p class="sub">' + esc(c.name) + ' · ' + esc(c.email) + '<br>Perfil: ' + esc(c.roleLabel) + '</p>' +
+      '<ol><li>Instale um autenticador no celular (Google Authenticator ou Microsoft Authenticator).</li><li>Leia o QR abaixo com o aplicativo.</li><li>Crie a senha e digite o código de 6 dígitos que aparece no aplicativo.</li></ol>' +
+      '<div class="qr">' + c.qrSvg + '</div><div class="key">Sem câmera? Digite a chave:<br>' + esc(c.secretBase32) + '</div>' +
+      '<form id="f"><label for="pw">Crie uma senha (mínimo 12 caracteres)</label><input id="pw" type="password" autocomplete="new-password" minlength="12" required>' +
+      '<label for="pw2">Repita a senha</label><input id="pw2" type="password" autocomplete="new-password" minlength="12" required>' +
+      '<label for="code">Código do autenticador</label><input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>' +
+      '<button type="submit">Ativar acesso</button><div class="err" id="err" role="alert"></div></form>';
+    $("f").addEventListener("submit", function (ev) {
+      ev.preventDefault(); var f = ev.target; $("err").textContent = "";
+      if ($("pw").value !== $("pw2").value) { $("err").textContent = "As senhas não são iguais."; return; }
+      busy(f, true);
+      post("/api/convite/ativar", "convite", { token: inviteToken, password: $("pw").value, code: $("code").value })
+        .then(function () { inviteToken = null; history.replaceState(null, "", "/"); viewLogin("Acesso ativado. Entre com seu e-mail, senha e um código novo do autenticador."); })
+        .catch(function (e) { $("err").textContent = e.message; $("code").value = ""; busy(f, false); });
+    });
+  }).catch(function (e) { $("view").innerHTML = '<h1>Convite</h1><p class="err">' + esc(e.message) + '</p>'; });
+}
+
+if (location.pathname === "/convite") viewInvite(); else viewLogin();
+</script>
+</body>
+</html>`;

@@ -95,6 +95,9 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #E6EEF5; color: #0B1622; padding: 10px 16px; border-radius: 8px; display: none; max-width: 90vw; font-weight: 600; }
   .row { cursor: pointer; } .row:hover td { background: #13243A; }
   .tl { font-size: 12px; color: var(--ink2); margin: 6px 0 0; padding-left: 16px; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink2); padding: 6px 12px; font-size: 12px; font-weight: 600; }
+  body:not(.p-buscar) button[data-buscar], body:not(.p-confirmar) button[data-act=services],
+  body:not(.p-aprovar) button[data-act=approve], body:not(.p-aprovar) button[data-act=rules] { display: none; }
   h3.sec { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 6px; }
 </style>
 </head>
@@ -126,7 +129,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   <main>
     <header class="top">
       <div><h1 id="title">Central de agentes</h1><div class="sub" id="subtitle"></div></div>
-      <div class="pills"><span class="pill ok">Sistema operando</span><span class="pill mono" id="meter">SERPRO –</span></div>
+      <div class="pills"><span class="pill ok">Sistema operando</span><span class="pill mono" id="meter">SERPRO –</span><span class="pill" id="me">—</span><button class="ghost" id="sair" type="button">Sair</button></div>
     </header>
     <div class="content" id="view"><div class="empty">Carregando…</div></div>
   </main>
@@ -141,7 +144,7 @@ var dt = function (iso) { return iso ? new Date(iso).toLocaleString("pt-BR", { t
 var hm = function (iso) { var x = new Date(iso); return new Date().toDateString() === x.toDateString() ? x.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }) : dt(iso); };
 var mm = function (c) { return c.slice(5, 7) + "/" + c.slice(0, 4); };
 function toast(m) { var t = $("toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(function () { t.style.display = "none"; }, 6000); }
-function asJson(r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b.erro || "HTTP " + r.status); return b; }); }
+function asJson(r) { if (r.status === 401) { location.replace("/"); throw new Error("Sessão encerrada"); } return r.json().then(function (b) { if (!r.ok) throw new Error(b.erro || "HTTP " + r.status); return b; }); }
 function getJson(u) { return fetch(u, { cache: "no-store" }).then(asJson); }
 function post(u, action, body) { return fetch(u, { method: "POST", headers: { "X-AIRES-Acao": action, "content-type": "application/json" }, body: JSON.stringify(body || {}) }).then(asJson); }
 function setHead(t, s) { $("title").textContent = t; $("subtitle").textContent = s || ""; }
@@ -400,7 +403,13 @@ function route() {
   return ROUTES[r](parts[1]).catch(function (err) { toast(err.message); });
 }
 window.addEventListener("hashchange", route);
-route();
+$("sair").addEventListener("click", function () { post("/api/sair", "sair").catch(function () {}).then(function () { location.replace("/"); }); });
+getJson("/api/sessao").then(function (me) {
+  me.permissions.forEach(function (p) { document.body.classList.add("p-" + p); });
+  $("me").textContent = me.name + " · " + me.roleLabel;
+  $("me").title = me.email;
+  route();
+}).catch(function (err) { toast(err.message); });
 </script>
 </body>
 </html>`;

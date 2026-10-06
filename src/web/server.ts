@@ -6,19 +6,41 @@ import type { IntegraContador } from "../integrations/integra-contador/types.js"
 import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../modules/federal/federal-sync.js";
 import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
-import type { Actor } from "../shared/actor.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile } from "../shared/secrets/secrets-file.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
+import QRCode from "qrcode";
 import { ZodError } from "zod";
+import {
+  AccessError,
+  acceptInvitation,
+  login,
+  logout,
+  openInvitation,
+  ROLE_LABEL,
+  sessionFromToken,
+  SESSION_HOURS,
+  userActor,
+  type AccessDeps,
+  type Permission,
+  type SessionUser,
+} from "../platform/access/access.js";
+import { parseAuthKey } from "../platform/access/crypto.js";
+import { AUTH_HTML } from "./auth-page.js";
 import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
 import { PAGE_HTML } from "./page.js";
 
 /**
- * Tela local do AIRES (piloto). Escuta só em 127.0.0.1.
+ * Tela do AIRES. Escuta só em 127.0.0.1; acesso de fora passa por um túnel
+ * (AIRES_PUBLIC_ORIGIN) e sempre exige login com senha + autenticador.
+ *
+ * Acesso: toda rota de dados exige sessão; cada ação exige a permissão do
+ * perfil (Leitura só vê; Operador busca e confirma; Responsável técnico aprova).
+ * Cabeçalho Host conferido (contra DNS rebinding); cookie HttpOnly e
+ * SameSite=Strict.
  *
  * Regra de custo: abrir a tela, trocar de competência ou de empresa só lê o
  * banco. A única rota que consulta o SERPRO é POST .../buscar, disparada pelo
@@ -35,9 +57,68 @@ export interface WebDeps {
   integra: IntegraContador | null;
   metering: MeteringPolicy;
   port: number;
+  /** AIRES_AUTH_KEY do cofre. */
+  authKey: Buffer;
+  /** Endereço público do túnel, ex.: https://aires.exemplo.com.br. Nulo = só nesta máquina. */
+  publicOrigin?: string | null;
+  now?: () => Date;
 }
 
-const USER: Actor = { kind: "USER", id: process.env.USERNAME ?? process.env.USER ?? "tela-local" };
+const COOKIE = "aires_sessao";
+const SECURITY_HEADERS = {
+  "cache-control": "no-store",
+  "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'",
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
+function html(res: ServerResponse, body: string) {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...SECURITY_HEADERS });
+  res.end(body);
+}
+
+function cookieToken(req: IncomingMessage): string | null {
+  for (const part of (req.headers.cookie ?? "").split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === COOKIE) return v.join("=") || null;
+  }
+  return null;
+}
+
+function localOrigins(req: IncomingMessage): string[] {
+  const p = req.socket.localPort;
+  return [`http://127.0.0.1:${p}`, `http://localhost:${p}`];
+}
+
+function publicHost(deps: WebDeps): string | null {
+  return deps.publicOrigin ? new URL(deps.publicOrigin).host : null;
+}
+
+function hostAllowed(req: IncomingMessage, deps: WebDeps): boolean {
+  const host = req.headers.host ?? "";
+  return localOrigins(req).some((o) => o.endsWith("//" + host)) || host === publicHost(deps);
+}
+
+function isLoopback(addr: string | undefined): boolean {
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+/** IP de quem acessa. Atrás do túnel (conexão local) vale o cabeçalho do túnel. */
+function clientIp(req: IncomingMessage): string | null {
+  const remote = req.socket.remoteAddress;
+  if (isLoopback(remote)) {
+    const fwd = req.headers["cf-connecting-ip"] ?? req.headers["x-forwarded-for"];
+    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
+    if (first) return first.slice(0, 64);
+  }
+  return remote ?? null;
+}
+
+function sessionCookie(req: IncomingMessage, deps: WebDeps, token: string, maxAge: number): string {
+  const secure = Boolean(deps.publicOrigin?.startsWith("https:") && req.headers.host === publicHost(deps));
+  return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+}
 
 function json(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -61,14 +142,14 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 }
 
 /** Toda ação (POST) exige o cabeçalho da própria tela e a mesma origem. */
-function actionAllowed(req: IncomingMessage, port: number, action: string): boolean {
-  return req.headers["x-aires-acao"] === action && sameOrigin(req, port);
+function actionAllowed(req: IncomingMessage, deps: WebDeps, action: string): boolean {
+  return req.headers["x-aires-acao"] === action && sameOrigin(req, deps);
 }
 
-function sameOrigin(req: IncomingMessage, port: number): boolean {
+function sameOrigin(req: IncomingMessage, deps: WebDeps): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
-  return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+  return localOrigins(req).includes(origin) || origin === deps.publicOrigin;
 }
 
 async function listEntities(deps: WebDeps, competence: string) {
@@ -138,20 +219,67 @@ async function listEntities(deps: WebDeps, competence: string) {
 }
 
 export function createWebServer(deps: WebDeps) {
+  const access: AccessDeps = { appPool: deps.appPool, tenantId: deps.tenantId, authKey: deps.authKey, now: deps.now };
+
   return createServer(async (req, res) => {
     try {
-      const url = new URL(req.url ?? "/", `http://127.0.0.1:${deps.port}`);
+      if (!hostAllowed(req, deps)) return json(res, 421, { erro: "Endereço não permitido" });
+      const url = new URL(req.url ?? "/", "http://aires.local");
       const parts = url.pathname.split("/").filter(Boolean);
+      const meta = { ip: clientIp(req), userAgent: req.headers["user-agent"] ?? null };
 
-      if (req.method === "GET" && url.pathname === "/") {
-        res.writeHead(200, {
-          "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-store",
-          "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'",
-          "x-frame-options": "DENY",
-        });
-        res.end(PAGE_HTML);
-        return;
+      // ------------------------------------------------------------ sem sessão
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/convite")) {
+        const user = url.pathname === "/" ? await sessionFromToken(access, cookieToken(req)) : null;
+        return html(res, user ? PAGE_HTML : AUTH_HTML);
+      }
+      if (req.method === "POST" && url.pathname === "/api/login") {
+        if (!actionAllowed(req, deps, "login")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          const body = (await readJson(req)) as { email?: string; password?: string; code?: string };
+          const r = await login(access, { email: body.email ?? "", password: body.password ?? "", code: body.code ?? "" }, meta);
+          res.setHeader("set-cookie", sessionCookie(req, deps, r.token, SESSION_HOURS * 3600));
+          return json(res, 200, { ok: true, name: r.user.name, role: r.user.role });
+        } catch (err) {
+          if (err instanceof AccessError) return json(res, 401, { erro: err.message });
+          throw err;
+        }
+      }
+      if (req.method === "POST" && (url.pathname === "/api/convite/abrir" || url.pathname === "/api/convite/ativar")) {
+        if (!actionAllowed(req, deps, "convite")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          const body = (await readJson(req)) as { token?: string; password?: string; code?: string };
+          if (url.pathname.endsWith("/abrir")) {
+            const inv = await openInvitation(access, body.token ?? "");
+            const qrSvg = await QRCode.toString(inv.otpauthUri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
+            return json(res, 200, { name: inv.name, email: inv.email, roleLabel: inv.roleLabel, expiresAt: inv.expiresAt, secretBase32: inv.secretBase32, qrSvg });
+          }
+          await acceptInvitation(access, { token: body.token ?? "", password: body.password ?? "", code: body.code ?? "" });
+          return json(res, 200, { ok: true });
+        } catch (err) {
+          if (err instanceof AccessError) return json(res, 400, { erro: err.message });
+          throw err;
+        }
+      }
+
+      // ------------------------------------------------------------ com sessão
+      const user = await sessionFromToken(access, cookieToken(req));
+      if (!user) return json(res, 401, { erro: "Sessão encerrada. Entre de novo.", login: true });
+      const actor = userActor(user);
+      const denied = (perm: Permission) => {
+        if (user.permissions.includes(perm)) return false;
+        json(res, 403, { erro: `Seu perfil (${ROLE_LABEL[user.role]}) não permite esta ação` });
+        return true;
+      };
+
+      if (req.method === "GET" && url.pathname === "/api/sessao") {
+        return json(res, 200, { name: user.name, email: user.email, role: user.role, roleLabel: ROLE_LABEL[user.role], permissions: user.permissions });
+      }
+      if (req.method === "POST" && url.pathname === "/api/sair") {
+        if (!actionAllowed(req, deps, "sair")) return json(res, 403, { erro: "Requisição recusada" });
+        await logout(access, user);
+        res.setHeader("set-cookie", sessionCookie(req, deps, "", 0));
+        return json(res, 200, { ok: true });
       }
 
       // GET /api/competencia/AAAA-MM — só banco.
@@ -187,10 +315,11 @@ export function createWebServer(deps: WebDeps) {
         isCompetence(parts[4]) &&
         parts[5] === "buscar"
       ) {
-        if (!actionAllowed(req, deps.port, "buscar")) {
+        if (!actionAllowed(req, deps, "buscar")) {
           json(res, 403, { erro: "Requisição recusada" });
           return;
         }
+        if (denied("buscar")) return;
         if (!deps.integra) {
           json(res, 409, { erro: "Integra Contador não configurado: confira o cofre (pnpm integra:check)" });
           return;
@@ -200,7 +329,7 @@ export function createWebServer(deps: WebDeps) {
             { appPool: deps.appPool, integra: deps.integra, metering: deps.metering },
             deps.tenantId,
             { entityId: parts[2]!, competence: `${parts[4]}-01` },
-            USER,
+            actor,
           );
           const detail = await withTenant(deps.appPool, deps.tenantId, (tx) => competenceDetail(tx, parts[2]!, `${parts[4]}-01`));
           json(res, 200, { calls: r.calls, detail });
@@ -239,9 +368,10 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/regras/aprovar") {
-        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!actionAllowed(req, deps, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (denied("aprovar")) return;
         try {
-          json(res, 200, await approveRules(deps.appPool, deps.tenantId, USER));
+          json(res, 200, await approveRules(deps.appPool, deps.tenantId, actor));
         } catch (err) {
           if (err instanceof HumanActionError) json(res, 409, { erro: err.message });
           else throw err;
@@ -251,14 +381,15 @@ export function createWebServer(deps: WebDeps) {
 
       // POST /api/pendencia/:id/servicos — decisão humana: serviços e início da responsabilidade
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "pendencia" && parts[3] === "servicos") {
-        if (!actionAllowed(req, deps.port, "confirmar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!actionAllowed(req, deps, "confirmar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (denied("confirmar")) return;
         try {
           const body = (await readJson(req)) as { services?: string[]; startDate?: string };
           const r = await defineContractedServices(
             deps.appPool,
             deps.tenantId,
             { pendingItemId: parts[2]!, services: body.services as never, startDate: body.startDate ?? "" },
-            USER,
+            actor,
           );
           json(res, 200, r);
         } catch (err) {
@@ -271,9 +402,10 @@ export function createWebServer(deps: WebDeps) {
 
       // POST /api/case/:id/aprovar — aprovação humana da conclusão
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "case" && parts[3] === "aprovar") {
-        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!actionAllowed(req, deps, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (denied("aprovar")) return;
         try {
-          json(res, 200, { status: await approveCase(deps.appPool, deps.tenantId, parts[2]!, USER) });
+          json(res, 200, { status: await approveCase(deps.appPool, deps.tenantId, parts[2]!, actor) });
         } catch (err) {
           if (err instanceof HumanActionError) json(res, 409, { erro: err.message });
           else throw err;
@@ -301,6 +433,11 @@ if (isMain(import.meta.url)) {
     process.exit(1);
   }
   const vault = openSecretsFile();
+  if (!vault?.has("AIRES_AUTH_KEY")) {
+    console.error("Falta a chave de login no cofre. Rode uma vez: pnpm auth:init");
+    process.exit(1);
+  }
+  const publicOrigin = process.env.AIRES_PUBLIC_ORIGIN?.replace(/\/+$/, "") || null;
   const deps: WebDeps = {
     appPool: app,
     tenantId: tenant.id,
@@ -308,9 +445,12 @@ if (isMain(import.meta.url)) {
     integra: vault ? serproFromVault(vault) : null,
     metering: vault ? serproMetering(vault) : { provider: SERPRO_PROVIDER, dailyLimit: 0 },
     port,
+    authKey: parseAuthKey(vault.require("AIRES_AUTH_KEY")),
+    publicOrigin,
   };
   createWebServer(deps).listen(port, "127.0.0.1", () => {
     console.log(`AIRES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
+    if (publicOrigin) console.log(`Acesso externo pelo túnel: ${publicOrigin}`);
     console.log(`Teto de consultas cobradas por dia: ${deps.metering.dailyLimit}. Abrir a tela não consulta o SERPRO.`);
   });
 }
