@@ -97,6 +97,16 @@ export interface FederalPaymentPage {
   payments: FederalPayment[];
 }
 
+/** Última declaração transmitida de um PA (CONSULTIMADECREC14): PDFs oficiais. */
+export interface PgdasLastDeclaration {
+  contributor: string;
+  period: string;
+  declarationNumber: string | null;
+  /** PDF da declaração (traz RPA e as receitas brutas anteriores). */
+  declarationPdf: Buffer | null;
+  receiptPdf: Buffer | null;
+}
+
 export interface IntegraContador {
   readonly name: string;
   /** Verifica se o contribuinte outorgou procuração eletrônica ao escritório. */
@@ -105,6 +115,8 @@ export interface IntegraContador {
   listPgdasDeclarations(contributorCnpj: string, year: number): Promise<IntegraContadorResult<PgdasYearIndex>>;
   /** PGDAS-D: declarações e DAS de um período de apuração AAAAMM (CONSDECLARACAO13). */
   listPgdasPeriod(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasYearIndex>>;
+  /** PGDAS-D: última declaração/recibo transmitidos do PA AAAAMM (CONSULTIMADECREC14). Cobrado. */
+  lastPgdasDeclaration(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasLastDeclaration>>;
   /** PagtoWeb: pagamentos por data de arrecadação, paginado (PAGAMENTOS71). */
   listPayments(
     contributorCnpj: string,

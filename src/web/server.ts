@@ -5,6 +5,7 @@ import { SERPRO_PROVIDER, serproFromVault, serproMetering } from "../integration
 import type { IntegraContador } from "../integrations/integra-contador/types.js";
 import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../modules/federal/federal-sync.js";
 import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
+import { fetchLastDeclaration, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import type { Actor } from "../shared/actor.js";
 import { formatCnpj } from "../shared/br/documents.js";
@@ -221,6 +222,25 @@ export function createWebServer(deps: WebDeps) {
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
           else json(res, 502, { erro: (err as Error).message });
         }
+        return;
+      }
+
+      // POST /api/empresa/:id/competencia/AAAA-MM/declaracao — 1 consulta cobrada (última declaração do PA).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "competencia" && isCompetence(parts[4]) && parts[5] === "declaracao") {
+        if (!actionAllowed(req, deps.port, "buscar")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!deps.integra) return json(res, 409, { erro: "Integra Contador não configurado" });
+        try {
+          json(res, 200, await fetchLastDeclaration({ appPool: deps.appPool, integra: deps.integra, metering: deps.metering }, deps.tenantId, { entityId: parts[2]!, competence: `${parts[4]}-01` }, USER));
+        } catch (err) {
+          if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
+          else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
+          else json(res, 502, { erro: (err as Error).message });
+        }
+        return;
+      }
+      // GET /api/empresa/:id/conferencia — receita declarada × NFS-e prestadas (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "conferencia") {
+        json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => revenueCrossCheck(tx, parts[2]!)) });
         return;
       }
 

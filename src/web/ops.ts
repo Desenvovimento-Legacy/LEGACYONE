@@ -82,6 +82,10 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       const parts = [r.PRESTADA && `${r.PRESTADA} prestada(s)`, r.TOMADA && `${r.TOMADA} tomada(s)`, r.EVENTO && `${r.EVENTO} evento(s)`, r.OUTRA && `${r.OUTRA} outra(s)`].filter(Boolean);
       return `NFS-e Nacional: ${parts.join(", ") || `${p.documents} documento(s)`}`;
     }
+    case "PGDAS_DECLARATION_READ":
+      return p.found
+        ? `Declaração PGDAS-D do PA ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)} lida: ${p.months} mês(es) de receita${p.regime ? ` · regime ${String(p.regime).toLowerCase()}` : ""}`
+        : `Sem declaração transmitida no PA ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}`;
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:

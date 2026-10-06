@@ -333,13 +333,31 @@ function viewEmpresa(id) {
     $("view").innerHTML =
       '<div class="cols"><div class="wide">' +
         '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
+        '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
         '<section class="card"><h2>Mapa de acessos</h2><table>' + acc + '</table></section>' +
         '<section class="card"><h2>Cases</h2><table>' + cs + '</table></section>' +
       '</div></div>';
+    loadConferencia(id);
   });
+}
+
+function prevMonth(m) { var y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7)) - 1; if (mo < 1) { mo = 12; y--; } return y + "-" + String(mo).padStart(2, "0"); }
+function loadConferencia(id) {
+  return getJson("/api/empresa/" + id + "/conferencia").then(function (r) {
+    var box = $("conf"); if (!box) return;
+    var ST = { OK: '<span class="st ok">confere</span>', DIVERGENTE: '<span class="st bad">divergente</span>', SEM_DECLARACAO: '<span class="mut">sem declaração lida</span>' };
+    var rows = r.rows.map(function (x) {
+      return '<tr><td>' + mm(x.competence) + (x.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td class="num">' + (x.declared === null ? "—" : brl(x.declared)) + (x.regime === "CAIXA" ? '<div class="wr" style="font-size:11px">regime de caixa</div>' : '') + '</td><td class="num">' + brl(x.nfsePrestadas) + '<div class="mut" style="font-size:11px">' + x.nfseCount + ' nota(s)' + (x.cancelled ? ' · ' + x.cancelled + ' cancelada(s) fora' : '') + '</div></td><td class="num">' + (x.difference === null ? "—" : brl(x.difference)) + '</td><td>' + ST[x.status] + '</td></tr>';
+    }).join("");
+    var def = prevMonth(lastClosedMonth());
+    box.innerHTML = '<h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2>' +
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px"><label class="mut" for="decl-pa">Última declaração do PA</label><input type="month" id="decl-pa" value="' + def + '"><button data-act="decl" data-id="' + id + '">Buscar declaração</button><span class="mut" style="font-size:12px">1 consulta cobrada; traz a receita do PA e dos 12 meses anteriores</span></div>' +
+      (rows ? '<div class="scroll"><table><thead><tr><th>Competência</th><th class="num">Receita declarada</th><th class="num">NFS-e prestadas</th><th class="num">Diferença (NFS-e − declarado)</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">Nenhuma declaração lida ainda.</div>') +
+      '<div class="empty">NFS-e pela data de emissão (Brasília), sem as canceladas. Tolerância de R$ 1,00. Empresas que vendem por NFC-e/NF-e só fecham quando esses documentos entrarem.</div>';
+  }).catch(function (err) { toast(err.message); });
 }
 
 /* ---------------- Documentos fiscais ---------------- */
@@ -439,6 +457,15 @@ document.addEventListener("click", function (ev) {
         var msg = r.outcome === "aguardando" ? "A SEFAZ só pode ser consultada de novo a partir de " + hm(r.nextAllowedAt) + "." : r.outcome === "sem_certificado" ? "Sem certificado utilizável no cofre." : r.outcome === "erro" ? "Falha na consulta: " + r.statusMessage : r.documents + " documento(s) novo(s) em " + r.calls + " consulta(s). SEFAZ: " + r.statusCode + " " + (r.statusMessage || "");
         toast(msg);
       }).catch(function (err) { toast(err.message); }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "decl") {
+      var pa = $("decl-pa").value;
+      if (!pa) { toast("Escolha o PA."); return; }
+      if (!window.confirm("Buscar a última declaração do PA " + mm(pa + "-01") + "?\\n\\nIsso faz 1 consulta cobrada pelo SERPRO. O PDF fica guardado e não precisa ser buscado de novo.")) return;
+      b.disabled = true;
+      post("/api/empresa/" + id + "/competencia/" + pa + "/declaracao", "buscar").then(function (r) {
+        toast(r.found ? "Declaração lida: " + r.months + " mês(es) de receita." : "Não há declaração transmitida nesse PA.");
+      }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; return loadCentral(); }).then(function () { return loadConferencia(id); });
     }
     if (b.dataset.act === "nfse") {
       b.disabled = true;

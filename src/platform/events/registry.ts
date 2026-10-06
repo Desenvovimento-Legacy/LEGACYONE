@@ -142,6 +142,16 @@ export const EventContracts = {
       to_nsu: z.number().int(),
     }),
   },
+  PGDAS_DECLARATION_READ: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      declaration_number: z.string().nullable(),
+      months: z.number().int(),
+      regime: z.string().nullable(),
+      found: z.boolean(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

@@ -1,11 +1,12 @@
 import { request } from "node:https";
 import { z } from "zod";
 import { isValidCnpj, normalizeCnpj } from "../../shared/br/documents.js";
-import { parsePayments, parsePgdasYear } from "./parsers.js";
+import { parseLastDeclaration, parsePayments, parsePgdasYear, stripPdfs } from "./parsers.js";
 import type {
   FederalPaymentPage,
   IntegraContador,
   IntegraContadorResult,
+  PgdasLastDeclaration,
   PgdasYearIndex,
   PowerOfAttorneyGrant,
   PowerOfAttorneyStatus,
@@ -324,6 +325,20 @@ export class SerproIntegraContador implements IntegraContador {
     );
     const value = parsePgdasYear(r.dados, { contributor: cnpj, year: Number(period.slice(0, 4)) });
     return { value, raw: { httpStatus: r.status, body: r.body }, source: this.name, fetchedAt: this.now() };
+  }
+
+  async lastPgdasDeclaration(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasLastDeclaration>> {
+    if (!/^\d{6}$/.test(period)) throw new Error("Período de apuração deve ser AAAAMM");
+    const cnpj = normalizeCnpj(contributorCnpj);
+    const r = await this.consult(
+      "Consultar",
+      cnpj,
+      { idSistema: "PGDASD", idServico: "CONSULTIMADECREC14", versaoSistema: "1.0", dados: { periodoApuracao: period } },
+      ["MSG_ISN_005", "MSG_ISN_027"],
+    );
+    const value = parseLastDeclaration(r.dados, cnpj, period);
+    // A evidência guarda a resposta sem os PDFs em base64 (eles vão para tabela própria, com hash).
+    return { value, raw: { httpStatus: r.status, body: stripPdfs(r.body) }, source: this.name, fetchedAt: this.now() };
   }
 
   async listPayments(

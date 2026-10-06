@@ -152,3 +152,45 @@ export function parsePayments(dados: unknown): FederalPayment[] {
     };
   });
 }
+
+/**
+ * CONSULTIMADECREC14: o "dados" traz o número da declaração e os PDFs (declaração
+ * e recibo) em base64. A busca é pelo conteúdo (PDF começa com "JVBER"), para não
+ * depender do nome exato de cada campo.
+ */
+export function parseLastDeclaration(dados: unknown, contributor: string, period: string) {
+  const root = parseDados(dados);
+  let declarationNumber: string | null = null;
+  const pdfs: { path: string; pdf: Buffer }[] = [];
+  const walk = (v: unknown, path: string) => {
+    if (typeof v === "string") {
+      if (/^JVBER/.test(v)) pdfs.push({ path: path.toLowerCase(), pdf: Buffer.from(v, "base64") });
+      else if (/numerodeclaracao$/i.test(path) && /^\d{17}$/.test(v)) declarationNumber = v;
+      return;
+    }
+    if (typeof v === "number" && /numerodeclaracao$/i.test(path)) declarationNumber = String(v).padStart(17, "0");
+    if (v && typeof v === "object") for (const [k, x] of Object.entries(v as Record<string, unknown>)) walk(x, `${path}.${k}`);
+  };
+  walk(root, "");
+  const declarationPdf = pdfs.find((p) => /declara/.test(p.path))?.pdf ?? pdfs.find((p) => !/recibo/.test(p.path))?.pdf ?? null;
+  const receiptPdf = pdfs.find((p) => /recibo/.test(p.path))?.pdf ?? null;
+  return { contributor, period, declarationNumber, declarationPdf, receiptPdf };
+}
+
+/** Cópia da resposta sem PDFs em base64 (troca por um marcador com o tamanho). */
+export function stripPdfs(v: unknown): unknown {
+  if (typeof v === "string") {
+    if (/^JVBER/.test(v)) return `[pdf ${Math.round((v.length * 3) / 4)} bytes]`;
+    if (v.startsWith("{") && v.includes("JVBER")) {
+      try {
+        return JSON.stringify(stripPdfs(JSON.parse(v)));
+      } catch {
+        return v.replace(/JVBER[A-Za-z0-9+/=]+/g, "[pdf]");
+      }
+    }
+    return v;
+  }
+  if (Array.isArray(v)) return v.map(stripPdfs);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, stripPdfs(x)]));
+  return v;
+}

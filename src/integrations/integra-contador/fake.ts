@@ -6,6 +6,7 @@ import type {
   IntegraContadorResult,
   PgdasDasIndex,
   PgdasDeclarationIndex,
+  PgdasLastDeclaration,
   PgdasYearIndex,
   PowerOfAttorneyStatus,
 } from "./types.js";
@@ -14,6 +15,8 @@ export interface FakeContributorData {
   declarations?: PgdasDeclarationIndex[];
   das?: PgdasDasIndex[];
   payments?: FederalPayment[];
+  /** PDF da última declaração por PA (AAAAMM). */
+  lastDeclarations?: Record<string, { number: string; pdf: Buffer }>;
 }
 
 /**
@@ -63,6 +66,18 @@ export class FakeIntegraContador implements IntegraContador {
     const comp = `${period.slice(0, 4)}-${period.slice(4, 6)}-01`;
     const inPa = <T extends { competence: string }>(xs: T[] = []) => xs.filter((x) => x.competence === comp);
     return this.result({ contributor: cnpj, year: Number(period.slice(0, 4)), declarations: inPa(d.declarations), das: inPa(d.das) });
+  }
+
+  async lastPgdasDeclaration(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasLastDeclaration>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
+    this.calls.push(`pgdas-ultima:${cnpj}:${period}`);
+    const d = this.data[cnpj]?.lastDeclarations?.[period];
+    return {
+      value: { contributor: cnpj, period, declarationNumber: d?.number ?? null, declarationPdf: d?.pdf ?? null, receiptPdf: null },
+      raw: { simulated: true, period, number: d?.number ?? null },
+      source: this.name,
+      fetchedAt: new Date(),
+    };
   }
 
   async listPayments(
