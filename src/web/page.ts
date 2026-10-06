@@ -316,8 +316,8 @@ function viewEmpresa(id) {
       return '<tr><td>' + esc(a.system) + '</td><td class="st ' + cls + '">' + esc(a.status.toLowerCase()) + '</td><td class="mut">' + esc(a.detail) + '</td></tr>';
     }).join("");
     var obl = e.obligations.length ? e.obligations.map(function (o) {
-      var nx = o.next.length ? o.next.map(function (n) { return d(n.due) + ' <span class="mut">(' + (o.periodicity === "ANUAL" ? n.competence.slice(0, 4) : mm(n.competence)) + ')</span>'; }).join("<br>") : '<span class="wr">prazo a cadastrar</span>';
-      return '<tr><td><b>' + esc(o.name) + '</b><div class="mut" style="font-size:12px">' + esc(o.legal_basis) + '</div></td><td>' + esc(o.sphere.toLowerCase()) + ' · ' + esc(o.periodicity.toLowerCase()) + '</td><td>' + d(o.valid_from) + '</td><td>' + nx + '</td></tr>';
+      var nx = o.next.length ? o.next.map(function (n) { return d(n.due) + ' <span class="mut">(' + (o.periodicity === "ANUAL" ? n.competence.slice(0, 4) : mm(n.competence)) + ')</span>' + (n.adjustReason ? '<div class="wr" style="font-size:11px">' + esc(n.adjustReason) + '</div>' : ''); }).join("<br>") : '<span class="wr">prazo a cadastrar</span>';
+      return '<tr><td><b>' + esc(o.name) + '</b><div class="mut" style="font-size:12px">' + esc(o.legal_basis) + ' · v' + o.version + (o.newer_pending ? ' <span class="wr">(versão nova aguardando aprovação)</span>' : '') + '</div></td><td>' + esc(o.sphere.toLowerCase()) + ' · ' + esc(o.periodicity.toLowerCase()) + '</td><td>' + d(o.valid_from) + '</td><td>' + nx + '</td></tr>';
     }).join("") : '<tr><td colspan="4" class="empty">Mapa ainda não gerado: precisa da data de início e das regras aprovadas.</td></tr>';
     var chk = e.checklist.map(function (p) {
       var cls = p.status === "OPEN" ? "wr" : "ok";
@@ -342,10 +342,12 @@ function viewRegras() {
   return getJson("/api/regras").then(function (r) {
     var pend = r.rules.filter(function (x) { return !x.approved_by; }).length;
     var rows = r.rules.map(function (x) {
-      var due = !x.due ? '<span class="wr">a cadastrar</span>' : x.due.kind === "annual" ? "anual, " + String(x.due.day).padStart(2, "0") + "/" + String(x.due.month).padStart(2, "0") : "dia " + x.due.day + " do mês seguinte";
-      return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:11px">' + esc(x.code) + ' v' + x.version + '</div></td><td>' + esc(x.sphere.toLowerCase()) + '</td><td>' + due + '</td><td>' + esc(x.legal_basis) + (x.notes ? '<div class="mut" style="font-size:12px">' + esc(x.notes) + '</div>' : '') + '</td><td class="st ' + (x.approved_by ? "ok" : "wr") + '">' + (x.approved_by ? "aprovada por " + esc(x.approved_by) : "proposta") + '</td></tr>';
+      var ADJ = { NEXT_BUSINESS_DAY: "em dia não útil, prorroga", PREVIOUS_BUSINESS_DAY: "em dia não útil, antecipa", NONE: "sem ajuste" };
+      var due = !x.due ? '<span class="wr">a cadastrar</span>' : (x.due.kind === "annual" ? "anual, " + String(x.due.day).padStart(2, "0") + "/" + String(x.due.month).padStart(2, "0") : "dia " + x.due.day + " do mês seguinte") + (x.due.adjust ? '<div class="mut" style="font-size:12px">' + ADJ[x.due.adjust] + '</div>' : '');
+      return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:11px">' + esc(x.code) + ' v' + x.version + (!x.approved_by && x.in_use_version ? ' · em uso: v' + x.in_use_version : '') + '</div></td><td>' + esc(x.sphere.toLowerCase()) + '</td><td>' + due + '</td><td>' + esc(x.legal_basis) + (x.notes ? '<div class="mut" style="font-size:12px">' + esc(x.notes) + '</div>' : '') + '</td><td class="st ' + (x.approved_by ? "ok" : "wr") + '">' + (x.approved_by ? "aprovada por " + esc(x.approved_by) : "proposta") + '</td></tr>';
     }).join("");
     $("view").innerHTML = '<section class="card"><h2>' + r.rules.length + ' regras · ' + pend + ' aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Regra</th><th>Esfera</th><th>Prazo</th><th>Fundamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="empty">Calendário: fins de semana e feriados nacionais. Na dúvida a AIRES usa a data mais cedo: dia só sem expediente bancário (Carnaval, Paixão, Corpus Christi) antecipa, mas não prorroga. Feriados municipais ainda não entram.</div>' +
       (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="rules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira prazos e fundamentos antes de aprovar. A aprovação fica na auditoria em seu nome e completa os mapas das empresas.</span></div>' : '') + '</section>';
   });
 }

@@ -1,7 +1,8 @@
 import type { PoolClient } from "pg";
 import { agentName, PIPELINE_STAGES, PROCESSES } from "../platform/agents/catalog.js";
 import { formatCnpj } from "../shared/br/documents.js";
-import { accessMap, entityFacts, nextDueDates } from "../modules/onboarding/plan.js";
+import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
+import { loadCalendar } from "../modules/regulatory/calendar.js";
 
 /**
  * Leituras da seção Operação (Central de agentes, Fila humana, Cases).
@@ -183,7 +184,33 @@ export async function humanQueue(tx: PoolClient) {
        FROM "case" c LEFT JOIN entity e ON e.id = c.entity_id
       WHERE c.status = 'IN_REVIEW' ORDER BY c.updated_at`,
   );
+  // Versão nova de regra publicada no catálogo também espera o responsável técnico.
+  const rules = await tx.query<{ n: number; codes: string[]; since: Date | null }>(
+    `SELECT count(*)::int AS n, coalesce(array_agg(r.code ORDER BY r.code), '{}') AS codes, min(r.created_at) AS since
+       FROM obligation_rule r
+      WHERE r.valid_to IS NULL AND r.superseded_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM obligation_rule_approval a WHERE a.rule_id = r.id)
+        -- só atualização de catálogo: a primeira aprovação vem pela pendência da implantação
+        AND EXISTS (SELECT 1 FROM obligation_rule_approval)`,
+  );
+  const rulePending = pend.rows.some((p) => p.type === "OBLIGATION_RULES_APPROVAL");
+  const r0 = rules.rows[0]!;
+  const catalog =
+    r0.n > 0 && !rulePending
+      ? [{
+          kind: "rules",
+          id: "catalogo",
+          type: "OBLIGATION_RULES_APPROVAL",
+          entityId: null,
+          entity: null,
+          caseId: null,
+          title: `${r0.n} regra(s) nova(s) ou atualizada(s) no catálogo: ${r0.codes.join(", ")}`,
+          impact: "Até a aprovação, as empresas seguem com a versão anterior aprovada",
+          since: (r0.since ?? new Date()).toISOString(),
+        }]
+      : [];
   return [
+    ...catalog,
     ...pend.rows.map((p) => ({
       kind: p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       id: p.id,
@@ -252,11 +279,14 @@ export async function rulesList(tx: PoolClient) {
   const { rows } = await tx.query<{
     id: string; code: string; version: number; name: string; sphere: string; periodicity: string;
     due: unknown; legal_basis: string; notes: string | null; approved_by: string | null; approved_at: Date | null;
+    in_use_version: number | null;
   }>(
     `SELECT r.id, r.code, r.version, r.name, r.sphere, r.periodicity, r.due, r.legal_basis, r.notes,
-            a.approved_by, a.approved_at
+            a.approved_by, a.approved_at,
+            (SELECT max(p.version) FROM obligation_rule p JOIN obligation_rule_approval pa ON pa.rule_id = p.id
+              WHERE p.code = r.code AND p.valid_to IS NULL) AS in_use_version
        FROM obligation_rule r LEFT JOIN obligation_rule_approval a ON a.rule_id = r.id
-      WHERE r.valid_to IS NULL ORDER BY r.sphere, r.code`,
+      WHERE r.valid_to IS NULL AND r.superseded_at IS NULL ORDER BY r.sphere, r.code`,
   );
   return rows.map((r) => ({ ...r, approved_at: r.approved_at ? r.approved_at.toISOString() : null }));
 }
@@ -296,12 +326,18 @@ export async function entityDetail(tx: PoolClient, entityId: string) {
     [entityId],
   );
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
-  const obl = await tx.query<{ code: string; name: string; sphere: string; periodicity: string; due: never; legal_basis: string; notes: string | null; valid_from: string; reason: Record<string, unknown> }>(
-    `SELECT o.rule_code AS code, r.name, r.sphere, r.periodicity, r.due, r.legal_basis, r.notes, o.valid_from::text, o.reason
-       FROM entity_obligation o JOIN obligation_rule r ON r.id = o.rule_id
+  // Vale a versão mais recente da regra já aprovada pelo escritório.
+  const obl = await tx.query<{ code: string; version: number; name: string; sphere: string; periodicity: string; due: DueSpec; legal_basis: string; notes: string | null; valid_from: string; reason: Record<string, unknown>; newer_pending: boolean }>(
+    `SELECT o.rule_code AS code, r.version, r.name, r.sphere, r.periodicity, r.due, r.legal_basis, r.notes, o.valid_from::text, o.reason,
+            EXISTS (SELECT 1 FROM obligation_rule n WHERE n.code = o.rule_code AND n.version > r.version AND n.valid_to IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM obligation_rule_approval na WHERE na.rule_id = n.id)) AS newer_pending
+       FROM entity_obligation o
+       JOIN LATERAL (SELECT x.* FROM obligation_rule x JOIN obligation_rule_approval xa ON xa.rule_id = x.id
+                      WHERE x.code = o.rule_code AND x.valid_to IS NULL ORDER BY x.version DESC LIMIT 1) r ON true
       WHERE o.entity_id = $1 AND o.valid_to IS NULL ORDER BY r.sphere, r.code`,
     [entityId],
   );
+  const calendar = await loadCalendar(tx);
   const pend = await tx.query<{ id: string; type: string; required_information: string; impact: string; responsible_source: string; status: string; case_type: string | null }>(
     `SELECT p.id, p.type, p.required_information, p.impact, p.responsible_source, p.status, c.type AS case_type
        FROM pending_item p LEFT JOIN "case" c ON c.id = p.case_id
@@ -323,7 +359,7 @@ export async function entityDetail(tx: PoolClient, entityId: string) {
     services: services.rows.map((r) => ({ code: r.service, name: SERVICE_NAMES[r.service] ?? r.service, since: r.valid_from })),
     cnaes: cnae.rows,
     access: await accessMap(tx, entityId),
-    obligations: obl.rows.map((o) => ({ ...o, next: nextDueDates(o.due, today, 2, o.valid_from) })),
+    obligations: obl.rows.map((o) => ({ ...o, next: nextDueDates(o.due, today, 2, o.valid_from, calendar) })),
     checklist: pend.rows.map((p) => ({ ...p, caseType: p.case_type ? caseTypePt(p.case_type) : null })),
     cases: cases.rows.map((c) => ({ id: c.id, type: caseTypePt(c.type), status: c.status, statusPt: statusPt(c.status), updatedAt: c.updated_at.toISOString() })),
   };

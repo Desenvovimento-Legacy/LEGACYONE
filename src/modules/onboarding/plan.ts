@@ -7,6 +7,7 @@ import { openCase, transitionCase } from "../../platform/cases/case-engine.js";
 import { appendEvent } from "../../platform/events/outbox.js";
 import { openPendingItem, type ResponsibleSource } from "../../platform/pending/pending.js";
 import { profileAsOf } from "../registry/registry.js";
+import type { BusinessCalendar, DueAdjust } from "../regulatory/calendar.js";
 
 /**
  * Plano de implantação (seção 4 da especificação). A partir dos fatos da empresa
@@ -115,7 +116,7 @@ export async function buildObligationMap(tx: PoolClient, f: EntityFacts): Promis
   const rules = await tx.query<RuleRow & { approved: boolean }>(
     `SELECT r.id, r.code, r.version, r.name, r.conditions, r.valid_from::text, r.valid_to::text,
             EXISTS (SELECT 1 FROM obligation_rule_approval a WHERE a.rule_id = r.id) AS approved
-       FROM obligation_rule r WHERE r.valid_to IS NULL ORDER BY r.code`,
+       FROM obligation_rule r WHERE r.valid_to IS NULL AND r.superseded_at IS NULL ORDER BY r.code`,
   );
   if (!f.responsibilityStart) return { added: 0, pendingApproval: 0 };
   let added = 0;
@@ -285,7 +286,8 @@ export async function buildImplementationPlan(tx: PoolClient, entityId: string, 
 export async function approveObligationRules(tx: PoolClient, actor: Actor): Promise<{ approved: number; obligationsAdded: number }> {
   const pending = await tx.query<{ id: string; code: string; version: number }>(
     `SELECT r.id, r.code, r.version FROM obligation_rule r
-      WHERE r.valid_to IS NULL AND NOT EXISTS (SELECT 1 FROM obligation_rule_approval a WHERE a.rule_id = r.id)`,
+      WHERE r.valid_to IS NULL AND r.superseded_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM obligation_rule_approval a WHERE a.rule_id = r.id)`,
   );
   for (const r of pending.rows) {
     await tx.query(
@@ -311,29 +313,47 @@ export async function approveObligationRules(tx: PoolClient, actor: Actor): Prom
 }
 
 /** Próximos vencimentos de uma obrigação a partir de hoje. */
+export type DueSpec =
+  | { kind: "next_month_day"; day: number; adjust?: DueAdjust }
+  | { kind: "annual"; month: number; day: number; adjust?: DueAdjust }
+  | null;
+
+export interface DueDate {
+  competence: string;
+  due: string;
+  /** Data da regra antes do ajuste por dia não útil, quando diferente. */
+  nominal?: string;
+  adjustReason?: string;
+}
+
 export function nextDueDates(
-  due: { kind: "next_month_day"; day: number } | { kind: "annual"; month: number; day: number } | null,
+  due: DueSpec,
   from: string,
   count = 2,
   /** Primeira competência sob responsabilidade do escritório (anteriores não entram). */
   firstCompetence?: string,
-): { competence: string; due: string }[] {
+  calendar?: BusinessCalendar,
+): DueDate[] {
   if (!due) return [];
   const minComp = firstCompetence ? `${firstCompetence.slice(0, 7)}-01` : "0000-01-01";
-  const out: { competence: string; due: string }[] = [];
+  const out: DueDate[] = [];
+  const push = (competence: string, nominal: string) => {
+    const a = calendar ? calendar.adjust(nominal, due.adjust) : { due: nominal, reason: null };
+    if (a.due < from) return;
+    out.push(a.reason ? { competence, due: a.due, nominal, adjustReason: a.reason } : { competence, due: a.due });
+  };
   const [y, m] = from.split("-").map(Number) as [number, number];
   if (due.kind === "next_month_day") {
     for (let i = -2; out.length < count && i < 24; i++) {
       const comp = new Date(Date.UTC(y, m - 1 + i, 1));
-      const dd = new Date(Date.UTC(comp.getUTCFullYear(), comp.getUTCMonth() + 1, due.day));
-      const iso = dd.toISOString().slice(0, 10);
       const c = comp.toISOString().slice(0, 10);
-      if (iso >= from && c >= minComp) out.push({ competence: c, due: iso });
+      if (c < minComp) continue;
+      push(c, new Date(Date.UTC(comp.getUTCFullYear(), comp.getUTCMonth() + 1, due.day)).toISOString().slice(0, 10));
     }
   } else {
     for (let yy = y - 1; out.length < count && yy < y + 3; yy++) {
-      const iso = `${yy + 1}-${String(due.month).padStart(2, "0")}-${String(due.day).padStart(2, "0")}`;
-      if (iso >= from && `${yy}-12-31` >= minComp) out.push({ competence: `${yy}-01-01`, due: iso });
+      if (`${yy}-12-31` < minComp) continue;
+      push(`${yy}-01-01`, `${yy + 1}-${String(due.month).padStart(2, "0")}-${String(due.day).padStart(2, "0")}`);
     }
   }
   return out;
