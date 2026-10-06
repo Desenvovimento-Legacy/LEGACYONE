@@ -65,6 +65,14 @@ export const EventContracts = {
       source: z.string(),
     }),
   },
+  CONTRACTED_SERVICES_DEFINED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      services: z.array(z.string()).min(1),
+      valid_from: z.iso.date(),
+      defined_by: z.string(),
+    }),
+  },
   PGDAS_INDEX_SYNCED: {
     1: z.object({
       entity_id: z.uuid(),

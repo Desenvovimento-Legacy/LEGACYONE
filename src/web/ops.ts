@@ -1,0 +1,243 @@
+import type { PoolClient } from "pg";
+import { agentName, PIPELINE_STAGES, PROCESSES } from "../platform/agents/catalog.js";
+import { formatCnpj } from "../shared/br/documents.js";
+
+/**
+ * Leituras da seção Operação (Central de agentes, Fila humana, Cases).
+ * Só banco: nada aqui chama sistema externo.
+ */
+
+const STATUS_PT: Record<string, string> = {
+  OPEN: "aberto",
+  IN_PROGRESS: "em andamento",
+  WAITING_CLIENT: "aguardando cliente",
+  WAITING_EXTERNAL: "aguardando órgão externo",
+  WAITING_HUMAN: "aguardando você",
+  IN_REVIEW: "em revisão",
+  COMPLETED: "concluído",
+  CANCELLED: "cancelado",
+};
+export const statusPt = (s: string) => STATUS_PT[s] ?? s;
+
+const CASE_PT: Record<string, string> = {
+  CLIENT_ONBOARDING: "Implantação",
+  ACCOUNTING_CLOSING: "Fechamento contábil",
+  TAX_CLOSING: "Fechamento fiscal",
+  PAYROLL_CLOSING: "Fechamento da folha",
+  EXCEPTION: "Exceção",
+};
+export const caseTypePt = (t: string) => CASE_PT[t] ?? t;
+
+const SERVICE_PT: Record<string, string> = {
+  CONTABIL: "contábil",
+  FISCAL: "fiscal",
+  FOLHA: "folha",
+  SOCIETARIO: "societário",
+  FINANCEIRO: "financeiro",
+  IRPF: "IRPF",
+};
+
+const fmtDate = (iso: string | null | undefined) =>
+  iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "";
+
+/** Frase curta, em português, para um evento do barramento. */
+export function describeEvent(type: string, p: Record<string, unknown>): string {
+  switch (type) {
+    case "CASE_CREATED":
+      return `Case ${caseTypePt(String(p.case_type))} aberto`;
+    case "CASE_STATUS_CHANGED":
+      return `${caseTypePt(String(p.case_type))}: ${statusPt(String(p.from))} → ${statusPt(String(p.to))}`;
+    case "CASE_COMPLETED":
+      return `${caseTypePt(String(p.case_type))} concluído`;
+    case "CASE_CANCELLED":
+      return `${caseTypePt(String(p.case_type))} cancelado`;
+    case "ENTITY_PROFILE_CREATED":
+      return `Perfil montado · ${String(p.regime ?? "regime a definir").replace("_", " ").toLowerCase()} · ${p.activities} CNAEs · ${p.partners} sócios`;
+    case "PENDING_ITEM_CREATED":
+      return String(p.required_information ?? "pendência aberta");
+    case "POWER_OF_ATTORNEY_VERIFIED":
+      return p.active ? "Procuração e-CAC vigente para o escritório" : "Sem procuração e-CAC para o escritório";
+    case "PGDAS_INDEX_SYNCED":
+      return `${p.competence ? `PA ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}` : p.year} · ${p.declarations} declarações, ${p.das} DAS`;
+    case "FEDERAL_PAYMENTS_SYNCED":
+      return `${p.payments} pagamentos federais (${fmtDate(String(p.from))} a ${fmtDate(String(p.to))})`;
+    case "CONTRACTED_SERVICES_DEFINED":
+      return `Serviços ${(p.services as string[]).map((s) => SERVICE_PT[s] ?? s).join(", ")} desde ${fmtDate(String(p.valid_from))}`;
+    default:
+      return type;
+  }
+}
+
+export async function centralData(tx: PoolClient) {
+  const entities = await tx.query<{
+    id: string;
+    name: string;
+    cnpj: string;
+    onboarding_status: string | null;
+    has_pgdas: boolean;
+    has_cert: boolean;
+  }>(
+    `SELECT e.id, coalesce(e.trade_name, e.legal_name) AS name, e.cnpj,
+            (SELECT c.status FROM "case" c WHERE c.entity_id = e.id AND c.type = 'CLIENT_ONBOARDING'
+              ORDER BY c.created_at DESC LIMIT 1) AS onboarding_status,
+            EXISTS (SELECT 1 FROM pgdas_declaration d WHERE d.entity_id = e.id) AS has_pgdas,
+            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = e.id AND d.status = 'ACTIVE') AS has_cert
+       FROM entity e WHERE e.cnpj IS NOT NULL ORDER BY e.legal_name`,
+  );
+
+  const human = await humanQueue(tx);
+
+  const counts = await tx.query<{ in_progress: number; exceptions: number; waiting_client: number; waiting_external: number; office_items: number }>(
+    `SELECT
+       (SELECT count(*)::int FROM "case" WHERE status = 'IN_PROGRESS') AS in_progress,
+       (SELECT count(*)::int FROM "case" WHERE type = 'EXCEPTION' AND status NOT IN ('COMPLETED', 'CANCELLED')) AS exceptions,
+       (SELECT count(*)::int FROM pending_item WHERE status = 'OPEN' AND responsible_source = 'CLIENT') AS waiting_client,
+       (SELECT count(*)::int FROM pending_item WHERE status = 'OPEN' AND responsible_source = 'EXTERNAL') AS waiting_external,
+       (SELECT count(*)::int FROM pending_item WHERE responsible_source = 'OFFICE') AS office_items`,
+  );
+  const c = counts.rows[0]!;
+
+  const events = await tx.query<{ type: string; occurred_at: Date; producer: { name?: string }; payload: Record<string, unknown>; entity: string | null }>(
+    `SELECT o.type, o.occurred_at, o.producer, o.payload, coalesce(e.trade_name, e.legal_name) AS entity
+       FROM outbox o LEFT JOIN entity e ON e.id = o.entity_id
+      ORDER BY o.occurred_at DESC LIMIT 30`,
+  );
+
+  const operating = new Set(PROCESSES.filter((p) => p.status === "OPERANDO").flatMap((p) => p.agents));
+  const totalAgents = new Set(PROCESSES.flatMap((p) => p.agents));
+  const nEntities = entities.rows.length;
+
+  const stageFor = (e: (typeof entities.rows)[number]) =>
+    PIPELINE_STAGES.map((stage) => {
+      switch (stage) {
+        case "Implantação": {
+          const s = e.onboarding_status;
+          if (s === "COMPLETED") return { kind: "done", text: "concluída" };
+          if (s === "IN_REVIEW") return { kind: "wait", text: "aguardando aprovação" };
+          if (s === "WAITING_HUMAN") return { kind: "wait", text: "aguardando você" };
+          if (s === "WAITING_CLIENT") return { kind: "wait", text: "aguardando cliente" };
+          return { kind: "run", text: s ? statusPt(s) : "não iniciada" };
+        }
+        case "Documentos":
+          return e.has_cert ? { kind: "run", text: "busca diária" } : { kind: "wait", text: "aguarda certificado A1" };
+        case "Tributos":
+          return e.has_pgdas ? { kind: "done", text: "Receita sincronizada" } : { kind: "future", text: "Fase 5" };
+        default: {
+          const proc = PROCESSES.find((p) => p.name.startsWith(stage) || (stage === "Cliente" && p.id === "relacionamento"));
+          return { kind: "future", text: proc ? proc.phase : "planejado" };
+        }
+      }
+    });
+
+  return {
+    kpis: {
+      entities: nEntities,
+      agentsOperating: operating.size,
+      agentsTotal: totalAgents.size,
+      inProgress: c.in_progress,
+      humanQueue: human.length,
+      exceptions: c.exceptions,
+      waitingClient: c.waiting_client,
+      waitingExternal: c.waiting_external,
+      humanTouchesPerClient: nEntities ? Math.round((c.office_items / nEntities) * 10) / 10 : 0,
+    },
+    processes: PROCESSES,
+    stages: PIPELINE_STAGES,
+    pipeline: entities.rows.map((e) => ({ id: e.id, name: e.name, cnpj: formatCnpj(e.cnpj), cells: stageFor(e) })),
+    human,
+    events: events.rows.map((ev) => ({
+      type: ev.type,
+      at: ev.occurred_at.toISOString(),
+      agent: agentName(ev.producer?.name),
+      entity: ev.entity,
+      text: describeEvent(ev.type, ev.payload),
+    })),
+  };
+}
+
+/** Fila humana: pendências do escritório e Cases que esperam aprovação. */
+export async function humanQueue(tx: PoolClient) {
+  const pend = await tx.query<{
+    id: string;
+    type: string;
+    required_information: string;
+    impact: string;
+    created_at: Date;
+    entity_id: string | null;
+    entity: string | null;
+    case_id: string | null;
+  }>(
+    `SELECT p.id, p.type, p.required_information, p.impact, p.created_at, p.entity_id,
+            coalesce(e.trade_name, e.legal_name) AS entity, p.case_id
+       FROM pending_item p LEFT JOIN entity e ON e.id = p.entity_id
+      WHERE p.status = 'OPEN' AND p.responsible_source = 'OFFICE'
+      ORDER BY p.created_at`,
+  );
+  const review = await tx.query<{ id: string; type: string; entity_id: string | null; entity: string | null; updated_at: Date }>(
+    `SELECT c.id, c.type, c.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, c.updated_at
+       FROM "case" c LEFT JOIN entity e ON e.id = c.entity_id
+      WHERE c.status = 'IN_REVIEW' ORDER BY c.updated_at`,
+  );
+  return [
+    ...pend.rows.map((p) => ({
+      kind: p.type === "CONTRACTED_SERVICES" ? "services" : "pending",
+      id: p.id,
+      type: p.type,
+      entityId: p.entity_id,
+      entity: p.entity,
+      caseId: p.case_id,
+      title: p.required_information,
+      impact: p.impact,
+      since: p.created_at.toISOString(),
+    })),
+    ...review.rows.map((c) => ({
+      kind: "approve",
+      id: c.id,
+      type: c.type,
+      entityId: c.entity_id,
+      entity: c.entity,
+      caseId: c.id,
+      title: `${caseTypePt(c.type)} revisada: aprovar a conclusão`,
+      impact: "Com a aprovação, o Case é concluído e a próxima etapa começa",
+      since: c.updated_at.toISOString(),
+    })),
+  ];
+}
+
+/** Cases (tela Fechamento / acompanhamento). */
+export async function casesList(tx: PoolClient) {
+  const { rows } = await tx.query<{
+    id: string;
+    type: string;
+    status: string;
+    owner_agent: string;
+    competence: string | null;
+    created_at: Date;
+    updated_at: Date;
+    entity: string | null;
+    open_pending: number;
+    transitions: { at: string; from: string; to: string; reason: string | null; actor: string }[];
+  }>(
+    `SELECT c.id, c.type, c.status, c.owner_agent, c.competence::text, c.created_at, c.updated_at,
+            coalesce(e.trade_name, e.legal_name) AS entity,
+            (SELECT count(*)::int FROM pending_item p WHERE p.case_id = c.id AND p.status = 'OPEN') AS open_pending,
+            coalesce((SELECT json_agg(json_build_object('at', t.occurred_at, 'from', t.from_status, 'to', t.to_status,
+                                                        'reason', t.reason, 'actor', t.actor_id) ORDER BY t.occurred_at)
+                        FROM case_transition t WHERE t.case_id = c.id), '[]') AS transitions
+       FROM "case" c LEFT JOIN entity e ON e.id = c.entity_id
+      ORDER BY c.updated_at DESC LIMIT 100`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    type: caseTypePt(r.type),
+    status: r.status,
+    statusPt: statusPt(r.status),
+    agent: agentName(r.owner_agent),
+    competence: r.competence,
+    entity: r.entity,
+    openPending: r.open_pending,
+    createdAt: r.created_at.toISOString(),
+    updatedAt: r.updated_at.toISOString(),
+    transitions: r.transitions.map((t) => ({ ...t, fromPt: statusPt(t.from), toPt: statusPt(t.to), actor: agentName(t.actor) })),
+  }));
+}

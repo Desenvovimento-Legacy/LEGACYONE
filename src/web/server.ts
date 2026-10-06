@@ -12,6 +12,9 @@ import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile } from "../shared/secrets/secrets-file.js";
+import { approveCase, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
+import { ZodError } from "zod";
+import { casesList, centralData } from "./ops.js";
 import { PAGE_HTML } from "./page.js";
 
 /**
@@ -43,6 +46,23 @@ function json(res: ServerResponse, status: number, body: unknown) {
 
 function isCompetence(s: string | undefined): s is string {
   return Boolean(s && /^\d{4}-(0[1-9]|1[0-2])$/.test(s));
+}
+
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > 64 * 1024) throw new HumanActionError("Requisição grande demais");
+    chunks.push(c as Buffer);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+/** Toda ação (POST) exige o cabeçalho da própria tela e a mesma origem. */
+function actionAllowed(req: IncomingMessage, port: number, action: string): boolean {
+  return req.headers["x-aires-acao"] === action && sameOrigin(req, port);
 }
 
 function sameOrigin(req: IncomingMessage, port: number): boolean {
@@ -167,7 +187,7 @@ export function createWebServer(deps: WebDeps) {
         isCompetence(parts[4]) &&
         parts[5] === "buscar"
       ) {
-        if (req.headers["x-aires-acao"] !== "buscar" || !sameOrigin(req, deps.port)) {
+        if (!actionAllowed(req, deps.port, "buscar")) {
           json(res, 403, { erro: "Requisição recusada" });
           return;
         }
@@ -188,6 +208,50 @@ export function createWebServer(deps: WebDeps) {
           if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
           else json(res, 502, { erro: (err as Error).message });
+        }
+        return;
+      }
+
+      // ---------------------------------------------------------------- Operação (só banco)
+      if (req.method === "GET" && url.pathname === "/api/central") {
+        const data = await withTenant(deps.appPool, deps.tenantId, (tx) => centralData(tx));
+        const used = await billedCallsToday(deps.appPool, deps.tenantId, deps.metering.provider);
+        json(res, 200, { office: deps.officeName, billedToday: used, dailyLimit: deps.metering.dailyLimit, ...data });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/cases") {
+        json(res, 200, { cases: await withTenant(deps.appPool, deps.tenantId, (tx) => casesList(tx)) });
+        return;
+      }
+
+      // POST /api/pendencia/:id/servicos — decisão humana: serviços e início da responsabilidade
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "pendencia" && parts[3] === "servicos") {
+        if (!actionAllowed(req, deps.port, "confirmar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          const body = (await readJson(req)) as { services?: string[]; startDate?: string };
+          const r = await defineContractedServices(
+            deps.appPool,
+            deps.tenantId,
+            { pendingItemId: parts[2]!, services: body.services as never, startDate: body.startDate ?? "" },
+            USER,
+          );
+          json(res, 200, r);
+        } catch (err) {
+          if (err instanceof HumanActionError) json(res, 409, { erro: err.message });
+          else if (err instanceof ZodError) json(res, 400, { erro: err.issues.map((i) => i.message).join("; ") });
+          else throw err;
+        }
+        return;
+      }
+
+      // POST /api/case/:id/aprovar — aprovação humana da conclusão
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "case" && parts[3] === "aprovar") {
+        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          json(res, 200, { status: await approveCase(deps.appPool, deps.tenantId, parts[2]!, USER) });
+        } catch (err) {
+          if (err instanceof HumanActionError) json(res, 409, { erro: err.message });
+          else throw err;
         }
         return;
       }
