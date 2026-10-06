@@ -27,8 +27,8 @@ if (isMain(import.meta.url)) {
         const p = (await tx.query<{ pdf: Buffer }>("SELECT pdf FROM pgdas_declaration_pdf WHERE entity_id = $1 AND kind = 'DECLARACAO' ORDER BY fetched_at DESC LIMIT 1", [e.id])).rows[0];
         if (!p) throw new Error("Nenhum PDF guardado");
         const txt = (await pdfText(p.pdf)).replace(/\s+/g, " ");
-        const i = Math.max(0, txt.search(/2\.1\)/));
-        console.log(txt.slice(Math.max(0, i - 300), i + 1200));
+        const i = Math.max(0, txt.search(/RPA|Discriminativo/i));
+        console.log(txt.slice(Math.max(0, i - 400), i + 700));
       }
       const r = await reparseDeclarations(tx, e.id);
       console.log(`✓ ${r.pdfs} PDF(s) relido(s); ${r.months} mês(es) novo(s) gravado(s)`);
