@@ -21,7 +21,8 @@
     "federal:sync": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts",
     "federal:report": "tsx --env-file-if-exists=.env src/cli/federal-sync.ts --report",
     "web": "tsx --env-file-if-exists=.env src/web/server.ts",
-    "cert:check": "tsx --env-file-if-exists=.env src/cli/cert-check.ts"
+    "cert:check": "tsx --env-file-if-exists=.env src/cli/cert-check.ts",
+    "federal:reparse": "tsx --env-file-if-exists=.env src/cli/pgdas-reparse.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.2",
