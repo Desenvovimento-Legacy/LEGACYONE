@@ -106,6 +106,16 @@ export const EventContracts = {
       source: z.string(),
     }),
   },
+  DIGITAL_CERTIFICATE_REGISTERED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      certificate_id: z.uuid(),
+      kind: z.enum(["A1", "A3"]),
+      holder_document: z.string(),
+      valid_to: z.iso.date(),
+      replaced: z.number().int(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

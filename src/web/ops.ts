@@ -69,6 +69,8 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `Plano de implantação: ${p.checklist_items} itens a receber, ${p.obligations_added} obrigações no mapa${p.migration_case_id ? ", migração aberta" : ""}${p.rules_pending_approval ? `, ${p.rules_pending_approval} regras aguardando aprovação` : ""}`;
     case "CONTRACTED_SERVICES_DEFINED":
       return `Serviços ${(p.services as string[]).map((s) => SERVICE_PT[s] ?? s).join(", ")} desde ${fmtDate(String(p.valid_from))}`;
+    case "DIGITAL_CERTIFICATE_REGISTERED":
+      return `Certificado A1 conferido no cofre, válido até ${fmtDate(String(p.valid_to))}${p.replaced ? " (substitui o anterior)" : ""}`;
     default:
       return type;
   }
@@ -87,7 +89,7 @@ export async function centralData(tx: PoolClient) {
             (SELECT c.status FROM "case" c WHERE c.entity_id = e.id AND c.type = 'CLIENT_ONBOARDING'
               ORDER BY c.created_at DESC LIMIT 1) AS onboarding_status,
             EXISTS (SELECT 1 FROM pgdas_declaration d WHERE d.entity_id = e.id) AS has_pgdas,
-            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = e.id AND d.status = 'ACTIVE') AS has_cert
+            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = e.id AND d.status = 'ACTIVE' AND d.valid_to > now()) AS has_cert
        FROM entity e WHERE e.cnpj IS NOT NULL ORDER BY e.legal_name`,
   );
 
@@ -125,7 +127,7 @@ export async function centralData(tx: PoolClient) {
           return { kind: "run", text: s ? statusPt(s) : "não iniciada" };
         }
         case "Documentos":
-          return e.has_cert ? { kind: "run", text: "busca diária" } : { kind: "wait", text: "aguarda certificado A1" };
+          return e.has_cert ? { kind: "run", text: "certificado ok · conector em construção" } : { kind: "wait", text: "aguarda certificado A1" };
         case "Tributos":
           return e.has_pgdas ? { kind: "done", text: "Receita sincronizada" } : { kind: "future", text: "Fase 5" };
         default: {

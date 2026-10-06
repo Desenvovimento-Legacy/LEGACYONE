@@ -50,7 +50,7 @@ export async function entityFacts(tx: PoolClient, entityId: string, on = today()
   const e = await tx.query<{ activity_started_at: string | null; start: string | null; cert: boolean }>(
     `SELECT e.activity_started_at,
             (SELECT min(valid_from)::text FROM contracted_service_history h WHERE h.entity_id = e.id) AS start,
-            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = e.id AND d.status = 'ACTIVE') AS cert
+            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = e.id AND d.status = 'ACTIVE' AND d.valid_to > now()) AS cert
        FROM entity e WHERE e.id = $1`,
     [entityId],
   );
@@ -361,10 +361,12 @@ export function nextDueDates(
 
 /** Mapa de acessos: o que a AIRES consegue acessar por empresa, calculado dos dados. */
 export async function accessMap(tx: PoolClient, entityId: string) {
-  const r = await tx.query<{ poa_to: string | null; cert: boolean; open: string[] }>(
+  const r = await tx.query<{ poa_to: string | null; cert: boolean; cert_to: string | null; open: string[] }>(
     `SELECT (SELECT max(coalesce(valid_to, 'infinity'::date))::text FROM power_of_attorney p
               WHERE p.entity_id = $1 AND p.system = 'ECAC' AND current_date <@ daterange(valid_from, valid_to, '[]')) AS poa_to,
-            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = $1 AND d.status = 'ACTIVE') AS cert,
+            EXISTS (SELECT 1 FROM digital_certificate d WHERE d.entity_id = $1 AND d.status = 'ACTIVE' AND d.valid_to > now()) AS cert,
+            (SELECT to_char(max(d.valid_to) AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY') FROM digital_certificate d
+              WHERE d.entity_id = $1 AND d.status = 'ACTIVE' AND d.valid_to > now()) AS cert_to,
             coalesce((SELECT array_agg(type) FROM pending_item WHERE entity_id = $1 AND status = 'OPEN'), '{}') AS open`,
     [entityId],
   );
@@ -374,7 +376,7 @@ export async function accessMap(tx: PoolClient, entityId: string) {
   return [
     { system: "e-CAC / Integra Contador", status: poa ? "OK" : "PENDENTE", detail: poa ?? "sem procuração eletrônica para o escritório" },
     { system: "eSocial / DCTFWeb", status: poa ? "OK" : "PENDENTE", detail: poa ? "pela procuração e-CAC" : "depende da procuração e-CAC" },
-    { system: "SEFAZ (NF-e, CT-e)", status: x.cert ? "OK" : "PENDENTE", detail: x.cert ? "certificado A1 da empresa no cofre" : "aguarda certificado A1 da empresa" },
+    { system: "SEFAZ (NF-e, CT-e)", status: x.cert ? "OK" : "PENDENTE", detail: x.cert ? `certificado A1 no cofre, válido até ${x.cert_to}` : "aguarda certificado A1 da empresa" },
     { system: "Prefeitura (NFS-e)", status: open.has("MUNICIPAL_ACCESS") ? "PENDENTE" : "A VERIFICAR", detail: open.has("MUNICIPAL_ACCESS") ? "aguarda inscrição municipal e acesso" : "conferir emissor do município" },
     { system: "Bancos", status: open.has("BANK_ACCOUNTS") ? "PENDENTE" : "A VERIFICAR", detail: open.has("BANK_ACCOUNTS") ? "aguarda bancos e extratos" : "sem pedido aberto" },
   ];

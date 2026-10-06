@@ -296,7 +296,9 @@ function viewEmpresas() {
     var rows = r.entities.map(function (e) {
       return '<tr class="row" data-goto="#/empresa/' + e.id + '"><td><b>' + esc(e.legal_name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td>' + esc((e.regime || "—").replace("_", " ").toLowerCase()) + '</td><td>' + (e.start ? d(e.start) : '<span class="wr st">a definir</span>') + '</td><td class="num">' + e.open_items + '</td></tr>';
     }).join("");
-    $("view").innerHTML = '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>';
+    $("view").innerHTML = '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
+      '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Coloque o arquivo em C:\\\\AIRES-COFRE\\\\clientes\\\\CNPJ.pfx e a senha no segredos.env (CERT_CNPJ_PASSWORD). A AIRES confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
+      '<button data-act="certs">Conferir certificados no cofre</button><div id="certs" style="margin-top:12px"></div></section>';
   });
 }
 function viewEmpresa(id) {
@@ -374,6 +376,14 @@ document.addEventListener("click", function (ev) {
       if (!window.confirm("Aprovar as regras propostas?\\n\\nConfira prazos e fundamentos. A aprovação fica registrada na auditoria em seu nome.")) return;
       b.disabled = true;
       post("/api/regras/aprovar", "aprovar").then(function (r) { toast(r.approved + " regra(s) aprovada(s); " + r.obligationsAdded + " obrigação(ões) adicionada(s) aos mapas."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "certs") {
+      b.disabled = true;
+      post("/api/certificados/conferir", "conferir").then(function (r) {
+        $("certs").innerHTML = '<table><thead><tr><th>Empresa</th><th>Situação</th><th>Validade</th></tr></thead><tbody>' + r.results.map(function (x) {
+          return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:12px">' + esc(x.cnpj) + '</div></td><td class="st ' + (x.status === "OK" ? "ok" : "wr") + '">' + esc(x.message) + (x.hint ? '<div class="mut mono" style="font-size:11px;font-weight:400">' + esc(x.hint) + '</div>' : '') + '</td><td>' + (x.validTo ? d(x.validTo) : '—') + '</td></tr>';
+        }).join("") + '</tbody></table>';
+      }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; });
     }
     if (b.dataset.act === "approve") {
       if (!window.confirm("Aprovar a conclusão deste Case?\\n\\nA aprovação fica registrada na auditoria em seu nome.")) return;

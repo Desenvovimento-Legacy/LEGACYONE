@@ -11,7 +11,8 @@ import { formatCnpj } from "../shared/br/documents.js";
 import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
-import { openSecretsFile } from "../shared/secrets/secrets-file.js";
+import { openSecretsFile, type SecretStore } from "../shared/secrets/secrets-file.js";
+import { clientCertificatePath, clientPasswordKey, syncClientCertificates } from "../platform/identity/client-certificates.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
 import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
@@ -35,6 +36,8 @@ export interface WebDeps {
   integra: IntegraContador | null;
   metering: MeteringPolicy;
   port: number;
+  /** Cofre local (certificados dos clientes). Nulo = sem cofre. */
+  vault?: SecretStore | null;
 }
 
 const USER: Actor = { kind: "USER", id: process.env.USERNAME ?? process.env.USER ?? "tela-local" };
@@ -249,6 +252,25 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
 
+      // POST /api/certificados/conferir — lê o cofre local; não consulta órgão externo.
+      if (req.method === "POST" && url.pathname === "/api/certificados/conferir") {
+        if (!actionAllowed(req, deps.port, "conferir")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!deps.vault) return json(res, 409, { erro: "Cofre não encontrado nesta máquina" });
+        // Relê o arquivo a cada clique: senha adicionada depois de abrir a tela já vale.
+        const vault = openSecretsFile(deps.vault.location) ?? deps.vault;
+        const results = await syncClientCertificates(deps.appPool, deps.tenantId, vault, USER);
+        json(res, 200, {
+          results: results.map((r) => ({
+            ...r,
+            hint:
+              r.status === "NAO_ENCONTRADO" ? `Coloque o arquivo em ${clientCertificatePath(vault, r.cnpj)}`
+              : r.status === "SEM_SENHA" ? `Adicione a linha ${clientPasswordKey(r.cnpj)}=senha no segredos.env`
+              : null,
+          })),
+        });
+        return;
+      }
+
       // POST /api/pendencia/:id/servicos — decisão humana: serviços e início da responsabilidade
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "pendencia" && parts[3] === "servicos") {
         if (!actionAllowed(req, deps.port, "confirmar")) return json(res, 403, { erro: "Requisição recusada" });
@@ -308,6 +330,7 @@ if (isMain(import.meta.url)) {
     integra: vault ? serproFromVault(vault) : null,
     metering: vault ? serproMetering(vault) : { provider: SERPRO_PROVIDER, dailyLimit: 0 },
     port,
+    vault,
   };
   createWebServer(deps).listen(port, "127.0.0.1", () => {
     console.log(`AIRES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
