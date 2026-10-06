@@ -12,7 +12,7 @@ import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile, type SecretStore } from "../shared/secrets/secrets-file.js";
-import { clientCertificatePath, clientPasswordKey, syncClientCertificates } from "../platform/identity/client-certificates.js";
+import { clientCertificatesDir, clientPasswordKey, syncClientCertificates } from "../platform/identity/client-certificates.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
 import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
@@ -263,7 +263,7 @@ export function createWebServer(deps: WebDeps) {
           results: results.map((r) => ({
             ...r,
             hint:
-              r.status === "NAO_ENCONTRADO" ? `Coloque o arquivo em ${clientCertificatePath(vault, r.cnpj)}`
+              r.status === "NAO_ENCONTRADO" ? `Coloque em ${clientCertificatesDir(vault)} (ou subpasta) um .pfx com ${r.cnpj} no nome`
               : r.status === "SEM_SENHA" ? `Adicione a linha ${clientPasswordKey(r.cnpj)}=senha no segredos.env`
               : null,
           })),

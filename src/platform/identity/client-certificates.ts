@@ -1,5 +1,5 @@
 import { createHash, X509Certificate } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createSecureContext } from "node:tls";
 import type { Pool } from "pg";
@@ -15,9 +15,14 @@ import { resolvePendingItem } from "../pending/pending.js";
  * Digital Identity — certificados A1 dos clientes no cofre local.
  *
  * Convenção do cofre (fase piloto):
- *   <pasta do cofre>\clientes\<CNPJ>.pfx    arquivo do certificado
- *   CERT_<CNPJ>_PASSWORD=...                 senha, no segredos.env
+ *   <pasta do cofre>\clientes\...\*<CNPJ>*.pfx   arquivo (qualquer subpasta; o CNPJ
+ *                                               no nome do arquivo identifica a empresa)
+ *   CERT_<CNPJ>_PASSWORD=...                     senha, no segredos.env
+ * Com mais de um arquivo para o mesmo CNPJ (cópias, renovações), vale o que
+ * abre com a senha e tem a validade mais longa.
  *
+ * O nome do arquivo nunca é gravado nem exibido (há escritórios que anotam a
+ * senha no nome): a referência no banco é pelo CNPJ.
  * A AIRES abre o .pfx só para conferir: senha, CNPJ do titular e validade.
  * No banco ficam apenas dados públicos (titular, série, validade, impressão
  * digital) e a referência ao arquivo — nunca a chave privada nem a senha.
@@ -79,8 +84,37 @@ export function inspectPfx(pfx: Buffer, passphrase: string): PfxInfo {
   };
 }
 
+export function clientCertificatesDir(store: SecretStore): string {
+  return join(dirname(store.location), "clientes");
+}
+
 export function clientCertificatePath(store: SecretStore, cnpj: string): string {
-  return join(dirname(store.location), "clientes", `${cnpj}.pfx`);
+  return join(clientCertificatesDir(store), `${cnpj}.pfx`);
+}
+
+/** Todos os .pfx da pasta de clientes (com subpastas), com o "nome só de letras e números" para casar o CNPJ. */
+function listPfx(dir: string, depth = 0): { path: string; key: string }[] {
+  if (depth > 4 || !existsSync(dir)) return [];
+  const out: { path: string; key: string }[] = [];
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name);
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) out.push(...listPfx(full, depth + 1));
+    else if (/\.(pfx|p12)$/i.test(name)) out.push({ path: full, key: name.toUpperCase().replace(/[^0-9A-Z]/g, "") });
+  }
+  return out;
+}
+
+/** Arquivos candidatos para o CNPJ: nome exato primeiro, depois qualquer nome que contenha o CNPJ. */
+export function findClientCertificateFiles(store: SecretStore, cnpj: string, all = listPfx(clientCertificatesDir(store))): string[] {
+  const exact = clientCertificatePath(store, cnpj);
+  const found = all.filter((f) => f.key.includes(cnpj)).map((f) => f.path);
+  return [...new Set([...(existsSync(exact) ? [exact] : []), ...found])];
 }
 
 export function clientPasswordKey(cnpj: string): string {
@@ -97,6 +131,8 @@ export interface CertificateCheckResult {
   expiresInDays?: number;
   /** Certificado novo registrado agora (false = já estava registrado). */
   registered?: boolean;
+  /** Quantos arquivos com o CNPJ no nome foram encontrados. */
+  files?: number;
 }
 
 const MESSAGES: Record<CertificateCheckStatus, string> = {
@@ -129,29 +165,45 @@ export async function syncClientCertificates(
     ),
   );
   const out: CertificateCheckResult[] = [];
+  const all = listPfx(clientCertificatesDir(store));
   for (const e of entities.rows) {
     const base = { entityId: e.id, name: e.name, cnpj: e.cnpj };
-    const path = clientCertificatePath(store, e.cnpj);
+    const files = findClientCertificateFiles(store, e.cnpj, all);
     const fail = (status: CertificateCheckStatus, extra: Partial<CertificateCheckResult> = {}) =>
       out.push({ ...base, status, message: MESSAGES[status], ...extra });
-    if (!existsSync(path)) {
+    if (!files.length) {
       fail("NAO_ENCONTRADO");
       continue;
     }
     if (!store.has(clientPasswordKey(e.cnpj))) {
-      fail("SEM_SENHA");
+      fail("SEM_SENHA", { files: files.length });
       continue;
     }
-    let info: PfxInfo;
-    try {
-      info = inspectPfx(readFileSync(path), store.require(clientPasswordKey(e.cnpj)));
-    } catch (err) {
-      fail(err instanceof PfxError ? err.status : "ARQUIVO_INVALIDO");
-      continue;
+    // Abre cada candidato; fica o que abre, é do CNPJ e vence por último.
+    const password = store.require(clientPasswordKey(e.cnpj));
+    let info: PfxInfo | null = null;
+    let file: string | null = null;
+    let worst: CertificateCheckStatus = "ARQUIVO_INVALIDO";
+    const rank: CertificateCheckStatus[] = ["ARQUIVO_INVALIDO", "CRIPTOGRAFIA_LEGADA", "SENHA_INCORRETA", "CNPJ_DIFERENTE"];
+    for (const f of files) {
+      try {
+        const i = inspectPfx(readFileSync(f), password);
+        // e-CNPJ da matriz vale para as filiais: basta a mesma raiz (8 primeiros caracteres).
+        if (!i.holderDocument || i.holderDocument.slice(0, 8) !== e.cnpj.slice(0, 8)) {
+          worst = "CNPJ_DIFERENTE";
+          continue;
+        }
+        if (!info || i.validTo > info.validTo) {
+          info = i;
+          file = f;
+        }
+      } catch (err) {
+        const st = err instanceof PfxError ? err.status : "ARQUIVO_INVALIDO";
+        if (rank.indexOf(st) > rank.indexOf(worst)) worst = st;
+      }
     }
-    // e-CNPJ da matriz vale para as filiais: basta a mesma raiz (8 primeiros caracteres).
-    if (!info.holderDocument || info.holderDocument.slice(0, 8) !== e.cnpj.slice(0, 8)) {
-      fail("CNPJ_DIFERENTE");
+    if (!info || !file) {
+      fail(worst, { files: files.length });
       continue;
     }
     const validTo = info.validTo.toISOString().slice(0, 10);
@@ -173,7 +225,7 @@ export async function syncClientCertificates(
         `INSERT INTO digital_certificate (id, tenant_id, owner_kind, entity_id, holder_document, kind, subject, serial_number,
                                           valid_from, valid_to, vault_ref)
          VALUES ($1, current_tenant(), 'ENTITY', $2, $3, 'A1', $4, $5, $6, $7, $8)`,
-        [certId, e.id, info.holderDocument, info.subject, info.serialNumber, info.validFrom, info.validTo, `cofre-local:clientes/${e.cnpj}.pfx`],
+        [certId, e.id, info.holderDocument, info.subject, info.serialNumber, info.validFrom, info.validTo, `cofre-local:clientes/cnpj=${e.cnpj}`],
       );
       await appendEvent(tx, {
         type: "DIGITAL_CERTIFICATE_REGISTERED",
@@ -214,6 +266,7 @@ export async function syncClientCertificates(
       validTo,
       expiresInDays,
       registered,
+      files: files.length,
     });
   }
   return out;

@@ -71,7 +71,7 @@ describe("certificados A1 dos clientes no cofre local", () => {
 
     await withTenant(appPool, t, async (tx) => {
       const certs = await tx.query("SELECT entity_id, holder_document, status, vault_ref FROM digital_certificate");
-      expect(certs.rows).toEqual([{ entity_id: a.entityId, holder_document: CNPJ_MATRIZ, status: "ACTIVE", vault_ref: `cofre-local:clientes/${CNPJ_MATRIZ}.pfx` }]);
+      expect(certs.rows).toEqual([{ entity_id: a.entityId, holder_document: CNPJ_MATRIZ, status: "ACTIVE", vault_ref: `cofre-local:clientes/cnpj=${CNPJ_MATRIZ}` }]);
       const p = await tx.query("SELECT status, resolution FROM pending_item WHERE type = 'CLIENT_CERTIFICATE'");
       expect(p.rows[0].status).toBe("RESOLVED");
       const ev = await tx.query("SELECT type FROM outbox WHERE type = 'DIGITAL_CERTIFICATE_REGISTERED'");
@@ -86,6 +86,22 @@ describe("certificados A1 dos clientes no cofre local", () => {
     expect(r2.find((r) => r.cnpj === CNPJ_MATRIZ)).toMatchObject({ status: "OK", registered: false });
     await withTenant(appPool, t, async (tx) => {
       expect((await tx.query("SELECT 1 FROM digital_certificate")).rowCount).toBe(1);
+    });
+  });
+
+  it("acha o arquivo em subpasta pelo CNPJ no nome; entre cópias fica a que abre", async () => {
+    const t = await newTenant();
+    await newEntity(t, CNPJ_MATRIZ);
+    const dir = mkdtempSync(join(tmpdir(), "aires-cofre-"));
+    mkdirSync(join(dir, "clientes", "Certificado Digital"), { recursive: true });
+    writeFileSync(join(dir, "clientes", "Certificado Digital", `ALPHA INDUSTRIA LTDA_${CNPJ_MATRIZ} (1).pfx`), Buffer.from("lixo"));
+    writeFileSync(join(dir, "clientes", "Certificado Digital", `ALPHA INDUSTRIA LTDA_${CNPJ_MATRIZ}.pfx`), good);
+    writeFileSync(join(dir, "segredos.env"), `CERT_${CNPJ_MATRIZ}_PASSWORD=senha-certa`);
+    const r = await syncClientCertificates(appPool, t, openSecretsFile(join(dir, "segredos.env"))!, SYSTEM);
+    expect(r[0]).toMatchObject({ status: "OK", registered: true, files: 2 });
+    await withTenant(appPool, t, async (tx) => {
+      const c = await tx.query("SELECT vault_ref FROM digital_certificate");
+      expect(c.rows[0].vault_ref).toBe(`cofre-local:clientes/cnpj=${CNPJ_MATRIZ}`);
     });
   });
 

@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { clientCertificatePath, clientPasswordKey, syncClientCertificates } from "../platform/identity/client-certificates.js";
+import { clientCertificatesDir, clientPasswordKey, syncClientCertificates } from "../platform/identity/client-certificates.js";
 import type { Actor } from "../shared/actor.js";
 import { createPool } from "../shared/db/pool.js";
 import { isMain } from "../shared/is-main.js";
@@ -28,7 +28,7 @@ if (isMain(import.meta.url)) {
       const mark = r.status === "OK" ? "✓" : "✗";
       const extra = r.status === "OK" ? ` · válido até ${r.validTo!.split("-").reverse().join("/")}${r.registered ? " · registrado agora" : ""}` : "";
       console.log(`${mark} ${r.name} (${r.cnpj}): ${r.message}${extra}`);
-      if (r.status === "NAO_ENCONTRADO") console.log(`    coloque o arquivo em ${clientCertificatePath(vault, r.cnpj)}`);
+      if (r.status === "NAO_ENCONTRADO") console.log(`    coloque em ${clientCertificatesDir(vault)} (ou subpasta) um .pfx com ${r.cnpj} no nome`);
       if (r.status === "SEM_SENHA") console.log(`    adicione a linha ${clientPasswordKey(r.cnpj)}=... no segredos.env`);
     }
   } catch (err) {

@@ -297,7 +297,7 @@ function viewEmpresas() {
       return '<tr class="row" data-goto="#/empresa/' + e.id + '"><td><b>' + esc(e.legal_name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td>' + esc((e.regime || "—").replace("_", " ").toLowerCase()) + '</td><td>' + (e.start ? d(e.start) : '<span class="wr st">a definir</span>') + '</td><td class="num">' + e.open_items + '</td></tr>';
     }).join("");
     $("view").innerHTML = '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
-      '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Coloque o arquivo em C:\\\\AIRES-COFRE\\\\clientes\\\\CNPJ.pfx e a senha no segredos.env (CERT_CNPJ_PASSWORD). A AIRES confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
+      '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Os .pfx ficam em C:\\\\AIRES-COFRE\\\\clientes (pode ser em subpasta, com o CNPJ no nome do arquivo) e a senha no segredos.env (CERT_CNPJ_PASSWORD). A AIRES confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
       '<button data-act="certs">Conferir certificados no cofre</button><div id="certs" style="margin-top:12px"></div></section>';
   });
 }
