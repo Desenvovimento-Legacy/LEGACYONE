@@ -12,42 +12,45 @@ export const PAGE_HTML = /* html */ `<!doctype html>
 <title>AIRES</title>
 <style>
   :root {
-    --bg: #0B1622; --panel: #111F2E; --panel2: #0E1B29; --line: #1E3247; --line2: #1A2C3E;
-    --ink: #E6EEF5; --ink2: #B8C9D8; --muted: #8FA5B8; --faint: #6F8496;
-    --teal: #3FC1B4; --teal-ink: #7FE0D4; --teal-bg: #0F2A26; --teal-line: #1E4A43;
-    --blue: #4A9BE0; --blue-ink: #9CCBF3; --blue-bg: #10243A; --blue-line: #24507A;
-    --amber: #E8A33D; --amber-ink: #F5C77E; --amber-bg: #2A2112; --amber-line: #5A4520;
-    --red-ink: #F7A39C; --off: #3A4F63;
+    --bg: #F3F6F9; --panel: #FFFFFF; --panel2: #F8FAFC; --line: #E2E8F0; --line2: #EDF2F7;
+    --ink: #0F172A; --ink2: #334155; --muted: #64748B; --faint: #94A3B8;
+    --teal: #0F9D8F; --teal-ink: #0B7A6F; --teal-bg: #E7F7F4; --teal-line: #A8E2D9;
+    --blue: #2563EB; --blue-ink: #1D4ED8; --blue-bg: #EFF5FF; --blue-line: #BFD3FB;
+    --amber: #E8A33D; --amber-ink: #A95F07; --amber-bg: #FFF6E8; --amber-line: #F6D3A1;
+    --red: #DC2626; --red-ink: #B91C1C; --red-bg: #FEF0F0; --red-line: #F8C4C4;
+    --green: #16A34A; --green-ink: #15803D; --green-bg: #EAF8EF; --green-line: #B5E5C5;
+    --off: #CBD5E1;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 1px 3px rgba(15, 23, 42, .04);
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
-  a { color: #7FC8F2; text-decoration: none; } a:hover { color: #fff; text-decoration: underline; }
+  a { color: var(--blue); text-decoration: none; } a:hover { color: var(--blue-ink); text-decoration: underline; }
   .mono { font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; }
   .app { display: flex; flex-wrap: wrap; min-height: 100vh; }
-  nav.side { flex: 1 1 240px; max-width: 260px; background: #0A1420; border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 18px; }
+  nav.side { flex: 1 1 240px; max-width: 260px; background: var(--panel); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 18px; }
   .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
-  .brand b { font-size: 21px; letter-spacing: .1em; color: #fff; }
-  .brand small { display: block; font-size: 11px; color: var(--muted); }
+  .brand b { font-size: 21px; letter-spacing: .1em; color: var(--ink); }
+  .brand small { display: block; font-size: 11px; color: var(--muted); line-height: 1.3; }
   .grp { display: flex; flex-direction: column; gap: 2px; }
   .grp > span { padding: 0 10px 6px; font-size: 10px; font-weight: 700; letter-spacing: .12em; color: var(--faint); }
-  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; color: #C9D8E4; font-size: 13px; }
-  .nav:hover { background: #13243A; text-decoration: none; color: #fff; }
-  .nav.on { background: #17293B; color: #fff; font-weight: 700; }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; color: var(--ink2); font-size: 13px; }
+  .nav:hover { background: var(--panel2); text-decoration: none; color: var(--ink); }
+  .nav.on { background: var(--teal-bg); color: var(--teal-ink); font-weight: 700; }
   .nav .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
   .nav .badge { margin-left: auto; background: var(--amber); color: #1B1206; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 1px 7px; }
-  .nav.dis { color: #5B6F82; pointer-events: none; }
+  .nav.dis { color: var(--faint); pointer-events: none; }
   main { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; }
-  header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 16px 28px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+  header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 16px 28px; border-bottom: 1px solid var(--line); background: var(--panel); }
   header.top h1 { margin: 0; font-size: 20px; }
   header.top .sub { font-size: 12px; color: var(--muted); }
   .pills { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
-  .pill { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink2); }
-  .pill.ok { background: var(--teal-bg); color: var(--teal-ink); border-color: var(--teal-line); }
+  .pill { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink2); background: var(--panel); }
+  .pill.ok { background: var(--green-bg); color: var(--green-ink); border-color: var(--green-line); }
   .content { padding: 22px 28px 48px; display: flex; flex-direction: column; gap: 20px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; box-shadow: var(--shadow); }
   .card h2 { margin: 0 0 12px; font-size: 16px; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px; }
-  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); }
   .kpi span { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
   .kpi b { display: block; font-size: 30px; font-weight: 600; margin: 2px 0; }
   .kpi small { color: var(--muted); font-size: 12px; }
@@ -55,73 +58,103 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .wide { flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
   .narrow { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
   .procs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; }
-  .proc { background: var(--panel2); border: 1px solid var(--line2); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-height: 104px; }
-  .proc.OPERANDO { border-color: var(--teal-line); } .proc.EM_CONSTRUCAO { border-color: var(--blue-line); }
+  .proc { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-height: 104px; }
+  .proc.OPERANDO { border-color: var(--green-line); background: var(--green-bg); } .proc.EM_CONSTRUCAO { border-color: var(--blue-line); }
   .proc .h { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 700; }
   .proc p { margin: 0; font-size: 12px; color: var(--ink2); }
   .proc small { margin-top: auto; font-size: 11px; color: var(--muted); }
   .sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .OPERANDO .sdot, .sdot.OPERANDO { background: var(--teal); } .EM_CONSTRUCAO .sdot, .sdot.EM_CONSTRUCAO { background: var(--blue); } .PLANEJADO .sdot, .sdot.PLANEJADO { background: var(--off); }
+  .OPERANDO .sdot, .sdot.OPERANDO { background: var(--green); } .EM_CONSTRUCAO .sdot, .sdot.EM_CONSTRUCAO { background: var(--blue); } .PLANEJADO .sdot, .sdot.PLANEJADO { background: var(--red); }
   .scroll { overflow-x: auto; }
   .pipe { min-width: 1080px; display: grid; grid-template-columns: 180px repeat(10, minmax(0, 1fr)); gap: 6px; }
   .pipe .hd { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; text-align: center; }
   .pipe .hd:first-child { text-align: left; }
   .cell { border-radius: 6px; padding: 6px; font-size: 11px; line-height: 1.3; text-align: center; display: flex; align-items: center; justify-content: center; min-height: 44px; }
-  .cell.done { background: var(--teal-bg); color: var(--teal-ink); border: 1px solid var(--teal-line); }
+  .cell.done { background: var(--green-bg); color: var(--green-ink); border: 1px solid var(--green-line); }
   .cell.run { background: var(--blue-bg); color: var(--blue-ink); border: 1px solid var(--blue-line); }
   .cell.wait { background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber-line); }
-  .cell.future { color: #5B6F82; border: 1px dashed #2A3F55; }
+  .cell.future { color: var(--faint); border: 1px dashed var(--off); }
   .ent b { display: block; font-size: 13px; } .ent small { color: var(--muted); font-size: 11px; }
-  .queue { background: #1A1A10; border-color: var(--amber-line); }
+  .queue { background: var(--amber-bg); border-color: var(--amber-line); }
   .queue h2 { color: var(--amber-ink); }
-  .qi { background: #221F12; border: 1px solid #4A3A1C; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-  .qi .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #C9A86A; }
-  .qi p { margin: 0; font-size: 12px; color: #D9CBB0; }
+  .qi { background: var(--panel); border: 1px solid var(--amber-line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .qi .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--amber-ink); }
+  .qi p { margin: 0; font-size: 12px; color: var(--ink2); }
   .ev { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line2); }
   .ev .t { font-size: 11px; color: var(--muted); padding-top: 2px; }
   .ev .ty { font-size: 11px; font-weight: 600; color: var(--teal-ink); overflow-wrap: anywhere; }
-  .ev p { margin: 2px 0; font-size: 12px; color: #C6D4E0; } .ev small { font-size: 11px; color: var(--faint); }
-  button { font: inherit; font-weight: 700; padding: 9px 14px; border-radius: 7px; border: 0; background: #2E6DA4; color: #fff; cursor: pointer; }
+  .ev p { margin: 2px 0; font-size: 12px; color: var(--ink2); } .ev small { font-size: 11px; color: var(--faint); }
+  button { font: inherit; font-weight: 700; padding: 9px 14px; border-radius: 7px; border: 0; background: var(--blue); color: #fff; cursor: pointer; }
+  button:hover { background: var(--blue-ink); }
   button.warn { background: var(--amber); color: #1B1206; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink2); padding: 6px 12px; font-size: 12px; font-weight: 600; }
   button[disabled] { opacity: .5; cursor: not-allowed; }
-  input[type=month], select { font: inherit; padding: 7px 10px; border-radius: 6px; border: 1px solid #2A3F55; background: var(--panel); color: #fff; }
+  input[type=month], input:not([type]), select { font: inherit; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
   label.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); margin-right: 12px; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line2); vertical-align: top; font-size: 13px; }
-  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; background: var(--panel2); }
   .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .st { font-weight: 700; } .ok { color: var(--teal-ink); } .wr { color: var(--amber-ink); } .bad { color: var(--red-ink); } .mut { color: var(--muted); font-weight: 400; }
+  .st { font-weight: 700; } .ok { color: var(--green-ink); } .wr { color: var(--amber-ink); } .bad { color: var(--red-ink); } .mut { color: var(--muted); font-weight: 400; }
   .empty { color: var(--muted); padding: 8px 0; }
-  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #E6EEF5; color: #0B1622; padding: 10px 16px; border-radius: 8px; display: none; max-width: 90vw; font-weight: 600; }
-  .row { cursor: pointer; } .row:hover td { background: #13243A; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 8px; display: none; max-width: 90vw; font-weight: 600; box-shadow: 0 8px 24px rgba(15,23,42,.2); }
+  .row { cursor: pointer; } .row:hover td { background: var(--panel2); }
   .tl { font-size: 12px; color: var(--ink2); margin: 6px 0 0; padding-left: 16px; }
   h3.sec { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 6px; }
+  /* Departamentos */
+  .depts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 16px; align-items: start; }
+  .dept { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
+  .dept .dh { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .dept .dh h2 { margin: 0; font-size: 17px; }
+  .meter { height: 8px; border-radius: 999px; background: var(--red-bg); overflow: hidden; border: 1px solid var(--red-line); }
+  .meter i { display: block; height: 100%; background: var(--green); }
+  .ag { border: 1px solid var(--line); border-left: 5px solid var(--red); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+  .ag.on { border-left-color: var(--green); background: linear-gradient(90deg, var(--green-bg), var(--panel) 60%); }
+  .ag .ah { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+  .ag .ah .tag { margin-left: auto; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--red-bg); color: var(--red-ink); border: 1px solid var(--red-line); white-space: nowrap; }
+  .ag.on .ah .tag { background: var(--green-bg); color: var(--green-ink); border-color: var(--green-line); }
+  .lamp { width: 11px; height: 11px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); flex: none; }
+  .ag.on .lamp { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+  .ag p { margin: 4px 0 6px; font-size: 12px; color: var(--ink2); }
+  .caps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cap { font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--red-line); color: var(--red-ink); background: var(--red-bg); }
+  .cap.on { border-color: var(--green-line); color: var(--green-ink); background: var(--green-bg); }
+  .act { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink2); align-items: center; }
+  .legend span { display: inline-flex; gap: 6px; align-items: center; }
 </style>
 </head>
 <body>
 <div class="app">
   <nav class="side" aria-label="Menu principal">
     <div class="brand">
-      <svg width="32" height="32" viewBox="0 0 30 30" fill="none" stroke="#3FC1B4" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="9" r="2.2"></circle><circle cx="21" cy="7" r="2.2"></circle><circle cx="15" cy="16" r="2.2"></circle><circle cx="23" cy="20" r="2.2"></circle><circle cx="9" cy="22" r="2.2"></circle><path d="M10 10l3.5 4.5M19.5 8.5L16 14M17 17l4.5 2M13.2 17.5L10.5 20.5M15 18.2V27"></path></svg>
+      <svg width="32" height="32" viewBox="0 0 30 30" fill="none" stroke="#0F9D8F" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="9" r="2.2"></circle><circle cx="21" cy="7" r="2.2"></circle><circle cx="15" cy="16" r="2.2"></circle><circle cx="23" cy="20" r="2.2"></circle><circle cx="9" cy="22" r="2.2"></circle><path d="M10 10l3.5 4.5M19.5 8.5L16 14M17 17l4.5 2M13.2 17.5L10.5 20.5M15 18.2V27"></path></svg>
       <div><b>AIRES</b><small>Inteligência Artificial para Resultados, Integração e Soluções</small></div>
     </div>
     <div class="grp"><span>OPERAÇÃO</span>
-      <a class="nav" href="#/central" data-r="central"><span class="dot" style="background:#3FC1B4"></span>Central de agentes</a>
-      <a class="nav" href="#/fila" data-r="fila"><span class="dot" style="background:#3FC1B4"></span>Fila humana<span class="badge" id="qbadge" hidden></span></a>
-      <a class="nav" href="#/cases" data-r="cases"><span class="dot" style="background:#3FC1B4"></span>Cases e fechamento</a>
+      <a class="nav" href="#/central" data-r="central"><span class="dot" style="background:var(--teal)"></span>Central de agentes</a>
+      <a class="nav" href="#/fila" data-r="fila"><span class="dot" style="background:var(--teal)"></span>Fila humana<span class="badge" id="qbadge" hidden></span></a>
+      <a class="nav" href="#/cases" data-r="cases"><span class="dot" style="background:var(--teal)"></span>Cases e fechamento</a>
+    </div>
+    <div class="grp"><span>DEPARTAMENTOS</span>
+      <a class="nav" href="#/departamentos" data-r="departamentos"><span class="dot" style="background:var(--teal)"></span>Funcionamento dos agentes</a>
+      <a class="nav" href="#/depto/societario" data-r="depto-societario"><span class="dot" id="dd-societario" style="background:var(--off)"></span>Societário</a>
+      <a class="nav" href="#/depto/fiscal" data-r="depto-fiscal"><span class="dot" id="dd-fiscal" style="background:var(--off)"></span>Fiscal</a>
+      <a class="nav" href="#/depto/folha" data-r="depto-folha"><span class="dot" id="dd-folha" style="background:var(--off)"></span>Folha</a>
+      <a class="nav" href="#/depto/contabil" data-r="depto-contabil"><span class="dot" id="dd-contabil" style="background:var(--off)"></span>Contábil</a>
     </div>
     <div class="grp"><span>PROCESSOS</span>
-      <a class="nav" href="#/processos" data-r="processos"><span class="dot" style="background:#3FC1B4"></span>Todos os processos</a>
+      <a class="nav" href="#/processos" data-r="processos"><span class="dot" style="background:var(--teal)"></span>Todos os processos</a>
     </div>
     <div class="grp"><span>CLIENTES</span>
-      <a class="nav" href="#/empresas" data-r="empresas"><span class="dot" style="background:#3FC1B4"></span>Empresas</a>
-      <a class="nav" href="#/receita" data-r="receita"><span class="dot" style="background:#3FC1B4"></span>Receita Federal</a>
-      <a class="nav" href="#/documentos" data-r="documentos"><span class="dot" style="background:#3FC1B4"></span>Documentos fiscais</a>
+      <a class="nav" href="#/empresas" data-r="empresas"><span class="dot" style="background:var(--teal)"></span>Empresas</a>
+      <a class="nav" href="#/receita" data-r="receita"><span class="dot" style="background:var(--teal)"></span>Receita Federal</a>
+      <a class="nav" href="#/documentos" data-r="documentos"><span class="dot" style="background:var(--teal)"></span>Documentos fiscais</a>
     </div>
     <div class="grp"><span>CONTROLE</span>
-      <a class="nav" href="#/regras" data-r="regras"><span class="dot" style="background:#3FC1B4"></span>Regras e legislação</a>
-      <a class="nav dis" href="#/central"><span class="dot" style="background:#3A4F63"></span>Revisão independente</a>
-      <a class="nav dis" href="#/central"><span class="dot" style="background:#3A4F63"></span>Auditoria</a>
+      <a class="nav" href="#/regras" data-r="regras"><span class="dot" style="background:var(--teal)"></span>Regras e legislação</a>
+      <a class="nav dis" href="#/central"><span class="dot" style="background:var(--off)"></span>Revisão independente</a>
+      <a class="nav dis" href="#/central"><span class="dot" style="background:var(--off)"></span>Auditoria</a>
     </div>
   </nav>
   <main>
@@ -163,7 +196,7 @@ function queueItemHtml(q) {
     var svc = [["CONTABIL", "Contábil", 1], ["FISCAL", "Fiscal", 1], ["FOLHA", "Folha", 1], ["SOCIETARIO", "Societário", 1], ["FINANCEIRO", "Financeiro", 0], ["IRPF", "IRPF", 0]];
     var boxes = svc.map(function (s) { return '<label class="chk"><input type="checkbox" value="' + s[0] + '"' + (s[2] ? " checked" : "") + '> ' + s[1] + '</label>'; }).join("");
     return '<div class="qi" data-q="' + q.id + '">' + head + '<div>' + boxes + '</div>' +
-      '<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap"><div><label for="ini-' + q.id + '" style="display:block;font-size:12px;color:#C9A86A;margin-bottom:4px">Início da responsabilidade</label>' +
+      '<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap"><div><label for="ini-' + q.id + '" style="display:block;font-size:12px;color:var(--amber-ink);margin-bottom:4px">Início da responsabilidade</label>' +
       '<input type="month" id="ini-' + q.id + '"></div><button class="warn" data-act="services" data-id="' + q.id + '">Confirmar</button></div></div>';
   }
   if (q.kind === "rules") {
@@ -190,19 +223,19 @@ function viewCentral() {
   return loadCentral().then(function (c) {
     var k = c.kpis;
     var kpis = [
-      ["Empresas", k.entities, "monitoradas", "#fff"],
-      ["Agentes operando", k.agentsOperating, "de " + k.agentsTotal + " previstos", "#7FE0D4"],
-      ["Em andamento", k.inProgress, "Cases executando", "#9CCBF3"],
-      ["Fila humana", k.humanQueue, "só exceções", "#F5C77E"],
-      ["Aguardando cliente", k.waitingClient, k.waitingExternal + " aguardando órgão externo", "#fff"],
-      ["Toques humanos", k.humanTouchesPerClient, "por cliente", "#fff"]
+      ["Empresas", k.entities, "monitoradas", "var(--ink)"],
+      ["Agentes operando", k.agentsOperating, "de " + k.agentsTotal + " previstos", "var(--green-ink)"],
+      ["Em andamento", k.inProgress, "Cases executando", "var(--blue-ink)"],
+      ["Fila humana", k.humanQueue, "só exceções", "var(--amber-ink)"],
+      ["Aguardando cliente", k.waitingClient, k.waitingExternal + " aguardando órgão externo", "var(--ink)"],
+      ["Toques humanos", k.humanTouchesPerClient, "por cliente", "var(--ink)"]
     ].map(function (x) { return '<div class="kpi"><span>' + x[0] + '</span><b class="mono" style="color:' + x[3] + '">' + x[1] + '</b><small>' + x[2] + '</small></div>'; }).join("");
     var procs = c.processes.map(function (p) {
       return '<a class="proc ' + p.status + '" href="#/processos" style="text-decoration:none;color:inherit"><div class="h"><span>' + esc(p.name) + '</span><span class="sdot"></span></div><p>' + esc(p.summary) + '</p><small class="mono">' + STATUS_LABEL[p.status] + ' · ' + esc(p.phase) + '</small></a>';
     }).join("");
     var pipe = '<div class="pipe"><span class="hd">Empresa</span>' + c.stages.map(function (s) { return '<span class="hd">' + esc(s) + '</span>'; }).join("") +
       c.pipeline.map(function (r) {
-        return '<div class="ent"><a href="#/empresa/' + r.id + '" style="color:#E6EEF5"><b>' + esc(r.name) + '</b></a><small class="mono">' + esc(r.cnpj) + '</small></div>' + r.cells.map(function (x) { return '<div class="cell ' + x.kind + '">' + esc(x.text) + '</div>'; }).join("");
+        return '<div class="ent"><a href="#/empresa/' + r.id + '" style="color:var(--ink)"><b>' + esc(r.name) + '</b></a><small class="mono">' + esc(r.cnpj) + '</small></div>' + r.cells.map(function (x) { return '<div class="cell ' + x.kind + '">' + esc(x.text) + '</div>'; }).join("");
       }).join("") + '</div>';
     $("view").innerHTML =
       '<section class="kpis">' + kpis + '</section>' +
@@ -370,8 +403,8 @@ function viewDocumentos(entityId) {
       var last = e.lastQueryAt ? dt(e.lastQueryAt) + '<div class="mut" style="font-size:12px">' + esc((e.lastStatus || "") + " " + (e.lastMessage || "")) + '</div>' : '<span class="mut">nunca</span>';
       var next = !e.hasCertificate ? '<span class="wr">sem certificado</span>' : e.nextAllowedAt && new Date(e.nextAllowedAt) > new Date() ? 'a partir de ' + hm(e.nextAllowedAt) : 'agora';
       if (e.blockedBySequence) next = '<span class="bad st">parada</span><div class="mut" style="font-size:12px">outro sistema já baixa as notas deste CNPJ</div>';
-      var row = '<tr><td><a href="#/documentos/' + e.id + '" style="color:#E6EEF5"><b>' + esc(e.name) + '</b></a><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + e.fullNfe + '</td><td class="num">' + e.summaries + '</td><td class="num">' + e.documents + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="dfe" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar agora</button></td></tr>';
-      if (e.blockedBySequence) row += '<tr><td colspan="7" style="background:#221F12"><b class="wr">Busca parada para não renovar o bloqueio.</b> <span class="mut">Informe o último NSU do sistema que já baixa as notas (ou desligue a busca nele) e a AIRES continua daí, depois da espera de 1 hora.</span><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input id="nsu-' + e.id + '" inputmode="numeric" placeholder="último NSU (ex.: 000000000012345)" style="font:inherit;padding:7px 10px;border-radius:6px;border:1px solid #2A3F55;background:#111F2E;color:#fff;min-width:260px"><button class="warn" data-act="nsu" data-id="' + e.id + '">Usar este NSU</button></div></td></tr>';
+      var row = '<tr><td><a href="#/documentos/' + e.id + '" style="color:var(--ink)"><b>' + esc(e.name) + '</b></a><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + e.fullNfe + '</td><td class="num">' + e.summaries + '</td><td class="num">' + e.documents + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="dfe" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar agora</button></td></tr>';
+      if (e.blockedBySequence) row += '<tr><td colspan="7" style="background:var(--amber-bg)"><b class="wr">Busca parada para não renovar o bloqueio.</b> <span class="mut">Informe o último NSU do sistema que já baixa as notas (ou desligue a busca nele) e a AIRES continua daí, depois da espera de 1 hora.</span><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input id="nsu-' + e.id + '" inputmode="numeric" placeholder="último NSU (ex.: 000000000012345)" style="font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);min-width:260px"><button class="warn" data-act="nsu" data-id="' + e.id + '">Usar este NSU</button></div></td></tr>';
       return row;
     }).join("");
     var docs = r.documents.map(function (x) {
@@ -402,6 +435,51 @@ function nfseHtml(r, entityId) {
   return '<section class="card"><h2>NFS-e do Sistema Nacional</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">Prestadas</th><th class="num">Tomadas</th><th>Última consulta</th><th>Próxima</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
     '<div class="empty">Sequência própria, separada da NF-e. Municípios fora do padrão nacional entram por outro conector.</div>' +
     '<div class="scroll" style="margin-top:10px"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Papel</th><th>Número</th><th>Tomador / prestador</th><th class="num">Valor do serviço</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhuma NFS-e recebida ainda.</td></tr>') + '</tbody></table></div></section>';
+}
+
+/* ---------------- Departamentos ---------------- */
+function agentHtml(a) {
+  var caps = a.capabilities.map(function (c) { return '<span class="cap' + (c.on ? ' on' : '') + '">' + (c.on ? '● ' : '○ ') + esc(c.name) + '</span>'; }).join("");
+  var tag = a.active ? "operando" : a.status === "EM_CONSTRUCAO" ? "em construção" : "não ativo";
+  var act = a.lastAt ? 'última ação ' + hm(a.lastAt) + ' · ' + a.actions24h + ' nas últimas 24 h' : (a.active ? 'sem ação registrada ainda' : '');
+  return '<div class="ag' + (a.active ? ' on' : '') + '"><div class="ah"><span class="lamp"></span>' + esc(a.name) + '<span class="tag">' + tag + '</span></div><p>' + esc(a.summary) + '</p><div class="caps">' + caps + '</div>' + (act ? '<div class="act">' + act + '</div>' : '') + '</div>';
+}
+function deptHtml(d, full) {
+  var pct = d.capabilitiesTotal ? Math.round(100 * d.capabilitiesOn / d.capabilitiesTotal) : 0;
+  var agents = d.agents.map(agentHtml).join("");
+  return '<section class="dept"><div class="dh"><h2>' + (full ? esc(d.name) : '<a href="#/depto/' + d.id + '" style="color:var(--ink)">' + esc(d.name) + '</a>') + '</h2><span class="mut" style="font-size:12px">' + d.activeAgents + ' de ' + d.agents.length + ' agentes operando</span></div>' +
+    '<div class="mut" style="font-size:12px">' + esc(d.summary) + '</div>' +
+    '<div class="meter" title="' + d.capabilitiesOn + ' de ' + d.capabilitiesTotal + ' capacidades ativas"><i style="width:' + pct + '%"></i></div><div class="mut" style="font-size:11px;margin-top:-6px">' + d.capabilitiesOn + ' de ' + d.capabilitiesTotal + ' capacidades ativas (' + pct + '%)</div>' +
+    agents + '</section>';
+}
+function legendHtml() {
+  return '<div class="legend"><span><span class="lamp" style="background:var(--green);box-shadow:0 0 0 3px var(--green-bg)"></span>operando e ativo</span><span><span class="lamp"></span>ainda não ativo</span><span><span class="cap on">● capacidade ativa</span></span><span><span class="cap">○ capacidade a construir</span></span></div>';
+}
+function paintDeptDots(r) {
+  r.departments.forEach(function (d) { var el = $("dd-" + d.id); if (el) el.style.background = d.activeAgents ? "var(--green)" : "var(--red)"; });
+}
+function viewDepartamentos() {
+  setHead("Funcionamento dos agentes", "Cada departamento com seus agentes: verde operando, vermelho ainda não ativo");
+  return getJson("/api/departamentos").then(function (r) {
+    paintDeptDots(r);
+    var all = r.departments.reduce(function (n, d) { return n + d.agents.length; }, 0) + r.shared.length;
+    var on = r.departments.reduce(function (n, d) { return n + d.activeAgents; }, 0) + r.shared.filter(function (a) { return a.active; }).length;
+    var kpis = r.departments.map(function (d) {
+      return '<a class="kpi" href="#/depto/' + d.id + '" style="text-decoration:none;color:inherit"><span>' + esc(d.name) + '</span><b class="mono" style="color:' + (d.activeAgents ? 'var(--green-ink)' : 'var(--red-ink)') + '">' + d.activeAgents + '/' + d.agents.length + '</b><small>agentes operando</small></a>';
+    }).join("");
+    $("view").innerHTML = '<section class="kpis"><div class="kpi"><span>Todos os agentes</span><b class="mono" style="color:var(--green-ink)">' + on + '/' + all + '</b><small>operando</small></div>' + kpis + '</section>' + legendHtml() +
+      '<div class="depts">' + r.departments.map(function (d) { return deptHtml(d, false); }).join("") + '</div>' +
+      '<section class="dept"><div class="dh"><h2>Comum a todos</h2></div>' + r.shared.map(agentHtml).join("") + '</section>';
+  });
+}
+function viewDepto(id) {
+  return getJson("/api/departamentos").then(function (r) {
+    paintDeptDots(r);
+    var d = r.departments.find(function (x) { return x.id === id; });
+    if (!d) { location.hash = "#/departamentos"; return; }
+    setHead(d.name, d.activeAgents + " de " + d.agents.length + " agentes operando · " + d.summary);
+    $("view").innerHTML = legendHtml() + '<div style="max-width:900px">' + deptHtml(d, true) + '</div>';
+  });
 }
 
 /* ---------------- Regras ---------------- */
@@ -503,17 +581,18 @@ document.addEventListener("click", function (ev) {
   if (tc) { var u = $("tl-" + tc.dataset.tl); if (u) u.hidden = !u.hidden; }
 });
 
-var ROUTES = { documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
+var ROUTES = { departamentos: viewDepartamentos, depto: viewDepto, documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
 function route() {
   var parts = location.hash.replace(/^#\\/?/, "").split("/");
   var r = parts[0] || "central";
   if (!ROUTES[r]) r = "central";
-  var navR = r === "empresa" ? "empresas" : r;
+  var navR = r === "empresa" ? "empresas" : r === "depto" ? "depto-" + parts[1] : r;
   Array.prototype.forEach.call(document.querySelectorAll(".nav[data-r]"), function (a) { a.classList.toggle("on", a.dataset.r === navR); });
   return ROUTES[r](parts[1]).catch(function (err) { toast(err.message); });
 }
 window.addEventListener("hashchange", route);
 route();
+getJson("/api/departamentos").then(paintDeptDots).catch(function () {});
 </script>
 </body>
 </html>`;

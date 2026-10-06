@@ -21,7 +21,7 @@ import { AdnDistribution } from "../integrations/nfse/adn.js";
 import { nfseList, nfseStatus, syncAllNfse, syncEntityNfse, type NfseSyncDeps } from "../modules/documents/nfse-sync.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
-import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
+import { casesList, centralData, departmentsData, entitiesList, entityDetail, rulesList } from "./ops.js";
 import { PAGE_HTML } from "./page.js";
 
 /**
@@ -249,6 +249,10 @@ export function createWebServer(deps: WebDeps) {
         const data = await withTenant(deps.appPool, deps.tenantId, (tx) => centralData(tx));
         const used = await billedCallsToday(deps.appPool, deps.tenantId, deps.metering.provider);
         json(res, 200, { office: deps.officeName, billedToday: used, dailyLimit: deps.metering.dailyLimit, ...data });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/departamentos") {
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => departmentsData(tx)));
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/cases") {

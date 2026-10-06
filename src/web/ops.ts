@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { agentName, PIPELINE_STAGES, PROCESSES } from "../platform/agents/catalog.js";
+import { agentName, DEPARTMENTS, PIPELINE_STAGES, PROCESSES, SHARED_AGENTS, type AgentInfo } from "../platform/agents/catalog.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
 import { loadCalendar } from "../modules/regulatory/calendar.js";
@@ -134,8 +134,9 @@ export async function centralData(tx: PoolClient) {
       ORDER BY o.occurred_at DESC LIMIT 30`,
   );
 
-  const operating = new Set(PROCESSES.filter((p) => p.status === "OPERANDO").flatMap((p) => p.agents));
-  const totalAgents = new Set(PROCESSES.flatMap((p) => p.agents));
+  const allAgents = [...DEPARTMENTS.flatMap((d) => d.agents), ...SHARED_AGENTS];
+  const operating = new Set(allAgents.filter((a) => a.status === "OPERANDO").map((a) => a.id));
+  const totalAgents = new Set(allAgents.map((a) => a.id));
   const nEntities = entities.rows.length;
 
   const stageFor = (e: (typeof entities.rows)[number]) =>
@@ -401,5 +402,59 @@ export async function entityDetail(tx: PoolClient, entityId: string) {
     obligations: obl.rows.map((o) => ({ ...o, next: nextDueDates(o.due, today, 2, o.valid_from, calendar) })),
     checklist: pend.rows.map((p) => ({ ...p, caseType: p.case_type ? caseTypePt(p.case_type) : null })),
     cases: cases.rows.map((c) => ({ id: c.id, type: caseTypePt(c.type), status: c.status, statusPt: statusPt(c.status), updatedAt: c.updated_at.toISOString() })),
+  };
+}
+
+/** Ids que um agente usa no barramento e na auditoria (inclui nomes antigos). */
+const AGENT_ALIASES: Record<string, string[]> = {
+  onboarding: ["onboarding", "one-onboarding"],
+  search: ["search", "one-search"],
+  "case-engine": ["case-engine", "pending-engine"],
+};
+
+/** Painel "Funcionamento dos agentes": departamentos, agentes, capacidades e atividade real. */
+export async function departmentsData(tx: PoolClient) {
+  const { rows } = await tx.query<{ id: string; last_at: Date | null; n24: number; n7: number }>(
+    `WITH acts AS (
+       SELECT producer->>'name' AS id, occurred_at AS at FROM outbox
+       UNION ALL
+       SELECT actor_id, occurred_at FROM audit_log WHERE actor_kind = 'AGENT'
+     )
+     SELECT id, max(at) AS last_at,
+            count(*) FILTER (WHERE at > now() - interval '24 hours')::int AS n24,
+            count(*) FILTER (WHERE at > now() - interval '7 days')::int AS n7
+       FROM acts GROUP BY id`,
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const activity = (a: AgentInfo) => {
+    const ids = AGENT_ALIASES[a.id] ?? [a.id];
+    let last: Date | null = null;
+    let n24 = 0;
+    let n7 = 0;
+    for (const id of ids) {
+      const r = byId.get(id);
+      if (!r) continue;
+      n24 += r.n24;
+      n7 += r.n7;
+      if (r.last_at && (!last || r.last_at > last)) last = r.last_at;
+    }
+    return { lastAt: last ? last.toISOString() : null, actions24h: n24, actions7d: n7 };
+  };
+  const view = (a: AgentInfo) => ({ ...a, active: a.status === "OPERANDO", ...activity(a) });
+  return {
+    departments: DEPARTMENTS.map((d) => {
+      const agents = d.agents.map(view);
+      const caps = d.agents.flatMap((a) => a.capabilities);
+      return {
+        id: d.id,
+        name: d.name,
+        summary: d.summary,
+        agents,
+        activeAgents: agents.filter((a) => a.active).length,
+        capabilitiesOn: caps.filter((c) => c.on).length,
+        capabilitiesTotal: caps.length,
+      };
+    }),
+    shared: SHARED_AGENTS.map(view),
   };
 }
