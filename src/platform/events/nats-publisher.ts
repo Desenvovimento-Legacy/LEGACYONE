@@ -13,7 +13,7 @@ export class NatsPublisher implements EventPublisher {
   private constructor(private readonly nc: NatsConnection) {}
 
   static async connect(url: string): Promise<NatsPublisher> {
-    const nc = await connect({ servers: url, name: "iaris-relay" });
+    const nc = await connect({ servers: url, name: "aires-relay" });
     const jsm = await nc.jetstreamManager();
     const existing = await jsm.streams.info(STREAM).catch(() => null);
     if (!existing) {

@@ -61,7 +61,7 @@ describe("normalização da base pública de CNPJ", () => {
   });
 });
 
-describe("One Onboarding: Case CLIENT_ONBOARDING pelo CNPJ", () => {
+describe("Agente de implantação (onboarding): Case CLIENT_ONBOARDING pelo CNPJ", () => {
   it("monta o perfil completo e só pede ao humano o que não pode inferir", async () => {
     const t = await newTenant();
     const r = await onboardByCnpj(deps(), t, { cnpj: "12.abc.345/01de-35", requester: "luan" });

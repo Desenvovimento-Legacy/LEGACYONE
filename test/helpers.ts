@@ -18,7 +18,7 @@ afterAll(async () => {
 });
 
 export const SYSTEM: Actor = { kind: "SYSTEM", id: "test-suite" };
-export const AGENT: Actor = { kind: "AGENT", id: "one-orchestrator", model: "test-model" };
+export const AGENT: Actor = { kind: "AGENT", id: "orchestrator", model: "test-model" };
 
 /** Escritório novo e isolado para cada teste. */
 export async function newTenant(label = "escritorio"): Promise<string> {

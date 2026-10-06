@@ -87,7 +87,7 @@ export class CnpjaOpenSource implements CnpjPublicDataSource {
     if (!isValidCnpj(cnpj)) throw new Error(`CNPJ inválido: ${input}`);
     const res = await fetch(`${this.baseUrl}/${cnpj}`, {
       signal: AbortSignal.timeout(30_000),
-      headers: { accept: "application/json", "user-agent": "iaris/0.1 (+https://github.com/Desenvovimento-Legacy)" },
+      headers: { accept: "application/json", "user-agent": "aires/0.1 (+https://github.com/Desenvovimento-Legacy)" },
     });
     if (res.status === 404) throw new CnpjNotFoundError(cnpj);
     if (!res.ok) throw new Error(`CNPJá respondeu ${res.status} para o CNPJ ${cnpj}`);

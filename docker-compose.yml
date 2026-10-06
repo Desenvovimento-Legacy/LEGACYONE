@@ -1,4 +1,4 @@
-# Ambiente local de desenvolvimento do IARIS.
+# Ambiente local de desenvolvimento do AIRES.
 #
 #   docker compose up -d                      Postgres + NATS (suficiente para a Fase 0)
 #   docker compose --profile workflow up -d   + Temporal e Temporal UI (Fase 1)

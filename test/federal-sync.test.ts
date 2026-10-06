@@ -132,7 +132,7 @@ async function entityWithPoa(scopes: string[] = ["TODOS"]) {
 
 const count = (t: string, sql: string) => withTenant(appPool, t, async (tx) => (await tx.query(sql)).rows[0].n as number);
 
-describe("One Search: dados federais do Simples e pagamentos", () => {
+describe("Agente de busca (search): dados federais do Simples e pagamentos", () => {
   const data = () => ({
     [CNPJ_MATRIZ]: {
       declarations: [declaration("2025-05-01", "00000000202505001"), declaration("2025-06-01", "00000000202506001"), declaration("2025-06-01", "00000000202506002", "RETIFICADORA")],

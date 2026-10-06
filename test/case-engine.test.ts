@@ -26,7 +26,7 @@ describe("Case Engine (critério de saída da Fase 0)", () => {
     );
     expect(created).toBe(true);
     expect(c.status).toBe("OPEN");
-    expect(c.owner_agent).toBe("one-ledger");
+    expect(c.owner_agent).toBe("ledger");
     expect(c.competence).toBe("2026-09-01");
 
     for (const to of ["IN_PROGRESS", "WAITING_CLIENT", "IN_PROGRESS", "IN_REVIEW", "COMPLETED"] as const) {
@@ -95,7 +95,7 @@ describe("Case Engine (critério de saída da Fase 0)", () => {
   it("recusa transição fora da máquina de estados, sem efeitos colaterais", async () => {
     const t = await newTenant();
     const { case: c } = await withTenant(appPool, t, (tx) =>
-      openCase(tx, { type: "EXCEPTION", idempotencyKey: "exc-1", origin: "one-reconciliation", requester: "agent" }, AGENT),
+      openCase(tx, { type: "EXCEPTION", idempotencyKey: "exc-1", origin: "reconciliation", requester: "agent" }, AGENT),
     );
     await expect(
       withTenant(appPool, t, (tx) => transitionCase(tx, { caseId: c.id, to: "COMPLETED" }, AGENT)),

@@ -1,8 +1,8 @@
 {
-  "name": "iaris",
+  "name": "aires",
   "version": "0.1.0",
   "private": true,
-  "description": "IARIS — Inteligência Artificial para Resultados, Integração e Soluções",
+  "description": "AIRES — sistema operacional contábil autônomo",
   "type": "module",
   "engines": {
     "node": ">=22"

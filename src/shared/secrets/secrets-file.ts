@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 /**
  * Credential Vault — backend de arquivo local (fase piloto).
  *
- * Lê um arquivo KEY=VALOR fora do repositório (ex.: C:\IARIS-COFRE\segredos.env,
+ * Lê um arquivo KEY=VALOR fora do repositório (ex.: C:\AIRES-COFRE\segredos.env,
  * com ACL restrita ao usuário). Regras:
  *  - os valores nunca são impressos, logados, serializados nem enviados a LLM;
  *  - quem precisa de um segredo pede pelo nome e recebe só aquele valor;
@@ -78,11 +78,17 @@ export function secretStoreFromText(text: string, location = "memória"): Secret
   return new FileSecretStore(location, parseSecrets(text));
 }
 
-/** Caminho padrão do cofre: IARIS_SECRETS_FILE, ou C:\IARIS-COFRE\segredos.env no Windows. */
+/**
+ * Caminho padrão do cofre: AIRES_SECRETS_FILE, ou C:\AIRES-COFRE\segredos.env no
+ * Windows (com C:\IARIS-COFRE, nome anterior do produto, como alternativa).
+ */
 export function defaultSecretsPath(): string | null {
-  if (process.env.IARIS_SECRETS_FILE) return process.env.IARIS_SECRETS_FILE;
-  if (process.platform === "win32") return "C:\\IARIS-COFRE\\segredos.env";
-  return null;
+  const env = process.env.AIRES_SECRETS_FILE ?? process.env.IARIS_SECRETS_FILE;
+  if (env) return env;
+  if (process.platform !== "win32") return null;
+  const current = "C:\\AIRES-COFRE\\segredos.env";
+  const previous = "C:\\IARIS-COFRE\\segredos.env";
+  return existsSync(current) || !existsSync(previous) ? current : previous;
 }
 
 /** Abre o cofre; devolve null se o arquivo não existir. */

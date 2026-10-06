@@ -12,7 +12,7 @@ if (isMain(import.meta.url)) {
   const [cnpj] = process.argv.slice(2);
   try {
     const store = openSecretsFile();
-    if (!store) throw new Error(`Cofre não encontrado em ${defaultSecretsPath() ?? "(defina IARIS_SECRETS_FILE)"}`);
+    if (!store) throw new Error(`Cofre não encontrado em ${defaultSecretsPath() ?? "(defina AIRES_SECRETS_FILE)"}`);
 
     const v = checkVault(store);
     console.log(`Cofre: ${v.location}`);

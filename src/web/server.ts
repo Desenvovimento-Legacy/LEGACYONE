@@ -15,13 +15,13 @@ import { openSecretsFile } from "../shared/secrets/secrets-file.js";
 import { PAGE_HTML } from "./page.js";
 
 /**
- * Tela local do IARIS (piloto). Escuta só em 127.0.0.1.
+ * Tela local do AIRES (piloto). Escuta só em 127.0.0.1.
  *
  * Regra de custo: abrir a tela, trocar de competência ou de empresa só lê o
  * banco. A única rota que consulta o SERPRO é POST .../buscar, disparada pelo
  * botão Buscar, que exige confirmação e respeita o teto diário.
  * Proteção contra outro site disparar consultas: a rota exige o cabeçalho
- * X-IARIS-Acao (força preflight de CORS, que este servidor nunca libera) e
+ * X-AIRES-Acao (força preflight de CORS, que este servidor nunca libera) e
  * Origin igual ao da própria tela.
  */
 
@@ -167,7 +167,7 @@ export function createWebServer(deps: WebDeps) {
         isCompetence(parts[4]) &&
         parts[5] === "buscar"
       ) {
-        if (req.headers["x-iaris-acao"] !== "buscar" || !sameOrigin(req, deps.port)) {
+        if (req.headers["x-aires-acao"] !== "buscar" || !sameOrigin(req, deps.port)) {
           json(res, 403, { erro: "Requisição recusada" });
           return;
         }
@@ -200,7 +200,7 @@ export function createWebServer(deps: WebDeps) {
 }
 
 if (isMain(import.meta.url)) {
-  const port = Number(process.env.IARIS_WEB_PORT ?? 3100);
+  const port = Number(process.env.AIRES_WEB_PORT ?? 3100);
   const slug = process.env.LEGACY_TENANT ?? "contabilidade-legacy";
   const admin = createPool(config.adminDatabaseUrl(), 1);
   const app = createPool(config.databaseUrl(), 4);
@@ -221,7 +221,7 @@ if (isMain(import.meta.url)) {
     port,
   };
   createWebServer(deps).listen(port, "127.0.0.1", () => {
-    console.log(`IARIS aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
+    console.log(`AIRES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
     console.log(`Teto de consultas cobradas por dia: ${deps.metering.dailyLimit}. Abrir a tela não consulta o SERPRO.`);
   });
 }

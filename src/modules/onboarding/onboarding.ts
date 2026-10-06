@@ -16,7 +16,7 @@ import { entityTypeFromLegalNature } from "../registry/legal-nature.js";
 import { createClient, createEntity, setEntityType, setTaxRegime } from "../registry/registry.js";
 
 /**
- * One Onboarding — Case CLIENT_ONBOARDING a partir do CNPJ.
+ * Agente de implantação (onboarding) — Case CLIENT_ONBOARDING a partir do CNPJ.
  *
  * Quem inicia: pedido do cliente ou do escritório (só o CNPJ).
  * O que faz sozinho: busca dados públicos, monta o perfil temporal da entidade
@@ -27,8 +27,8 @@ import { createClient, createEntity, setEntityType, setTaxRegime } from "../regi
  * Reexecução é segura: não duplica entidade, pendência nem evento.
  */
 
-export const ONBOARDING_AGENT: Actor = { kind: "AGENT", id: "one-onboarding" };
-const PRODUCER = { kind: "agent", name: "one-onboarding", version: "0.1.0" } as const;
+export const ONBOARDING_AGENT: Actor = { kind: "AGENT", id: "onboarding" };
+const PRODUCER = { kind: "agent", name: "onboarding", version: "0.1.0" } as const;
 
 export interface OnboardingDeps {
   appPool: Pool;

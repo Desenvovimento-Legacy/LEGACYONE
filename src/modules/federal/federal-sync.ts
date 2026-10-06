@@ -10,7 +10,7 @@ import { reserveBilledCalls, type MeteringPolicy } from "../../platform/metering
 import type { IntegraContador, IntegraContadorResult, PgdasYearIndex } from "../../integrations/integra-contador/types.js";
 
 /**
- * One Search (dados federais): traz do Integra Contador as declarações PGDAS-D,
+ * Agente de busca (search) (dados federais): traz do Integra Contador as declarações PGDAS-D,
  * os DAS e os pagamentos federais (PagtoWeb).
  *
  * Dois modos:
@@ -25,8 +25,8 @@ import type { IntegraContador, IntegraContadorResult, PgdasYearIndex } from "../
  * Reexecução não duplica. Nada aqui calcula tributo: são fatos lidos da Receita.
  */
 
-export const FEDERAL_AGENT: Actor = { kind: "AGENT", id: "one-search" };
-const PRODUCER = { kind: "agent", name: "one-search", version: "0.1.0" } as const;
+export const FEDERAL_AGENT: Actor = { kind: "AGENT", id: "search" };
+const PRODUCER = { kind: "agent", name: "search", version: "0.1.0" } as const;
 
 /** Nomes dos serviços no cadastro de procuração do e-CAC. */
 const SERVICE_PGDAS = "PGDAS-D - a partir de 01/2018";

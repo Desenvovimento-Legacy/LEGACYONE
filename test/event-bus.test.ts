@@ -128,7 +128,7 @@ describe("Event Bus: inbox idempotente", () => {
     let runs = 0;
     const handle = () =>
       withTenant(appPool, env.tenant_id, (tx) =>
-        processOnce(tx, "one-orchestrator", env, async () => {
+        processOnce(tx, "orchestrator", env, async () => {
           runs++;
         }),
       );

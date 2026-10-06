@@ -1,7 +1,6 @@
-# IARIS — instruções para agentes de código
+# AIRES — instruções para agentes de código
 
-Plataforma contábil autônoma, multi-tenant, orientada a eventos. Nome do produto: IARIS
-(Inteligência Artificial para Resultados, Integração e Soluções). Identificadores técnicos
+Plataforma contábil autônoma, multi-tenant, orientada a eventos. Nome do produto: AIRES (antes IARIS). Identificadores técnicos
 antigos (`legacy_one`, `legacy_*`, `legacy.t.*`) ficam como estão. Filosofia:
 **automação primeiro, evidência sempre, humano por exceção.**
 

@@ -7,7 +7,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IARIS — Receita Federal</title>
+<title>AIRES — Receita Federal</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #fff; --ink: #14171f; --muted: #5d6573; --line: #e3e6eb;
@@ -53,7 +53,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
 </head>
 <body>
 <header>
-  <span class="logo">IARIS</span><span class="office" id="office"></span>
+  <span class="logo">AIRES</span><span class="office" id="office"></span>
   <span class="spacer"></span>
   <span class="meter" id="meter" title="Consultas cobradas pelo SERPRO hoje, contra o teto diário do escritório">Consultas hoje: –</span>
 </header>
@@ -184,7 +184,7 @@ async function buscar(id) {
   if (!window.confirm(msg)) return;
   busy = true; render();
   try {
-    const r = await fetch("/api/empresa/" + id + "/competencia/" + comp + "/buscar", { method: "POST", headers: { "X-IARIS-Acao": "buscar" } });
+    const r = await fetch("/api/empresa/" + id + "/competencia/" + comp + "/buscar", { method: "POST", headers: { "X-AIRES-Acao": "buscar" } });
     const body = await r.json();
     if (!r.ok) throw new Error(body.erro || ("HTTP " + r.status));
     toast("Busca concluída: " + body.calls + " consultas cobradas.");

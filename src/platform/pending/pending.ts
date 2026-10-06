@@ -31,7 +31,7 @@ export interface PendingItemRow {
 /**
  * Pending Engine: registra o que falta para um processo seguir. Idempotente:
  * a mesma pendência aberta (entidade + tipo) não é duplicada.
- * One Relationship agrupa as pendências do cliente em uma única solicitação.
+ * Agente de relacionamento agrupa as pendências do cliente em uma única solicitação.
  */
 export async function openPendingItem(
   tx: PoolClient,

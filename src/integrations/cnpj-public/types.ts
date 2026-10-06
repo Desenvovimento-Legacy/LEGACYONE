@@ -1,6 +1,6 @@
 /**
  * Dados cadastrais públicos de um CNPJ, já normalizados para o modelo do
- * IARIS. Qualquer fonte (BrasilAPI, Receita, provedor pago) devolve
+ * AIRES. Qualquer fonte (BrasilAPI, Receita, provedor pago) devolve
  * este formato, mais a resposta bruta para guardar como evidência.
  */
 export interface PublicCompanyData {
