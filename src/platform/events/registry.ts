@@ -116,6 +116,23 @@ export const EventContracts = {
       replaced: z.number().int(),
     }),
   },
+  DFE_BATCH_RECEIVED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      documents: z.number().int(),
+      kinds: z.record(z.string(), z.number().int()),
+      ult_nsu: z.string().nullable(),
+      max_nsu: z.string().nullable(),
+    }),
+  },
+  NFE_MANIFESTATION_APPROVED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      event_type: z.string(),
+      access_keys: z.array(z.string()).min(1),
+      approved_by: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

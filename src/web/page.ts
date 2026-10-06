@@ -116,6 +116,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
     <div class="grp"><span>CLIENTES</span>
       <a class="nav" href="#/empresas" data-r="empresas"><span class="dot" style="background:#3FC1B4"></span>Empresas</a>
       <a class="nav" href="#/receita" data-r="receita"><span class="dot" style="background:#3FC1B4"></span>Receita Federal</a>
+      <a class="nav" href="#/documentos" data-r="documentos"><span class="dot" style="background:#3FC1B4"></span>Documentos fiscais</a>
     </div>
     <div class="grp"><span>CONTROLE</span>
       <a class="nav" href="#/regras" data-r="regras"><span class="dot" style="background:#3FC1B4"></span>Regras e legislação</a>
@@ -167,6 +168,9 @@ function queueItemHtml(q) {
   }
   if (q.kind === "rules") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex;background:#E8A33D;color:#1B1206;font-weight:700" href="#/regras">Revisar e aprovar regras</a></div></div>';
+  }
+  if (q.kind === "ciencia") {
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="warn" data-act="ciencia" data-id="' + q.id + '">Aprovar ciência</button><a class="nav" style="display:inline-flex" href="#/documentos/' + q.id + '">Ver as notas</a></div></div>';
   }
   if (q.kind === "approve") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><button class="warn" data-act="approve" data-id="' + q.id + '">Aprovar conclusão</button></div></div>';
@@ -338,6 +342,29 @@ function viewEmpresa(id) {
   });
 }
 
+/* ---------------- Documentos fiscais ---------------- */
+var KIND = { NFE: "NF-e completa", RES_NFE: "resumo de NF-e", EVENTO: "evento", RES_EVENTO: "resumo de evento", OUTRO: "outro" };
+var CI = { APROVADA: "ciência aprovada · envio à SEFAZ pendente", ENVIADA: "ciência enviada", REGISTRADA: "ciência registrada", REJEITADA: "ciência rejeitada" };
+function viewDocumentos(entityId) {
+  setHead("Documentos fiscais", "NF-e e eventos que a SEFAZ distribui para cada empresa. A busca é automática e não tem custo.");
+  return getJson("/api/documentos" + (entityId ? "?empresa=" + entityId : "")).then(function (r) {
+    var st = r.status.map(function (e) {
+      var last = e.lastQueryAt ? dt(e.lastQueryAt) + '<div class="mut" style="font-size:12px">' + esc((e.lastStatus || "") + " " + (e.lastMessage || "")) + '</div>' : '<span class="mut">nunca</span>';
+      var next = !e.hasCertificate ? '<span class="wr">sem certificado</span>' : e.nextAllowedAt && new Date(e.nextAllowedAt) > new Date() ? 'a partir de ' + hm(e.nextAllowedAt) : 'agora';
+      return '<tr><td><a href="#/documentos/' + e.id + '" style="color:#E6EEF5"><b>' + esc(e.name) + '</b></a><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + e.fullNfe + '</td><td class="num">' + e.summaries + '</td><td class="num">' + e.documents + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="dfe" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar agora</button></td></tr>';
+    }).join("");
+    var docs = r.documents.map(function (x) {
+      var what = x.kind === "EVENTO" || x.kind === "RES_EVENTO" ? esc(x.eventDesc || ("evento " + (x.eventType || ""))) : esc(KIND[x.kind] || x.kind) + (x.situation === "3" ? ' <span class="bad">cancelada</span>' : x.situation === "2" ? ' <span class="bad">denegada</span>' : '');
+      var ci = x.kind !== "RES_NFE" ? "" : x.hasFull ? '<span class="ok">XML completo</span>' : x.ciencia ? '<span class="wr">' + esc(CI[x.ciencia] || x.ciencia) + '</span>' : x.situation === "1" ? '<span class="wr">aguarda sua ciência</span>' : '';
+      return '<tr><td>' + (x.issuedAt ? dt(x.issuedAt) : "—") + '</td><td>' + esc(x.entity) + '</td><td><b>' + esc(x.issuerName || "—") + '</b><div class="mut mono" style="font-size:11px">' + esc(x.issuerDoc || "") + '</div></td><td>' + what + '<div>' + ci + '</div></td><td class="num">' + (x.total ? brl(x.total) : "—") + '</td><td class="mono" style="font-size:11px">' + esc(x.accessKey || "") + '</td></tr>';
+    }).join("");
+    $("view").innerHTML = '<section class="card"><h2>Busca na SEFAZ por empresa</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">NF-e completas</th><th class="num">Resumos</th><th class="num">Documentos</th><th>Última consulta</th><th>Próxima consulta</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
+      '<div class="empty">Regra da SEFAZ: sem nota nova, a próxima consulta só depois de 1 hora (fora disso o CNPJ fica bloqueado por 1 hora). A AIRES segue essa regra sozinha.</div></section>' +
+      '<section class="card"><h2>' + (entityId ? "Documentos da empresa" : "Documentos recebidos") + ' (' + r.documents.length + ')</h2>' + (entityId ? '<div style="margin-bottom:8px"><a href="#/documentos">ver todas as empresas</a></div>' : '') +
+      '<div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Emitente</th><th>Documento</th><th class="num">Valor</th><th>Chave</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhum documento recebido ainda.</td></tr>') + '</tbody></table></div></section>';
+  });
+}
+
 /* ---------------- Regras ---------------- */
 function viewRegras() {
   setHead("Regras e legislação", "Catálogo de obrigações. Nenhuma regra vale sem a aprovação do responsável técnico.");
@@ -385,6 +412,18 @@ document.addEventListener("click", function (ev) {
         }).join("") + '</tbody></table>';
       }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; });
     }
+    if (b.dataset.act === "dfe") {
+      b.disabled = true;
+      post("/api/empresa/" + id + "/notas/buscar", "buscar-notas").then(function (r) {
+        var msg = r.outcome === "aguardando" ? "A SEFAZ só pode ser consultada de novo a partir de " + hm(r.nextAllowedAt) + "." : r.outcome === "sem_certificado" ? "Sem certificado utilizável no cofre." : r.outcome === "erro" ? "Falha na consulta: " + r.statusMessage : r.documents + " documento(s) novo(s) em " + r.calls + " consulta(s). SEFAZ: " + r.statusCode + " " + (r.statusMessage || "");
+        toast(msg);
+      }).catch(function (err) { toast(err.message); }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "ciencia") {
+      if (!window.confirm("Aprovar a ciência da operação para todas as NF-e desta empresa que aguardam?\\n\\nCiência não confirma nem recusa a operação: só libera o XML completo. A aprovação fica na auditoria em seu nome.")) return;
+      b.disabled = true;
+      post("/api/empresa/" + id + "/ciencia/aprovar", "aprovar").then(function (r) { toast(r.approved + " NF-e com ciência aprovada. O envio à SEFAZ entra na próxima etapa."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
+    }
     if (b.dataset.act === "approve") {
       if (!window.confirm("Aprovar a conclusão deste Case?\\n\\nA aprovação fica registrada na auditoria em seu nome.")) return;
       b.disabled = true;
@@ -402,7 +441,7 @@ document.addEventListener("click", function (ev) {
   if (tc) { var u = $("tl-" + tc.dataset.tl); if (u) u.hidden = !u.hidden; }
 });
 
-var ROUTES = { central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
+var ROUTES = { documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
 function route() {
   var parts = location.hash.replace(/^#\\/?/, "").split("/");
   var r = parts[0] || "central";

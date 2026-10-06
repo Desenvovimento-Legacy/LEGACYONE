@@ -12,7 +12,10 @@ import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile, type SecretStore } from "../shared/secrets/secrets-file.js";
-import { clientCertificatesDir, clientPasswordKey, syncClientCertificates } from "../platform/identity/client-certificates.js";
+import { clientCertificatesDir, clientPasswordKey, loadClientCertificate, syncClientCertificates } from "../platform/identity/client-certificates.js";
+import { SefazDistribution } from "../integrations/sefaz/dist-dfe.js";
+import { syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
+import { approveCiencia, dfeStatus, documentsList } from "../modules/documents/documents.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
 import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
@@ -38,6 +41,8 @@ export interface WebDeps {
   port: number;
   /** Cofre local (certificados dos clientes). Nulo = sem cofre. */
   vault?: SecretStore | null;
+  /** Busca de NF-e na SEFAZ. Nulo = sem cofre/certificados. */
+  dfe?: DfeSyncDeps | null;
 }
 
 const USER: Actor = { kind: "USER", id: process.env.USERNAME ?? process.env.USER ?? "tela-local" };
@@ -271,6 +276,30 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
 
+      // ---------------------------------------------------------------- Documentos (SEFAZ)
+      if (req.method === "GET" && url.pathname === "/api/documentos") {
+        const entityId = url.searchParams.get("empresa");
+        const data = await withTenant(deps.appPool, deps.tenantId, async (tx) => ({
+          status: await dfeStatus(tx),
+          documents: await documentsList(tx, { entityId: entityId && /^[0-9a-f-]{36}$/.test(entityId) ? entityId : null }),
+        }));
+        json(res, 200, { configured: Boolean(deps.dfe), ...data });
+        return;
+      }
+      // POST /api/empresa/:id/notas/buscar — consulta a SEFAZ (sem custo), respeitando a regra de 1 h.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "notas" && parts[4] === "buscar") {
+        if (!actionAllowed(req, deps.port, "buscar-notas")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!deps.dfe) return json(res, 409, { erro: "Busca de notas não configurada (cofre ausente)" });
+        json(res, 200, await syncEntityDfe(deps.dfe, deps.tenantId, parts[2]!, USER));
+        return;
+      }
+      // POST /api/empresa/:id/ciencia/aprovar — decisão humana: ciência da operação das NF-e que aguardam.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "ciencia" && parts[4] === "aprovar") {
+        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        json(res, 200, await approveCiencia(deps.appPool, deps.tenantId, parts[2]!, USER));
+        return;
+      }
+
       // POST /api/pendencia/:id/servicos — decisão humana: serviços e início da responsabilidade
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "pendencia" && parts[3] === "servicos") {
         if (!actionAllowed(req, deps.port, "confirmar")) return json(res, 403, { erro: "Requisição recusada" });
@@ -331,9 +360,38 @@ if (isMain(import.meta.url)) {
     metering: vault ? serproMetering(vault) : { provider: SERPRO_PROVIDER, dailyLimit: 0 },
     port,
     vault,
+    dfe: vault
+      ? {
+          appPool: app,
+          dist: new SefazDistribution(),
+          // Relê o cofre a cada busca: certificado ou senha trocados já valem.
+          certificates: (cnpj: string) => loadClientCertificate(openSecretsFile(vault.location) ?? vault, cnpj),
+        }
+      : null,
   };
+  // Agente Documentos: busca automática na SEFAZ (sem custo). Cada empresa só é
+  // consultada quando a regra de espera de 1 h permite.
+  if (deps.dfe && process.env.AIRES_DFE_AUTO !== "0") {
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        for (const r of await syncAllDfe(deps.dfe!, deps.tenantId)) {
+          if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
+        }
+      } catch (err) {
+        console.error(`[docs] falha na busca automática: ${(err as Error).message}`);
+      } finally {
+        running = false;
+      }
+    };
+    setTimeout(tick, 15_000);
+    setInterval(tick, 5 * 60_000);
+  }
   createWebServer(deps).listen(port, "127.0.0.1", () => {
     console.log(`AIRES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
+    if (deps.dfe && process.env.AIRES_DFE_AUTO !== "0") console.log("Busca de NF-e na SEFAZ: automática (sem custo; respeita 1 h de espera por empresa).");
     console.log(`Teto de consultas cobradas por dia: ${deps.metering.dailyLimit}. Abrir a tela não consulta o SERPRO.`);
   });
 }

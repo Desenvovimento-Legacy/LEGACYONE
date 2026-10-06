@@ -271,3 +271,25 @@ export async function syncClientCertificates(
   }
   return out;
 }
+
+/**
+ * Certificado para TLS mútuo com órgão externo: o arquivo do CNPJ que abre com a
+ * senha do cofre, é da mesma raiz e vence por último. Fica só em memória.
+ * Devolve null (sem detalhes) quando não há certificado utilizável.
+ */
+export function loadClientCertificate(store: SecretStore, cnpj: string, now = new Date()): { pfx: Buffer; passphrase: string; validTo: Date } | null {
+  if (!store.has(clientPasswordKey(cnpj))) return null;
+  const passphrase = store.require(clientPasswordKey(cnpj));
+  let best: { pfx: Buffer; passphrase: string; validTo: Date } | null = null;
+  for (const f of findClientCertificateFiles(store, cnpj)) {
+    try {
+      const pfx = readFileSync(f);
+      const i = inspectPfx(pfx, passphrase);
+      if (!i.holderDocument || i.holderDocument.slice(0, 8) !== cnpj.slice(0, 8) || i.validTo <= now) continue;
+      if (!best || i.validTo > best.validTo) best = { pfx, passphrase, validTo: i.validTo };
+    } catch {
+      // arquivo que não abre não serve; a conferência (syncClientCertificates) explica o motivo
+    }
+  }
+  return best;
+}

@@ -24,6 +24,7 @@
     "cert:check": "tsx --env-file-if-exists=.env src/cli/cert-check.ts"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.11.2",
     "nats": "^2.29.3",
     "pg": "^8.23.1",
     "uuid": "^14.0.2",

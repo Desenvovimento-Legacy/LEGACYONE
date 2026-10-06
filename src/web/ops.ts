@@ -3,6 +3,7 @@ import { agentName, PIPELINE_STAGES, PROCESSES } from "../platform/agents/catalo
 import { formatCnpj } from "../shared/br/documents.js";
 import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
 import { loadCalendar } from "../modules/regulatory/calendar.js";
+import { cienciaQueue } from "../modules/documents/documents.js";
 
 /**
  * Leituras da seção Operação (Central de agentes, Fila humana, Cases).
@@ -71,6 +72,13 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `Serviços ${(p.services as string[]).map((s) => SERVICE_PT[s] ?? s).join(", ")} desde ${fmtDate(String(p.valid_from))}`;
     case "DIGITAL_CERTIFICATE_REGISTERED":
       return `Certificado A1 conferido no cofre, válido até ${fmtDate(String(p.valid_to))}${p.replaced ? " (substitui o anterior)" : ""}`;
+    case "DFE_BATCH_RECEIVED": {
+      const k = (p.kinds ?? {}) as Record<string, number>;
+      const parts = [k.NFE && `${k.NFE} NF-e completa(s)`, k.RES_NFE && `${k.RES_NFE} resumo(s) de NF-e`, (k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0) && `${(k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0)} evento(s)`].filter(Boolean);
+      return `SEFAZ: ${parts.join(", ") || `${p.documents} documento(s)`}`;
+    }
+    case "NFE_MANIFESTATION_APPROVED":
+      return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
       return type;
   }
@@ -84,8 +92,14 @@ export async function centralData(tx: PoolClient) {
     onboarding_status: string | null;
     has_pgdas: boolean;
     has_cert: boolean;
+    dfe_docs: number;
+    awaiting: number;
   }>(
     `SELECT e.id, coalesce(e.trade_name, e.legal_name) AS name, e.cnpj,
+            (SELECT count(*)::int FROM dfe_document x WHERE x.entity_id = e.id AND x.kind IN ('NFE', 'RES_NFE')) AS dfe_docs,
+            (SELECT count(*)::int FROM dfe_document r WHERE r.entity_id = e.id AND r.kind = 'RES_NFE' AND r.situation = '1'
+               AND NOT EXISTS (SELECT 1 FROM dfe_document f WHERE f.entity_id = r.entity_id AND f.kind = 'NFE' AND f.access_key = r.access_key)
+               AND NOT EXISTS (SELECT 1 FROM nfe_manifestation m WHERE m.entity_id = r.entity_id AND m.access_key = r.access_key)) AS awaiting,
             (SELECT c.status FROM "case" c WHERE c.entity_id = e.id AND c.type = 'CLIENT_ONBOARDING'
               ORDER BY c.created_at DESC LIMIT 1) AS onboarding_status,
             EXISTS (SELECT 1 FROM pgdas_declaration d WHERE d.entity_id = e.id) AS has_pgdas,
@@ -127,7 +141,9 @@ export async function centralData(tx: PoolClient) {
           return { kind: "run", text: s ? statusPt(s) : "não iniciada" };
         }
         case "Documentos":
-          return e.has_cert ? { kind: "run", text: "certificado ok · conector em construção" } : { kind: "wait", text: "aguarda certificado A1" };
+          if (!e.has_cert) return { kind: "wait", text: "aguarda certificado A1" };
+          if (e.awaiting) return { kind: "wait", text: `${e.awaiting} NF-e aguardando ciência` };
+          return { kind: e.dfe_docs ? "done" : "run", text: e.dfe_docs ? `${e.dfe_docs} NF-e recebidas` : "busca SEFAZ ativa" };
         case "Tributos":
           return e.has_pgdas ? { kind: "done", text: "Receita sincronizada" } : { kind: "future", text: "Fase 5" };
         default: {
@@ -211,8 +227,20 @@ export async function humanQueue(tx: PoolClient) {
           since: (r0.since ?? new Date()).toISOString(),
         }]
       : [];
+  const ciencia = (await cienciaQueue(tx)).map((c) => ({
+    kind: "ciencia",
+    id: c.entity_id,
+    type: "NFE_CIENCIA",
+    entityId: c.entity_id,
+    entity: c.entity,
+    caseId: null,
+    title: `${c.n} NF-e de entrada aguardando ciência da operação`,
+    impact: `Total ${Number(c.total ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}. Sem a ciência, a SEFAZ entrega só o resumo; com ela, o XML completo.`,
+    since: (c.oldest ?? new Date()).toISOString(),
+  }));
   return [
     ...catalog,
+    ...ciencia,
     ...pend.rows.map((p) => ({
       kind: p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       id: p.id,
