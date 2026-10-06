@@ -351,7 +351,10 @@ function viewDocumentos(entityId) {
     var st = r.status.map(function (e) {
       var last = e.lastQueryAt ? dt(e.lastQueryAt) + '<div class="mut" style="font-size:12px">' + esc((e.lastStatus || "") + " " + (e.lastMessage || "")) + '</div>' : '<span class="mut">nunca</span>';
       var next = !e.hasCertificate ? '<span class="wr">sem certificado</span>' : e.nextAllowedAt && new Date(e.nextAllowedAt) > new Date() ? 'a partir de ' + hm(e.nextAllowedAt) : 'agora';
-      return '<tr><td><a href="#/documentos/' + e.id + '" style="color:#E6EEF5"><b>' + esc(e.name) + '</b></a><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + e.fullNfe + '</td><td class="num">' + e.summaries + '</td><td class="num">' + e.documents + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="dfe" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar agora</button></td></tr>';
+      if (e.blockedBySequence) next = '<span class="bad st">parada</span><div class="mut" style="font-size:12px">outro sistema já baixa as notas deste CNPJ</div>';
+      var row = '<tr><td><a href="#/documentos/' + e.id + '" style="color:#E6EEF5"><b>' + esc(e.name) + '</b></a><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + e.fullNfe + '</td><td class="num">' + e.summaries + '</td><td class="num">' + e.documents + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="dfe" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar agora</button></td></tr>';
+      if (e.blockedBySequence) row += '<tr><td colspan="7" style="background:#221F12"><b class="wr">Busca parada para não renovar o bloqueio.</b> <span class="mut">Informe o último NSU do sistema que já baixa as notas (ou desligue a busca nele) e a AIRES continua daí, depois da espera de 1 hora.</span><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input id="nsu-' + e.id + '" inputmode="numeric" placeholder="último NSU (ex.: 000000000012345)" style="font:inherit;padding:7px 10px;border-radius:6px;border:1px solid #2A3F55;background:#111F2E;color:#fff;min-width:260px"><button class="warn" data-act="nsu" data-id="' + e.id + '">Usar este NSU</button></div></td></tr>';
+      return row;
     }).join("");
     var docs = r.documents.map(function (x) {
       var what = x.kind === "EVENTO" || x.kind === "RES_EVENTO" ? esc(x.eventDesc || ("evento " + (x.eventType || ""))) : esc(KIND[x.kind] || x.kind) + (x.situation === "3" ? ' <span class="bad">cancelada</span>' : x.situation === "2" ? ' <span class="bad">denegada</span>' : '');
@@ -418,6 +421,13 @@ document.addEventListener("click", function (ev) {
         var msg = r.outcome === "aguardando" ? "A SEFAZ só pode ser consultada de novo a partir de " + hm(r.nextAllowedAt) + "." : r.outcome === "sem_certificado" ? "Sem certificado utilizável no cofre." : r.outcome === "erro" ? "Falha na consulta: " + r.statusMessage : r.documents + " documento(s) novo(s) em " + r.calls + " consulta(s). SEFAZ: " + r.statusCode + " " + (r.statusMessage || "");
         toast(msg);
       }).catch(function (err) { toast(err.message); }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "nsu") {
+      var v = $("nsu-" + id).value.trim();
+      if (!/^[0-9]{1,15}$/.test(v)) { toast("NSU deve ter só números."); return; }
+      if (!window.confirm("Continuar a busca deste CNPJ a partir do NSU " + v + "?\\n\\nNotas com NSU menor não serão baixadas pela AIRES. A decisão fica na auditoria em seu nome.")) return;
+      b.disabled = true;
+      post("/api/empresa/" + id + "/notas/nsu", "confirmar", { nsu: v }).then(function (r) { toast("NSU ajustado. Próxima consulta a partir de " + hm(r.nextAllowedAt) + "."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
     }
     if (b.dataset.act === "ciencia") {
       if (!window.confirm("Aprovar a ciência da operação para todas as NF-e desta empresa que aguardam?\\n\\nCiência não confirma nem recusa a operação: só libera o XML completo. A aprovação fica na auditoria em seu nome.")) return;

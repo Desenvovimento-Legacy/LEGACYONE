@@ -5,7 +5,7 @@ import type { Actor } from "../../shared/actor.js";
 import { formatCnpj } from "../../shared/br/documents.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
-import { dfeCursor } from "./dfe-sync.js";
+import { blockedBySequence, dfeCursor } from "./dfe-sync.js";
 
 /** Documentos fiscais recebidos: listas para a tela e a decisão de ciência da operação. */
 
@@ -93,6 +93,7 @@ export async function dfeStatus(tx: PoolClient) {
       lastMessage: c.lastMessage,
       lastQueryAt: c.lastQueryAt ? c.lastQueryAt.toISOString() : null,
       nextAllowedAt: c.nextAllowedAt ? c.nextAllowedAt.toISOString() : null,
+      blockedBySequence: blockedBySequence(c),
     });
   }
   return out;

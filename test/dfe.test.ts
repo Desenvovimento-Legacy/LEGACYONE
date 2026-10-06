@@ -2,7 +2,7 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { distNsuEnvelope, parseDistResponse, type DfeDistribution, type DistResult } from "../src/integrations/sefaz/dist-dfe.js";
 import { summarizeDfe } from "../src/integrations/sefaz/nfe-parse.js";
-import { syncEntityDfe, WAIT_MINUTES } from "../src/modules/documents/dfe-sync.js";
+import { setStartingNsu, syncAllDfe, syncEntityDfe, WAIT_MINUTES } from "../src/modules/documents/dfe-sync.js";
 import { approveCiencia, cienciaQueue, documentsList } from "../src/modules/documents/documents.js";
 import type { Actor } from "../src/shared/actor.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
@@ -129,6 +129,33 @@ describe("SEFAZ: distribuição de DF-e", () => {
     expect(e).toMatchObject({ outcome: "erro", statusCode: "ERRO" });
     expect(e.nextAllowedAt!.getTime() - later.getTime()).toBe(15 * 60_000);
     expect(dist.calls).toEqual(["MG:000000000000000", "MG:000000000000000"]);
+  });
+
+  it("656 de sequência para a busca automática até uma pessoa informar o NSU", async () => {
+    const { t, entityId } = await entityWithUf();
+    await withTenant(appPool, t, (tx) =>
+      tx.query(
+        `INSERT INTO digital_certificate (id, tenant_id, owner_kind, entity_id, holder_document, kind, subject, serial_number, valid_from, valid_to, vault_ref)
+         VALUES ($1, current_tenant(), 'ENTITY', $2, $3, 'A1', 'CN=X', $4, now() - interval '1 day', now() + interval '300 days', 'cofre-local:x')`,
+        [newId(), entityId, CNPJ_MATRIZ, newId()],
+      ),
+    );
+    const blocked = soap("656", "000000000000000", "000000000000000", []).replace("motivo 656", "Rejeicao: Consumo Indevido (Deve ser utilizado o ultNSU nas solicitacoes subsequentes. Tente apos 1 hora)");
+    const dist = new FakeDist([blocked, soap("137", "000000000000500", "000000000000500", [])]);
+    const now = new Date("2026-10-06T19:00:00Z");
+    const deps = { appPool, dist, certificates: cert, now: () => now };
+    await syncAllDfe(deps, t);
+    expect(dist.calls).toHaveLength(1);
+    // Passada a hora, a automática NÃO insiste.
+    const later = new Date(now.getTime() + 62 * 60_000);
+    expect(await syncAllDfe({ ...deps, now: () => later }, t)).toEqual([]);
+    expect(dist.calls).toHaveLength(1);
+    // Pessoa informa o NSU do outro sistema; a busca volta e parte dele.
+    await expect(setStartingNsu(appPool, t, entityId, "abc", LUAN)).rejects.toThrow(/números/);
+    const adj = await setStartingNsu(appPool, t, entityId, "480", LUAN, later);
+    expect(adj.ultNsu).toBe("000000000000480");
+    await syncAllDfe({ ...deps, now: () => later }, t);
+    expect(dist.calls[1]).toBe("MG:000000000000480");
   });
 
   it("sem certificado não consulta", async () => {

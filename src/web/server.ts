@@ -14,7 +14,7 @@ import { isMain } from "../shared/is-main.js";
 import { openSecretsFile, type SecretStore } from "../shared/secrets/secrets-file.js";
 import { clientCertificatesDir, clientPasswordKey, loadClientCertificate, syncClientCertificates } from "../platform/identity/client-certificates.js";
 import { SefazDistribution } from "../integrations/sefaz/dist-dfe.js";
-import { syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
+import { setStartingNsu, syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
 import { approveCiencia, dfeStatus, documentsList } from "../modules/documents/documents.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
@@ -291,6 +291,17 @@ export function createWebServer(deps: WebDeps) {
         if (!actionAllowed(req, deps.port, "buscar-notas")) return json(res, 403, { erro: "Requisição recusada" });
         if (!deps.dfe) return json(res, 409, { erro: "Busca de notas não configurada (cofre ausente)" });
         json(res, 200, await syncEntityDfe(deps.dfe, deps.tenantId, parts[2]!, USER));
+        return;
+      }
+      // POST /api/empresa/:id/notas/nsu — decisão humana: NSU inicial (o do outro sistema). Não consulta a SEFAZ.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "notas" && parts[4] === "nsu") {
+        if (!actionAllowed(req, deps.port, "confirmar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          const body = (await readJson(req)) as { nsu?: string };
+          json(res, 200, await setStartingNsu(deps.appPool, deps.tenantId, parts[2]!, String(body.nsu ?? ""), USER));
+        } catch (err) {
+          json(res, 400, { erro: (err as Error).message });
+        }
         return;
       }
       // POST /api/empresa/:id/ciencia/aprovar — decisão humana: ciência da operação das NF-e que aguardam.

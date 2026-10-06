@@ -52,8 +52,8 @@ export async function dfeCursor(tx: PoolClient, entityId: string): Promise<DfeCu
   );
   const q = rows[0];
   if (!q) return { ultNsu: nsu15(0), maxNsu: null, nextAllowedAt: null, lastStatus: null, lastMessage: null, lastQueryAt: null };
-  // O cursor só anda com resposta válida (137/138); o resto mantém o NSU pedido.
-  const moved = (q.status_code === "137" || q.status_code === "138") && q.ult_nsu;
+  // O cursor só anda com resposta válida (137/138) ou ajuste manual; o resto mantém o NSU pedido.
+  const moved = (q.status_code === "137" || q.status_code === "138" || q.status_code === "AJUSTE") && q.ult_nsu;
   return {
     ultNsu: moved ? q.ult_nsu! : q.requested_nsu,
     maxNsu: q.max_nsu,
@@ -177,7 +177,37 @@ export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityI
   return { entityId, calls, documents, outcome: "ok", statusCode: last?.statusCode ?? null, statusMessage: last?.statusMessage ?? null, nextAllowedAt: nextAt };
 }
 
-/** Todas as empresas com certificado; respeita a espera de cada uma. */
+/**
+ * 656 por sequência ("Deve ser utilizado o ultNSU"): outro sistema já consulta
+ * este CNPJ com NSU mais adiantado. A busca automática para (insistir renova o
+ * bloqueio de 1 h e atrapalha o outro sistema) até uma pessoa informar o NSU
+ * inicial ou pedir nova tentativa.
+ */
+export function blockedBySequence(c: Pick<DfeCursor, "lastStatus" | "lastMessage">): boolean {
+  return c.lastStatus === "656" && /ultNSU/i.test(c.lastMessage ?? "");
+}
+
+/** Ajuste humano do ponto de partida (NSU do outro sistema). Não consulta a SEFAZ. */
+export async function setStartingNsu(pool: Pool, tenantId: string, entityId: string, nsu: string, actor: Actor, now = new Date()) {
+  if (actor.kind !== "USER") throw new Error("Só uma pessoa ajusta o NSU inicial");
+  if (!/^\d{1,15}$/.test(nsu.trim())) throw new Error("NSU deve ter só números (até 15 dígitos)");
+  const value = nsu15(nsu.trim());
+  return withTenant(pool, tenantId, async (tx) => {
+    const c = await dfeCursor(tx, entityId);
+    // Mantém a espera em curso: o ajuste não libera consulta antes da hora.
+    const next = c.nextAllowedAt && c.nextAllowedAt > now ? c.nextAllowedAt : now;
+    const id = newId();
+    await tx.query(
+      `INSERT INTO dfe_query (id, tenant_id, entity_id, requested_nsu, status_code, status_message, ult_nsu, max_nsu, next_allowed_at, actor_kind, actor_id, queried_at)
+       VALUES ($1, current_tenant(), $2, $3, 'AJUSTE', $4, $3, $5, $6, $7, $8, $9)`,
+      [id, entityId, value, `NSU inicial informado por ${actor.id} (antes ${c.ultNsu})`, c.maxNsu, next, actor.kind, actor.id, now],
+    );
+    await audit(tx, { actor, action: "documents.dfe_nsu_set", resourceType: "dfe_query", resourceId: id, entityId, data: { from: c.ultNsu, to: value } });
+    return { ultNsu: value, nextAllowedAt: next };
+  });
+}
+
+/** Todas as empresas com certificado; respeita a espera de cada uma e para em 656 de sequência. */
 export async function syncAllDfe(deps: DfeSyncDeps, tenantId: string, actor: Actor = DOCS_AGENT): Promise<DfeSyncResult[]> {
   const ids = await withTenant(deps.appPool, tenantId, (tx) =>
     tx.query<{ id: string }>(
@@ -187,6 +217,10 @@ export async function syncAllDfe(deps: DfeSyncDeps, tenantId: string, actor: Act
     ),
   );
   const out: DfeSyncResult[] = [];
-  for (const { id } of ids.rows) out.push(await syncEntityDfe(deps, tenantId, id, actor));
+  for (const { id } of ids.rows) {
+    const c = await withTenant(deps.appPool, tenantId, (tx) => dfeCursor(tx, id));
+    if (blockedBySequence(c)) continue;
+    out.push(await syncEntityDfe(deps, tenantId, id, actor));
+  }
   return out;
 }
