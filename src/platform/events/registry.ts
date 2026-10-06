@@ -133,6 +133,15 @@ export const EventContracts = {
       approved_by: z.string(),
     }),
   },
+  NFSE_BATCH_RECEIVED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      documents: z.number().int(),
+      roles: z.record(z.string(), z.number().int()),
+      from_nsu: z.number().int(),
+      to_nsu: z.number().int(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

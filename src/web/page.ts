@@ -364,8 +364,26 @@ function viewDocumentos(entityId) {
     $("view").innerHTML = '<section class="card"><h2>Busca na SEFAZ por empresa</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">NF-e completas</th><th class="num">Resumos</th><th class="num">Documentos</th><th>Última consulta</th><th>Próxima consulta</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
       '<div class="empty">Regra da SEFAZ: sem nota nova, a próxima consulta só depois de 1 hora (fora disso o CNPJ fica bloqueado por 1 hora). A AIRES segue essa regra sozinha.</div></section>' +
       '<section class="card"><h2>' + (entityId ? "Documentos da empresa" : "Documentos recebidos") + ' (' + r.documents.length + ')</h2>' + (entityId ? '<div style="margin-bottom:8px"><a href="#/documentos">ver todas as empresas</a></div>' : '') +
-      '<div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Emitente</th><th>Documento</th><th class="num">Valor</th><th>Chave</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhum documento recebido ainda.</td></tr>') + '</tbody></table></div></section>';
+      '<div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Emitente</th><th>Documento</th><th class="num">Valor</th><th>Chave</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhum documento recebido ainda.</td></tr>') + '</tbody></table></div></section>' +
+      nfseHtml(r, entityId);
   });
+}
+
+var ROLE = { PRESTADA: "prestada", TOMADA: "tomada", OUTRA: "outra", EVENTO: "evento" };
+function nfseHtml(r, entityId) {
+  var st = r.status.map(function (e) {
+    var n = r.nfseStatus[e.id] || {};
+    var last = n.lastQueryAt ? dt(n.lastQueryAt) + '<div class="mut" style="font-size:12px">' + esc((n.lastStatus || "") + (n.lastMessage ? " " + n.lastMessage : "")) + '</div>' : '<span class="mut">nunca</span>';
+    var next = !e.hasCertificate ? '<span class="wr">sem certificado</span>' : n.nextAllowedAt && new Date(n.nextAllowedAt) > new Date() ? 'a partir de ' + hm(n.nextAllowedAt) : 'agora';
+    return '<tr><td><b>' + esc(e.name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + (n.prestadas || 0) + '</td><td class="num">' + (n.tomadas || 0) + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="nfse" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar NFS-e</button></td></tr>';
+  }).join("");
+  var docs = r.nfse.map(function (x) {
+    var parte = x.role === "PRESTADA" ? esc(x.taker_name || x.taker_doc || "—") : esc(x.provider_name || x.provider_doc || "—");
+    return '<tr><td>' + (x.issued_at ? dt(x.issued_at) : "—") + '</td><td>' + esc(x.entity) + '</td><td>' + esc(ROLE[x.role] || x.role) + (x.event_type ? ' <span class="mut">(' + esc(x.event_type) + ')</span>' : '') + '</td><td>' + esc(x.number || "—") + '</td><td>' + parte + '</td><td class="num">' + (x.service_value ? brl(x.service_value) : "—") + (x.iss_withheld ? '<div class="wr" style="font-size:11px">ISS retido</div>' : '') + '</td></tr>';
+  }).join("");
+  return '<section class="card"><h2>NFS-e do Sistema Nacional</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">Prestadas</th><th class="num">Tomadas</th><th>Última consulta</th><th>Próxima</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
+    '<div class="empty">Sequência própria, separada da NF-e. Municípios fora do padrão nacional entram por outro conector.</div>' +
+    '<div class="scroll" style="margin-top:10px"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Papel</th><th>Número</th><th>Tomador / prestador</th><th class="num">Valor do serviço</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhuma NFS-e recebida ainda.</td></tr>') + '</tbody></table></div></section>';
 }
 
 /* ---------------- Regras ---------------- */
@@ -421,6 +439,13 @@ document.addEventListener("click", function (ev) {
         var msg = r.outcome === "aguardando" ? "A SEFAZ só pode ser consultada de novo a partir de " + hm(r.nextAllowedAt) + "." : r.outcome === "sem_certificado" ? "Sem certificado utilizável no cofre." : r.outcome === "erro" ? "Falha na consulta: " + r.statusMessage : r.documents + " documento(s) novo(s) em " + r.calls + " consulta(s). SEFAZ: " + r.statusCode + " " + (r.statusMessage || "");
         toast(msg);
       }).catch(function (err) { toast(err.message); }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "nfse") {
+      b.disabled = true;
+      toast("Buscando NFS-e no Sistema Nacional…");
+      post("/api/empresa/" + id + "/nfse/buscar", "buscar-notas").then(function (r) {
+        toast(r.outcome === "aguardando" ? "Próxima busca a partir de " + hm(r.nextAllowedAt) + "." : r.outcome === "sem_certificado" ? "Sem certificado utilizável no cofre." : r.outcome === "erro" ? "Falha: " + r.message : r.documents + " NFS-e/evento(s) novo(s) em " + r.calls + " lote(s).");
+      }).catch(function (err) { toast(err.message); }).then(route);
     }
     if (b.dataset.act === "nsu") {
       var v = $("nsu-" + id).value.trim();

@@ -16,6 +16,8 @@ import { clientCertificatesDir, clientPasswordKey, loadClientCertificate, syncCl
 import { SefazDistribution } from "../integrations/sefaz/dist-dfe.js";
 import { setStartingNsu, syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
 import { approveCiencia, dfeStatus, documentsList } from "../modules/documents/documents.js";
+import { AdnDistribution } from "../integrations/nfse/adn.js";
+import { nfseList, nfseStatus, syncAllNfse, syncEntityNfse, type NfseSyncDeps } from "../modules/documents/nfse-sync.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
 import { ZodError } from "zod";
 import { casesList, centralData, entitiesList, entityDetail, rulesList } from "./ops.js";
@@ -43,6 +45,8 @@ export interface WebDeps {
   vault?: SecretStore | null;
   /** Busca de NF-e na SEFAZ. Nulo = sem cofre/certificados. */
   dfe?: DfeSyncDeps | null;
+  /** Busca de NFS-e no ADN (Sistema Nacional). */
+  nfse?: NfseSyncDeps | null;
 }
 
 const USER: Actor = { kind: "USER", id: process.env.USERNAME ?? process.env.USER ?? "tela-local" };
@@ -282,6 +286,8 @@ export function createWebServer(deps: WebDeps) {
         const data = await withTenant(deps.appPool, deps.tenantId, async (tx) => ({
           status: await dfeStatus(tx),
           documents: await documentsList(tx, { entityId: entityId && /^[0-9a-f-]{36}$/.test(entityId) ? entityId : null }),
+          nfseStatus: await nfseStatus(tx),
+          nfse: await nfseList(tx, entityId && /^[0-9a-f-]{36}$/.test(entityId) ? entityId : null),
         }));
         json(res, 200, { configured: Boolean(deps.dfe), ...data });
         return;
@@ -291,6 +297,13 @@ export function createWebServer(deps: WebDeps) {
         if (!actionAllowed(req, deps.port, "buscar-notas")) return json(res, 403, { erro: "Requisição recusada" });
         if (!deps.dfe) return json(res, 409, { erro: "Busca de notas não configurada (cofre ausente)" });
         json(res, 200, await syncEntityDfe(deps.dfe, deps.tenantId, parts[2]!, USER));
+        return;
+      }
+      // POST /api/empresa/:id/nfse/buscar — consulta o ADN (sem custo).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "nfse" && parts[4] === "buscar") {
+        if (!actionAllowed(req, deps.port, "buscar-notas")) return json(res, 403, { erro: "Requisição recusada" });
+        if (!deps.nfse) return json(res, 409, { erro: "Busca de NFS-e não configurada (cofre ausente)" });
+        json(res, 200, await syncEntityNfse(deps.nfse, deps.tenantId, parts[2]!, USER));
         return;
       }
       // POST /api/empresa/:id/notas/nsu — decisão humana: NSU inicial (o do outro sistema). Não consulta a SEFAZ.
@@ -379,6 +392,13 @@ if (isMain(import.meta.url)) {
           certificates: (cnpj: string) => loadClientCertificate(openSecretsFile(vault.location) ?? vault, cnpj),
         }
       : null,
+    nfse: vault
+      ? {
+          appPool: app,
+          adn: new AdnDistribution(),
+          certificates: (cnpj: string) => loadClientCertificate(openSecretsFile(vault.location) ?? vault, cnpj),
+        }
+      : null,
   };
   // Agente Documentos: busca automática na SEFAZ (sem custo). Cada empresa só é
   // consultada quando a regra de espera de 1 h permite.
@@ -389,7 +409,12 @@ if (isMain(import.meta.url)) {
       running = true;
       try {
         for (const r of await syncAllDfe(deps.dfe!, deps.tenantId)) {
-          if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
+          if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NF-e ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
+        }
+        if (deps.nfse) {
+          for (const r of await syncAllNfse(deps.nfse, deps.tenantId)) {
+            if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NFS-e ${r.entityId.slice(0, 8)}: ${r.calls} lote(s), ${r.documents} documento(s), ${r.status}${r.message ? " " + r.message : ""}`);
+          }
         }
       } catch (err) {
         console.error(`[docs] falha na busca automática: ${(err as Error).message}`);
@@ -402,7 +427,7 @@ if (isMain(import.meta.url)) {
   }
   createWebServer(deps).listen(port, "127.0.0.1", () => {
     console.log(`AIRES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
-    if (deps.dfe && process.env.AIRES_DFE_AUTO !== "0") console.log("Busca de NF-e na SEFAZ: automática (sem custo; respeita 1 h de espera por empresa).");
+    if (deps.dfe && process.env.AIRES_DFE_AUTO !== "0") console.log("Busca de NF-e (SEFAZ) e NFS-e (Nacional): automática, sem custo, respeitando as regras de espera.");
     console.log(`Teto de consultas cobradas por dia: ${deps.metering.dailyLimit}. Abrir a tela não consulta o SERPRO.`);
   });
 }

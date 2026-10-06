@@ -77,6 +77,11 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       const parts = [k.NFE && `${k.NFE} NF-e completa(s)`, k.RES_NFE && `${k.RES_NFE} resumo(s) de NF-e`, (k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0) && `${(k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0)} evento(s)`].filter(Boolean);
       return `SEFAZ: ${parts.join(", ") || `${p.documents} documento(s)`}`;
     }
+    case "NFSE_BATCH_RECEIVED": {
+      const r = (p.roles ?? {}) as Record<string, number>;
+      const parts = [r.PRESTADA && `${r.PRESTADA} prestada(s)`, r.TOMADA && `${r.TOMADA} tomada(s)`, r.EVENTO && `${r.EVENTO} evento(s)`, r.OUTRA && `${r.OUTRA} outra(s)`].filter(Boolean);
+      return `NFS-e Nacional: ${parts.join(", ") || `${p.documents} documento(s)`}`;
+    }
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
