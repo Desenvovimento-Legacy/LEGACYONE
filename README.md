@@ -57,7 +57,7 @@ pnpm onboard 12.ABC.345/01DE-35
 ```
 
 Integra Contador: as credenciais do SERPRO e o certificado A1 do escritório ficam no cofre local
-(`C:\AIRES-COFRE\segredos.env`, fora do repositório). Para conferir sem exibir segredos:
+(`C:\AIRES\cofre\segredos.env`, fora do repositório). Para conferir sem exibir segredos:
 
 ```powershell
 pnpm integra:check                 # cofre, certificado e autenticação (não bilhetado)
