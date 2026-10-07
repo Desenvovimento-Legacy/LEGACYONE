@@ -23,7 +23,11 @@
     "web": "tsx --env-file-if-exists=.env src/web/server.ts",
     "cert:check": "tsx --env-file-if-exists=.env src/cli/cert-check.ts",
     "federal:reparse": "tsx --env-file-if-exists=.env src/cli/pgdas-reparse.ts",
-    "simples:simular": "tsx --env-file-if-exists=.env src/cli/simples-simulate.ts"
+    "simples:simular": "tsx --env-file-if-exists=.env src/cli/simples-simulate.ts",
+    "auth:init": "tsx --env-file-if-exists=.env src/cli/users.ts init",
+    "user:invite": "tsx --env-file-if-exists=.env src/cli/users.ts invite",
+    "user:revoke": "tsx --env-file-if-exists=.env src/cli/users.ts revoke",
+    "user:list": "tsx --env-file-if-exists=.env src/cli/users.ts list"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.2",
