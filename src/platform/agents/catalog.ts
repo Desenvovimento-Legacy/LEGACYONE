@@ -130,7 +130,7 @@ export const DEPARTMENTS: DepartmentInfo[] = [
       { id: "obligations", name: "Obrigações", status: "OPERANDO", summary: "Quais obrigações cada empresa tem e quando vencem.", capabilities: [cap("Mapa por empresa", true), cap("Calendário de dias úteis", true), cap("Entrega das obrigações")] },
       { id: "fiscal", name: "Escrita fiscal", status: "PLANEJADO", summary: "Entradas e saídas classificadas.", capabilities: [cap("CFOP e CST"), cap("Retenções"), cap("Créditos")] },
       { id: "tax", name: "Tributos", status: "OPERANDO", summary: "Cálculo determinístico de cada tributo, só com tabela aprovada.", capabilities: [cap("Simples Nacional: cálculo e conferência", true), cap("Simples: fator r e impedimento de ISS/ICMS"), cap("Presumido e Real"), cap("ICMS e ISS próprios")] },
-      { id: "guides", name: "Guias", status: "PLANEJADO", summary: "Guia, vencimento e pagamento.", capabilities: [cap("DAS e DARF"), cap("Vencimento"), cap("Pagamento identificado")] },
+      { id: "guides", name: "Guias", status: "OPERANDO", summary: "DAS de cada competência: prazo, emissão e pagamento identificado.", capabilities: [cap("Vencimento com dias úteis", true), cap("Pagamento identificado (DAS)", true), cap("Emissão do DAS"), cap("DARF e outras guias")] },
       { id: "sped", name: "SPED fiscal", status: "PLANEJADO", summary: "Arquivos digitais fiscais.", capabilities: [cap("EFD ICMS/IPI"), cap("EFD-Contribuições"), cap("EFD-Reinf")] },
       { id: "transmission", name: "Transmissão", status: "PLANEJADO", summary: "Assinatura, envio e recibo, com sua aprovação.", capabilities: [cap("Assinatura"), cap("Envio"), cap("Recibo")] },
     ],

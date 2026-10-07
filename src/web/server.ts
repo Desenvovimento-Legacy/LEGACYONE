@@ -7,6 +7,7 @@ import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../m
 import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
 import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
+import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import type { Actor } from "../shared/actor.js";
@@ -217,6 +218,7 @@ export function createWebServer(deps: WebDeps) {
             { entityId: parts[2]!, competence: `${parts[4]}-01` },
             USER,
           );
+          await refreshGuides(deps.appPool, deps.tenantId, parts[2]!);
           const detail = await withTenant(deps.appPool, deps.tenantId, (tx) => competenceDetail(tx, parts[2]!, `${parts[4]}-01`));
           json(res, 200, { calls: r.calls, detail });
         } catch (err) {
@@ -236,6 +238,7 @@ export function createWebServer(deps: WebDeps) {
           // Próximo passo automático: conferência vira exceção (ou fecha a que passou a bater).
           const exceptions = await refreshRevenueExceptions(deps.appPool, deps.tenantId, parts[2]!);
           const simples = await refreshSimples(deps.appPool, deps.tenantId, parts[2]!);
+          await refreshGuides(deps.appPool, deps.tenantId, parts[2]!);
           json(res, 200, { ...r, exceptions, simples });
         } catch (err) {
           if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
@@ -262,6 +265,12 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
 
+      // GET /api/empresa/:id/guias — DAS por competência: prazo e pagamento (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "guias") {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => guidesOverview(tx, parts[2]!, today)));
+        return;
+      }
       // GET /api/empresa/:id/simples — cálculos do motor do Simples (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "simples") {
         json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => simplesOverview(tx, parts[2]!)) });
@@ -516,6 +525,21 @@ if (isMain(import.meta.url)) {
     }, 5_000);
     setInterval(tick, 5 * 60_000);
   }
+  // Agente Guias: situação do DAS muda com o tempo (prazo passa); só banco, sem custo.
+  const guidesTick = async () => {
+    try {
+      const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+      const ids = await withTenant(app, tenant.id, (tx) => tx.query<{ id: string }>("SELECT id FROM entity WHERE cnpj IS NOT NULL"));
+      for (const { id } of ids.rows) {
+        const r = await refreshGuides(app, tenant.id, id, today);
+        if (r.changed) console.log(`[guias] ${id.slice(0, 8)}: ${r.changed} guia(s) mudaram de situação`);
+      }
+    } catch (err) {
+      console.error(`[guias] falha: ${(err as Error).message}`);
+    }
+  };
+  setTimeout(guidesTick, 10_000);
+  setInterval(guidesTick, 60 * 60_000);
   createWebServer(deps).listen(port, "127.0.0.1", () => {
     console.log(`IARIS aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
     if (deps.dfe && process.env.IARIS_DFE_AUTO !== "0") console.log("Busca de NF-e (SEFAZ) e NFS-e (Nacional): automática, sem custo, respeitando as regras de espera.");

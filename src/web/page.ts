@@ -214,6 +214,9 @@ function queueItemHtml(q) {
   if (q.kind === "ciencia") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="warn" data-act="ciencia" data-id="' + q.id + '">Aprovar ciência</button><a class="nav" style="display:inline-flex" href="#/documentos/' + q.id + '">Ver as notas</a></div></div>';
   }
+  if (q.kind === "guide") {
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver guias da empresa</a></div></div>';
+  }
   if (q.kind === "approve") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><button class="warn" data-act="approve" data-id="' + q.id + '">Aprovar conclusão</button></div></div>';
   }
@@ -381,6 +384,7 @@ function viewEmpresa(id) {
         '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
         '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
@@ -389,7 +393,33 @@ function viewEmpresa(id) {
       '</div></div>';
     loadConferencia(id);
     loadSimples(id);
+    loadGuias(id);
   });
+}
+
+var GS = {
+  PAGO: '<span class="st ok">pago</span>',
+  PAGO_EM_ATRASO: '<span class="st wr">pago após o vencimento</span>',
+  A_VENCER: '<span class="st">a vencer</span>',
+  DECLARADO_SEM_DAS: '<span class="st">declarado · DAS a emitir</span>',
+  A_DECLARAR: '<span class="st wr">a declarar</span>',
+  SEM_DEBITO: '<span class="mut">sem débito</span>',
+  PAGAMENTO_NAO_IDENTIFICADO: '<span class="st bad">pagamento ainda não identificado</span>',
+  DECLARACAO_NAO_IDENTIFICADA: '<span class="st bad">declaração ainda não identificada</span>'
+};
+function loadGuias(id) {
+  return getJson("/api/empresa/" + id + "/guias").then(function (r) {
+    var box = $("guias"); if (!box) return;
+    var rows = r.rows.map(function (g) {
+      var decl = g.declaration ? '<span class="mono" style="font-size:11px">' + esc(g.declaration.number) + '</span><div class="mut" style="font-size:11px">' + (g.declaration.operation === "RETIFICADORA" ? "retificadora" : "original") + (g.declaration.transmittedAt ? " · " + d(g.declaration.transmittedAt.slice(0, 10)) : "") + '</div>' : '<span class="mut">—</span>';
+      var pay = g.payment ? (g.payment.collectedOn ? d(g.payment.collectedOn) : "") + (g.payment.principal ? '<div class="mut" style="font-size:11px">principal ' + brl(g.payment.principal) + '</div>' : '') + '<div class="mut" style="font-size:11px">' + (g.payment.source === "PAGTOWEB" ? "PagtoWeb" : "PGDAS-D") + '</div>' : '<span class="mut">—</span>';
+      var calc = g.calculated && g.calculated.total ? brl(g.calculated.total) : '<span class="mut">—</span>';
+      return '<tr><td>' + mm(g.competence) + (g.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td>' + (g.due ? d(g.due) : '<span class="wr">prazo a aprovar</span>') + (g.dueReason ? '<div class="mut" style="font-size:11px">' + esc(g.dueReason) + '</div>' : '') + '</td><td>' + decl + '</td><td class="num">' + g.das.length + '</td><td class="num">' + calc + '</td><td>' + pay + '</td><td>' + (GS[g.status] || esc(g.status)) + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>Guias: DAS do Simples</h2>' +
+      '<div class="scroll"><table><thead><tr><th>Competência</th><th>Vencimento</th><th>Declaração</th><th class="num">DAS emitidos</th><th class="num">Calculado</th><th>Pagamento</th><th>Situação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Sem competências.</td></tr>') + '</tbody></table></div>' +
+      '<div class="empty">Situação conforme a última consulta à Receita' + (r.dataUntil ? ' (' + dt(r.dataUntil) + ')' : '') + '. Sem pagamento depois do vencimento, a IARIS diz "ainda não identificado", nunca "inadimplente". Nenhuma guia é emitida aqui.</div>';
+  }).catch(function (err) { toast(err.message); });
 }
 
 var TAXN = ["IRPJ", "CSLL", "COFINS", "PIS", "CPP", "ICMS", "IPI", "ISS"];

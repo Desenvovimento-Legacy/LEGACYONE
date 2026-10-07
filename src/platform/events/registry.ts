@@ -189,6 +189,17 @@ export const EventContracts = {
       rules: z.array(z.string()),
     }),
   },
+  GUIDE_STATUS_CHANGED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      guide: z.enum(["DAS_SIMPLES"]),
+      from: z.string().nullable(),
+      to: z.string(),
+      due: z.iso.date().nullable(),
+      documents: z.array(z.string()),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { guidesNeedingAttention } from "../modules/tax/guides.js";
 import { agentName, DEPARTMENTS, PIPELINE_STAGES, PROCESSES, SHARED_AGENTS, type AgentInfo } from "../platform/agents/catalog.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
@@ -100,6 +101,15 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       if (p.status === "DIVERGE") return `Simples ${pa}: cálculo ${brl(p.total)} × referência ${brl(p.reference_total)}`;
       if (p.status === "CALCULADO") return `Simples ${pa} apurado pelas NFS-e: ${brl(p.total)} (a declarar)`;
       return `Simples ${pa}: ${String(p.status).toLowerCase().replace(/_/g, " ")}`;
+    }
+    case "GUIDE_STATUS_CHANGED": {
+      const pa = `${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}`;
+      const GS: Record<string, string> = {
+        A_DECLARAR: "a declarar", DECLARACAO_NAO_IDENTIFICADA: "declaração ainda não identificada", SEM_DEBITO: "sem débito",
+        DECLARADO_SEM_DAS: "declarado, DAS a emitir", A_VENCER: "DAS a vencer", PAGAMENTO_NAO_IDENTIFICADO: "pagamento ainda não identificado",
+        PAGO: "pago", PAGO_EM_ATRASO: "pago após o vencimento",
+      };
+      return `DAS ${pa}: ${GS[String(p.to)] ?? String(p.to)}${p.due ? ` (vencimento ${fmtDate(String(p.due))})` : ""}`;
     }
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
@@ -279,9 +289,27 @@ export async function humanQueue(tx: PoolClient) {
     since: (c.oldest ?? new Date()).toISOString(),
   }));
   const divergences = new Map((await openRevenueExceptions(tx)).map((d) => [d.case_id, d]));
+  const guides = (await guidesNeedingAttention(tx)).map((g) => {
+    const pa = `${g.competence.slice(5, 7)}/${g.competence.slice(0, 4)}`;
+    const venc = g.due_on ? fmtDate(g.due_on) : "—";
+    return {
+      kind: "guide",
+      id: `${g.entity_id}:${g.competence}`,
+      type: g.status === "PAGAMENTO_NAO_IDENTIFICADO" ? "DAS_PAGAMENTO" : "PGDAS_DECLARACAO",
+      entityId: g.entity_id,
+      entity: g.entity,
+      caseId: null,
+      title: g.status === "PAGAMENTO_NAO_IDENTIFICADO"
+        ? `DAS ${pa}: pagamento ainda não identificado (vencimento ${venc})`
+        : `PGDAS-D ${pa}: declaração ainda não identificada (prazo ${venc})`,
+      impact: "Situação até a última consulta à Receita. Pode já ter sido resolvido: atualize a competência em Receita Federal ou confirme com o cliente.",
+      since: g.created_at.toISOString(),
+    };
+  });
   return [
     ...catalog,
     ...ciencia,
+    ...guides,
     ...pend.rows.map((p) => ({
       kind: p.case_id && divergences.has(p.case_id) ? "divergence" : p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       divergence: p.case_id ? (divergences.get(p.case_id) ?? null) : null,
