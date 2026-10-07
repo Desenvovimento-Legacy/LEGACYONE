@@ -152,7 +152,7 @@ export const DEPARTMENTS: DepartmentInfo[] = [
       { id: "ledger", name: "Contábil (razão)", status: "PLANEJADO", summary: "Partidas dobradas com evidência.", capabilities: [cap("Plano de contas"), cap("Lançamentos com evidência"), cap("Balancete, DRE e balanço"), cap("Fechamento")] },
       { id: "financial", name: "Financeiro", status: "PLANEJADO", summary: "Extratos e contas da empresa.", capabilities: [cap("Extratos (OFX)"), cap("Contas a pagar e receber")] },
       { id: "reconciliation", name: "Conciliação", status: "PLANEJADO", summary: "Banco, clientes e fornecedores.", capabilities: [cap("Banco × razão"), cap("Clientes e fornecedores")] },
-      { id: "review", name: "Revisão independente", status: "EM_CONSTRUCAO", summary: "Cruza tudo antes de qualquer entrega.", capabilities: [cap("Receita declarada × NFS-e", true), cap("Fiscal × contábil"), cap("Folha × contábil")] },
+      { id: "review", name: "Revisão independente", status: "OPERANDO", summary: "Cruza tudo antes de qualquer entrega e abre exceção com hipótese.", capabilities: [cap("Receita declarada × NFS-e", true), cap("Exceções com hipótese", true), cap("Fiscal × contábil"), cap("Folha × contábil")] },
       { id: "ecd", name: "ECD e ECF", status: "PLANEJADO", summary: "SPED contábil e fiscal anual.", capabilities: [cap("ECD"), cap("ECF"), cap("e-LALUR / e-LACS")] },
     ],
   },
