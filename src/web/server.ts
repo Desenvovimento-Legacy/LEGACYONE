@@ -6,6 +6,7 @@ import type { IntegraContador } from "../integrations/integra-contador/types.js"
 import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../modules/federal/federal-sync.js";
 import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
 import { fetchLastDeclaration, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
+import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import type { Actor } from "../shared/actor.js";
 import { formatCnpj } from "../shared/br/documents.js";
@@ -230,11 +231,26 @@ export function createWebServer(deps: WebDeps) {
         if (!actionAllowed(req, deps.port, "buscar")) return json(res, 403, { erro: "Requisição recusada" });
         if (!deps.integra) return json(res, 409, { erro: "Integra Contador não configurado" });
         try {
-          json(res, 200, await fetchLastDeclaration({ appPool: deps.appPool, integra: deps.integra, metering: deps.metering }, deps.tenantId, { entityId: parts[2]!, competence: `${parts[4]}-01` }, USER));
+          const r = await fetchLastDeclaration({ appPool: deps.appPool, integra: deps.integra, metering: deps.metering }, deps.tenantId, { entityId: parts[2]!, competence: `${parts[4]}-01` }, USER);
+          // Próximo passo automático: conferência vira exceção (ou fecha a que passou a bater).
+          const exceptions = await refreshRevenueExceptions(deps.appPool, deps.tenantId, parts[2]!);
+          json(res, 200, { ...r, exceptions });
         } catch (err) {
           if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
           else json(res, 502, { erro: (err as Error).message });
+        }
+        return;
+      }
+      // POST /api/excecao/:caseId/decidir — decisão humana: RETIFICAR ou MANTER (com justificativa).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "excecao" && parts[3] === "decidir") {
+        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          const body = (await readJson(req)) as { decision?: string; note?: string };
+          if (body.decision !== "RETIFICAR" && body.decision !== "MANTER") return json(res, 400, { erro: "Decisão inválida" });
+          json(res, 200, await decideRevenueException(deps.appPool, deps.tenantId, parts[2]!, { decision: body.decision, note: body.note ?? null }, USER));
+        } catch (err) {
+          json(res, 409, { erro: (err as Error).message });
         }
         return;
       }
@@ -438,6 +454,8 @@ if (isMain(import.meta.url)) {
         if (deps.nfse) {
           for (const r of await syncAllNfse(deps.nfse, deps.tenantId)) {
             if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NFS-e ${r.entityId.slice(0, 8)}: ${r.calls} lote(s), ${r.documents} documento(s), ${r.status}${r.message ? " " + r.message : ""}`);
+            // Nota nova pode abrir ou fechar exceção de receita.
+            if (r.documents) await refreshRevenueExceptions(deps.appPool, deps.tenantId, r.entityId);
           }
         }
       } catch (err) {
@@ -447,6 +465,18 @@ if (isMain(import.meta.url)) {
       }
     };
     setTimeout(tick, 15_000);
+    // Ao iniciar: conferência de receita de todas as empresas com declaração lida (só banco).
+    setTimeout(async () => {
+      try {
+        const ids = await withTenant(app, tenant.id, (tx) => tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM pgdas_declared_revenue"));
+        for (const { id } of ids.rows) {
+          const r = await refreshRevenueExceptions(app, tenant.id, id);
+          if (r.opened || r.closed || r.updated) console.log(`[revisão] ${id.slice(0, 8)}: ${r.opened} exceção(ões) aberta(s), ${r.updated} atualizada(s), ${r.closed} fechada(s)`);
+        }
+      } catch (err) {
+        console.error(`[revisão] falha na conferência: ${(err as Error).message}`);
+      }
+    }, 5_000);
     setInterval(tick, 5 * 60_000);
   }
   createWebServer(deps).listen(port, "127.0.0.1", () => {

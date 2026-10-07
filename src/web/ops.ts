@@ -4,6 +4,7 @@ import { formatCnpj } from "../shared/br/documents.js";
 import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
 import { loadCalendar } from "../modules/regulatory/calendar.js";
 import { cienciaQueue } from "../modules/documents/documents.js";
+import { openRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 
 /**
  * Leituras da seção Operação (Central de agentes, Fila humana, Cases).
@@ -86,6 +87,10 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return p.found
         ? `Declaração PGDAS-D do PA ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)} lida: ${p.months} mês(es) de receita${p.regime ? ` · regime ${String(p.regime).toLowerCase()}` : ""}`
         : `Sem declaração transmitida no PA ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}`;
+    case "REVENUE_DIVERGENCE_DETECTED":
+      return `Receita ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}: declarado × NFS-e diverge em ${Number(p.difference).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`;
+    case "EXCEPTION_DECIDED":
+      return p.decision === "RETIFICAR" ? "Exceção decidida: retificar o PGDAS-D" : "Exceção decidida: diferença mantida com justificativa";
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
@@ -248,11 +253,13 @@ export async function humanQueue(tx: PoolClient) {
     impact: `Total ${Number(c.total ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}. Sem a ciência, a SEFAZ entrega só o resumo; com ela, o XML completo.`,
     since: (c.oldest ?? new Date()).toISOString(),
   }));
+  const divergences = new Map((await openRevenueExceptions(tx)).map((d) => [d.case_id, d]));
   return [
     ...catalog,
     ...ciencia,
     ...pend.rows.map((p) => ({
-      kind: p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
+      kind: p.case_id && divergences.has(p.case_id) ? "divergence" : p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
+      divergence: p.case_id ? (divergences.get(p.case_id) ?? null) : null,
       id: p.id,
       type: p.type,
       entityId: p.entity_id,

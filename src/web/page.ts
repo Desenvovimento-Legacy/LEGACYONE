@@ -202,6 +202,15 @@ function queueItemHtml(q) {
   if (q.kind === "rules") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex;background:#E8A33D;color:#1B1206;font-weight:700" href="#/regras">Revisar e aprovar regras</a></div></div>';
   }
+  if (q.kind === "divergence" && q.divergence) {
+    var dv = q.divergence;
+    var notes = (dv.notes || []).map(function (n) { return '<tr><td class="mono">' + esc(n.number || "—") + '</td><td class="num">' + brl(n.value) + '</td><td>' + (n.cancelledOn ? d(n.cancelledOn) : "—") + '</td><td class="mut">' + esc((n.event || "").replace(/_/g, " ").toLowerCase()) + '</td></tr>'; }).join("");
+    return '<div class="qi">' + head +
+      '<table style="margin:2px 0"><tr><td class="mut">Declarado no PGDAS-D</td><td class="num">' + brl(dv.declared) + '</td></tr><tr><td class="mut">NFS-e válidas</td><td class="num">' + brl(dv.nfse) + '</td></tr><tr><td><b>Diferença</b></td><td class="num"><b class="bad">' + brl(dv.difference) + '</b></td></tr></table>' +
+      '<p><b>Hipótese:</b> ' + esc(dv.hypothesis) + (dv.responsibility === "ANTERIOR" ? ' <span class="wr">Período do escritório anterior.</span>' : '') + '</p>' +
+      (notes ? '<details><summary class="mut" style="cursor:pointer;font-size:12px">Notas envolvidas (' + dv.notes.length + ')</summary><table><thead><tr><th>Número</th><th class="num">Valor</th><th>Cancelada em</th><th>Evento</th></tr></thead><tbody>' + notes + '</tbody></table></details>' : '') +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" data-act="exc" data-dec="RETIFICAR" data-id="' + dv.case_id + '">Vou retificar o PGDAS-D</button><button class="ghost" data-act="exc" data-dec="MANTER" data-id="' + dv.case_id + '">Manter (justificar)</button><a class="nav" style="display:inline-flex" href="#/empresa/' + dv.entity_id + '">Ver conferência</a></div></div>';
+  }
   if (q.kind === "ciencia") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="warn" data-act="ciencia" data-id="' + q.id + '">Aprovar ciência</button><a class="nav" style="display:inline-flex" href="#/documentos/' + q.id + '">Ver as notas</a></div></div>';
   }
@@ -386,9 +395,11 @@ function loadConferencia(id) {
       return '<tr><td>' + mm(x.competence) + (x.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td class="num">' + (x.declared === null ? "—" : brl(x.declared)) + (x.regime === "CAIXA" ? '<div class="wr" style="font-size:11px">regime de caixa</div>' : '') + '</td><td class="num">' + brl(x.nfsePrestadas) + '<div class="mut" style="font-size:11px">' + x.nfseCount + ' nota(s)' + (x.cancelled ? ' · ' + x.cancelled + ' cancelada(s) fora' : '') + '</div></td><td class="num">' + (x.difference === null ? "—" : brl(x.difference)) + '</td><td>' + ST[x.status] + '</td></tr>';
     }).join("");
     var def = prevMonth(lastClosedMonth());
+    var exc = r.rows.filter(function (x) { return x.status === "DIVERGENTE"; }).length;
     box.innerHTML = '<h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2>' +
       '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px"><label class="mut" for="decl-pa">Última declaração do PA</label><input type="month" id="decl-pa" value="' + def + '"><button data-act="decl" data-id="' + id + '">Buscar declaração</button><span class="mut" style="font-size:12px">1 consulta cobrada; traz a receita do PA e dos 12 meses anteriores</span></div>' +
       (rows ? '<div class="scroll"><table><thead><tr><th>Competência</th><th class="num">Receita declarada</th><th class="num">NFS-e prestadas</th><th class="num">Diferença (NFS-e − declarado)</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">Nenhuma declaração lida ainda.</div>') +
+      (exc ? '<div class="wr" style="margin-top:8px">' + exc + ' competência(s) divergente(s) viraram exceção na <a href="#/fila">Fila humana</a>, com a hipótese e as notas envolvidas.</div>' : '') +
       '<div class="empty">NFS-e pela data de emissão (Brasília), sem as canceladas. Tolerância de R$ 1,00. Empresas que vendem por NFC-e/NF-e só fecham quando esses documentos entrarem.</div>';
   }).catch(function (err) { toast(err.message); });
 }
@@ -544,6 +555,16 @@ document.addEventListener("click", function (ev) {
       post("/api/empresa/" + id + "/competencia/" + pa + "/declaracao", "buscar").then(function (r) {
         toast(r.found ? "Declaração lida: " + r.months + " mês(es) de receita." : "Não há declaração transmitida nesse PA.");
       }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; return loadCentral(); }).then(function () { return loadConferencia(id); });
+    }
+    if (b.dataset.act === "exc") {
+      var dec = b.dataset.dec, note = null;
+      if (dec === "MANTER") {
+        note = window.prompt("Por que manter a declaração como está? (fica na auditoria)");
+        if (!note || note.trim().length < 5) { toast("Escreva a justificativa (mínimo 5 caracteres)."); return; }
+      } else if (!window.confirm("Registrar que o escritório vai retificar o PGDAS-D desta competência?\\n\\nA exceção fica aguardando a declaração retificada e fecha sozinha quando a conferência bater (use Buscar declaração depois de transmitir).")) return;
+      b.disabled = true;
+      post("/api/excecao/" + id + "/decidir", "aprovar", { decision: dec, note: note }).then(function () { toast(dec === "RETIFICAR" ? "Registrado: aguardando a declaração retificada." : "Registrado: diferença mantida com justificativa."); })
+        .catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
     }
     if (b.dataset.act === "nfse") {
       b.disabled = true;

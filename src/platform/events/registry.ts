@@ -152,6 +152,25 @@ export const EventContracts = {
       found: z.boolean(),
     }),
   },
+  REVENUE_DIVERGENCE_DETECTED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      declared: z.string(),
+      nfse: z.string(),
+      difference: z.string(),
+      hypothesis: z.string(),
+      responsibility: z.enum(["ANTERIOR", "LEGACY"]).nullable(),
+    }),
+  },
+  EXCEPTION_DECIDED: {
+    1: z.object({
+      case_id: z.uuid(),
+      decision: z.string(),
+      note: z.string().nullable(),
+      decided_by: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;
