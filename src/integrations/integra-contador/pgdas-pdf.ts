@@ -5,6 +5,7 @@ import { extractText, getDocumentProxy } from "unpdf";
  *   2.1) Discriminativo de Receitas → RPA (mercado interno, externo, total) e RBT12
  *   2.2) Receitas Brutas Anteriores → 2.2.1 Mercado Interno / 2.2.2 Mercado Externo, mês a mês
  *   Regime de Apuração: Competência | Caixa
+ *   2.7) débito por atividade (anexo, retenção) e por tributo; sublimite e impedimento
  * Valores em texto com 2 casas (nunca float).
  */
 
@@ -32,12 +33,58 @@ export interface DeclaredMonth {
   source: "RPA" | "ANTERIOR";
 }
 
+/** Débito declarado de uma atividade (seção 2.7), valores com 2 casas. */
+export interface DeclaredActivity {
+  seq: number;
+  activity: string;
+  annex: "I" | "II" | "III" | "IV" | "V" | null;
+  /** true = com retenção/substituição do ICMS/ISS; false = sem; null = não informado */
+  localWithheld: boolean | null;
+  factorR: boolean;
+  revenue: string;
+  taxes: { IRPJ: string; CSLL: string; COFINS: string; PIS: string; CPP: string; ICMS: string; IPI: string; ISS: string };
+  total: string;
+}
+
 export interface PgdasDeclarationContent {
   period: string | null;
   regime: "COMPETENCIA" | "CAIXA" | null;
   rpa: { internal: string; external: string; total: string } | null;
   rbt12: string | null;
+  rba: string | null;
+  rbaa: string | null;
+  sublimit: string | null;
+  localImpeded: boolean | null;
+  activities: DeclaredActivity[];
   months: DeclaredMonth[];
+}
+
+const TAX_HEADER = "IRPJ CSLL COFINS PIS\\/Pasep INSS\\/CPP ICMS IPI ISS Total";
+
+function parseActivities(flat: string): DeclaredActivity[] {
+  const nine = Array.from({ length: 9 }, () => MONEY).join("\\s+");
+  const re = new RegExp(
+    `Valor do D[ée]bito por Tributo para a Atividade \\(R\\$\\):\\s*(.+?)\\s*Receita Bruta Informada:\\s*R\\$\\s*${MONEY}\\s*${TAX_HEADER}\\s*${nine}`,
+    "gi",
+  );
+  const out: DeclaredActivity[] = [];
+  for (const m of flat.matchAll(re)) {
+    const text = m[1]!.trim();
+    const v = m.slice(3, 12).map((x) => brMoney(x!));
+    const annex = (/Anexo (V|IV|III|II|I)\b/.exec(text)?.[1] ?? null) as DeclaredActivity["annex"];
+    const withheld = /sem reten[cç][aã]o/i.test(text) ? false : /com (reten[cç][aã]o|substitui[cç][aã]o)/i.test(text) ? true : null;
+    out.push({
+      seq: out.length + 1,
+      activity: text,
+      annex,
+      localWithheld: withheld,
+      factorR: /fator r/i.test(text),
+      revenue: brMoney(m[2]!),
+      taxes: { IRPJ: v[0]!, CSLL: v[1]!, COFINS: v[2]!, PIS: v[3]!, CPP: v[4]!, ICMS: v[5]!, IPI: v[6]!, ISS: v[7]! },
+      total: v[8]!,
+    });
+  }
+  return out;
 }
 
 const comp = (mmYYYY: string) => `${mmYYYY.slice(3, 7)}-${mmYYYY.slice(0, 2)}-01`;
@@ -66,6 +113,10 @@ export function parsePgdasDeclarationText(raw: string, fallbackCompetence?: stri
   const rpa = rpaM ? { internal: brMoney(rpaM[1]!), external: brMoney(rpaM[2]!), total: brMoney(rpaM[3]!) } : null;
   const rbtM = new RegExp(`\\(RBT12\\)\\s*${MONEY}\\s+${MONEY}\\s+${MONEY}`, "i").exec(flat);
   const rbt12 = rbtM ? brMoney(rbtM[3]!) : null;
+  const rbaM = new RegExp(`\\(RBA\\)\\s*${MONEY}\\s+${MONEY}\\s+${MONEY}`, "i").exec(flat);
+  const rbaaM = new RegExp(`\\(RBAA\\)\\s*${MONEY}\\s+${MONEY}\\s+${MONEY}`, "i").exec(flat);
+  const subM = new RegExp(`Sublimite de Receita Anual \\(R\\$\\):?\\s*${MONEY}`, "i").exec(flat);
+  const impM = /Impedido de recolher ICMS\/ISS no DAS:?\s*(Sim|N[aã]o)/i.exec(flat);
 
   const idxInt = flat.search(/2\.2\.1\)?\s*Mercado Interno/i);
   const idxExt = flat.search(/2\.2\.2\)?\s*Mercado Externo/i);
@@ -87,5 +138,16 @@ export function parsePgdasDeclarationText(raw: string, fallbackCompetence?: stri
     if (at >= 0) months[at] = row;
     else months.push(row);
   }
-  return { period: pa ? comp(pa) : null, regime, rpa, rbt12, months };
+  return {
+    period: pa ? comp(pa) : null,
+    regime,
+    rpa,
+    rbt12,
+    rba: rbaM ? brMoney(rbaM[3]!) : null,
+    rbaa: rbaaM ? brMoney(rbaaM[3]!) : null,
+    sublimit: subM ? brMoney(subM[1]!) : null,
+    localImpeded: impM ? /sim/i.test(impM[1]!) : null,
+    activities: parseActivities(flat),
+    months,
+  };
 }

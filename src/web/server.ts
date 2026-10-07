@@ -5,8 +5,9 @@ import { SERPRO_PROVIDER, serproFromVault, serproMetering } from "../integration
 import type { IntegraContador } from "../integrations/integra-contador/types.js";
 import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../modules/federal/federal-sync.js";
 import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
-import { fetchLastDeclaration, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
+import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
+import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import type { Actor } from "../shared/actor.js";
 import { formatCnpj } from "../shared/br/documents.js";
@@ -234,7 +235,8 @@ export function createWebServer(deps: WebDeps) {
           const r = await fetchLastDeclaration({ appPool: deps.appPool, integra: deps.integra, metering: deps.metering }, deps.tenantId, { entityId: parts[2]!, competence: `${parts[4]}-01` }, USER);
           // Próximo passo automático: conferência vira exceção (ou fecha a que passou a bater).
           const exceptions = await refreshRevenueExceptions(deps.appPool, deps.tenantId, parts[2]!);
-          json(res, 200, { ...r, exceptions });
+          const simples = await refreshSimples(deps.appPool, deps.tenantId, parts[2]!);
+          json(res, 200, { ...r, exceptions, simples });
         } catch (err) {
           if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
@@ -257,6 +259,27 @@ export function createWebServer(deps: WebDeps) {
       // GET /api/empresa/:id/conferencia — receita declarada × NFS-e prestadas (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "conferencia") {
         json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => revenueCrossCheck(tx, parts[2]!)) });
+        return;
+      }
+
+      // GET /api/empresa/:id/simples — cálculos do motor do Simples (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "simples") {
+        json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => simplesOverview(tx, parts[2]!)) });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/simples/regras") {
+        json(res, 200, { rules: await withTenant(deps.appPool, deps.tenantId, (tx) => simplesRulesList(tx)) });
+        return;
+      }
+      // POST /api/simples/regras/aprovar — decisão humana: aprovar as tabelas propostas.
+      if (req.method === "POST" && url.pathname === "/api/simples/regras/aprovar") {
+        if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          json(res, 200, await approveSimplesRules(deps.appPool, deps.tenantId, USER));
+        } catch (err) {
+          if (err instanceof SimplesActionError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
 
@@ -455,7 +478,10 @@ if (isMain(import.meta.url)) {
           for (const r of await syncAllNfse(deps.nfse, deps.tenantId)) {
             if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NFS-e ${r.entityId.slice(0, 8)}: ${r.calls} lote(s), ${r.documents} documento(s), ${r.status}${r.message ? " " + r.message : ""}`);
             // Nota nova pode abrir ou fechar exceção de receita.
-            if (r.documents) await refreshRevenueExceptions(deps.appPool, deps.tenantId, r.entityId);
+            if (r.documents) {
+              await refreshRevenueExceptions(deps.appPool, deps.tenantId, r.entityId);
+              await refreshSimples(deps.appPool, deps.tenantId, r.entityId);
+            }
           }
         }
       } catch (err) {
@@ -472,6 +498,17 @@ if (isMain(import.meta.url)) {
         for (const { id } of ids.rows) {
           const r = await refreshRevenueExceptions(app, tenant.id, id);
           if (r.opened || r.closed || r.updated) console.log(`[revisão] ${id.slice(0, 8)}: ${r.opened} exceção(ões) aberta(s), ${r.updated} atualizada(s), ${r.closed} fechada(s)`);
+          // PDF guardado antes do leitor da seção 2.7: relê sem nova consulta.
+          await withTenant(app, tenant.id, async (tx) => {
+            const miss = await tx.query(
+              `SELECT 1 FROM pgdas_declaration_pdf p WHERE p.entity_id = $1 AND p.kind = 'DECLARACAO'
+                 AND NOT EXISTS (SELECT 1 FROM pgdas_declared_tax t WHERE t.pdf_id = p.id) LIMIT 1`,
+              [id],
+            );
+            if (miss.rowCount) await reparseDeclarations(tx, id);
+          });
+          const s = await refreshSimples(app, tenant.id, id);
+          if (s.changed) console.log(`[tributos] ${id.slice(0, 8)}: ${s.changed} cálculo(s) do Simples atualizado(s)`);
         }
       } catch (err) {
         console.error(`[revisão] falha na conferência: ${(err as Error).message}`);

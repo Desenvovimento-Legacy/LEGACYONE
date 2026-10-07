@@ -380,6 +380,7 @@ function viewEmpresa(id) {
       '<div class="cols"><div class="wide">' +
         '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
         '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
@@ -387,7 +388,44 @@ function viewEmpresa(id) {
         '<section class="card"><h2>Cases</h2><table>' + cs + '</table></section>' +
       '</div></div>';
     loadConferencia(id);
+    loadSimples(id);
   });
+}
+
+var TAXN = ["IRPJ", "CSLL", "COFINS", "PIS", "CPP", "ICMS", "IPI", "ISS"];
+function loadSimples(id) {
+  return getJson("/api/empresa/" + id + "/simples").then(function (r) {
+    var box = $("simp"); if (!box) return;
+    var ST = {
+      CONFERE: '<span class="st ok">confere</span>',
+      DIVERGE: '<span class="st bad">diverge</span>',
+      CALCULADO: '<span class="st wr">calculado · a declarar</span>',
+      SEM_REFERENCIA: '<span class="mut">sem referência</span>',
+      REGRA_PENDENTE: '<a class="st wr" href="#/regras">tabela a aprovar</a>',
+      SEM_ANEXO: '<span class="st wr">sem anexo</span>',
+      NAO_SUPORTADO: '<span class="st bad">fora do motor</span>'
+    };
+    var REF = { DECLARACAO: "débito declarado", DAS_PAGO: "DAS pago (principal)" };
+    var rows = r.rows.map(function (x) {
+      var res = x.result || {};
+      var inp = x.inputs || {};
+      var taxes = res.taxes ? TAXN.filter(function (t) { return Number(res.taxes[t]) !== 0; }).map(function (t) {
+        var dif = res.taxDifferences && res.taxDifferences[t] ? ' <span class="bad">(' + brl(res.taxDifferences[t]) + ')</span>' : '';
+        return t + ' ' + brl(res.taxes[t]) + dif;
+      }).join(" · ") : "";
+      var base = '<div class="mut" style="font-size:11px">RBT12 ' + (inp.rbt12 ? brl(inp.rbt12) : "—") + (inp.rbt12Proportional ? " (proporcional)" : "") + (res.bracket ? " · faixa " + res.bracket + " · alíq. efetiva " + Number(res.effectiveRate).toFixed(4).replace(".", ",") + "%" : "") + '</div>';
+      var why = (res.reason ? '<div class="wr" style="font-size:11px">' + esc(res.reason) + '</div>' : '') + (res.notes && res.notes.length ? '<div class="mut" style="font-size:11px">' + esc(res.notes.join(" · ")) + '</div>' : '');
+      return '<tr><td>' + mm(x.competence) + '<div class="mut" style="font-size:11px">' + (x.mode === "APURACAO" ? "apuração pelas NFS-e" : "conferência") + '</div></td>' +
+        '<td class="num">' + (inp.rpa ? brl(inp.rpa) : "—") + base + '</td>' +
+        '<td class="num"><b>' + (x.total === null ? "—" : brl(x.total)) + '</b>' + (taxes ? '<div class="mut" style="font-size:11px;white-space:normal">' + taxes + '</div>' : '') + '</td>' +
+        '<td class="num">' + (x.reference_total === null ? "—" : brl(x.reference_total) + '<div class="mut" style="font-size:11px">' + esc(REF[x.reference_kind] || "") + '</div>') + '</td>' +
+        '<td class="num">' + (x.difference === null ? "—" : brl(x.difference)) + '</td>' +
+        '<td>' + (ST[x.status] || esc(x.status)) + why + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>Simples Nacional: cálculo do motor</h2>' +
+      (rows ? '<div class="scroll"><table><thead><tr><th>Competência</th><th class="num">Receita do PA</th><th class="num">Calculado</th><th class="num">Referência</th><th class="num">Diferença</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">Sem cálculo ainda: precisa de uma declaração lida (anexo da atividade) e das tabelas aprovadas.</div>') +
+      '<div class="empty">Motor determinístico, sem IA. Competência declarada: recalcula com a receita e a RBT12 declaradas e compara com o débito do PDF ou com o DAS pago. Mês fechado e não declarado: receita pelas NFS-e prestadas. Nada é transmitido.</div>';
+  }).catch(function (err) { toast(err.message); });
 }
 
 function prevMonth(m) { var y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7)) - 1; if (mo < 1) { mo = 12; y--; } return y + "-" + String(mo).padStart(2, "0"); }
@@ -498,9 +536,23 @@ function viewDepto(id) {
 }
 
 /* ---------------- Regras ---------------- */
+function simplesRulesHtml(list) {
+  var pend = list.filter(function (x) { return !x.approved_by && !x.superseded; }).length;
+  var rows = list.map(function (x) {
+    var def = x.definition || {};
+    var det = def.kind === "ANEXO" ? def.brackets.map(function (b) { return b.n + "ª até " + brl(b.upTo) + ": " + b.rate.replace(".", ",") + "% − " + brl(b.deduction); }).join("<br>") + (def.localCap ? '<div class="mut" style="font-size:11px">teto do ' + def.localTax + ' ' + def.localCap.rate.replace(".", ",") + '%; diferença: ' + Object.keys(def.localCap.transfer).map(function (k) { return k + " " + def.localCap.transfer[k].replace(".", ",") + "%"; }).join(", ") + '</div>' : '')
+      : "limite " + brl(def.limit) + " · sublimite " + brl(def.sublimit) + " · tolerância " + def.excessTolerance.replace(".", ",") + "%";
+    return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:11px">' + esc(x.code) + ' v' + x.version + '</div></td><td style="font-size:12px">' + det + '</td><td>' + esc(x.legal_basis) + (x.notes ? '<div class="mut" style="font-size:12px">' + esc(x.notes) + '</div>' : '') + '</td><td class="st ' + (x.approved_by ? "ok" : "wr") + '">' + (x.approved_by ? "aprovada por " + esc(x.approved_by) : x.superseded ? "substituída" : "proposta") + '</td></tr>';
+  }).join("");
+  return '<section class="card"><h2>Tabelas do Simples Nacional · ' + pend + ' aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Tabela</th><th>Faixas (alíquota − parcela a deduzir)</th><th>Fundamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="empty">A repartição por tributo de cada faixa está na tabela. O Anexo IV já foi conferido centavo a centavo contra declarações reais; os demais foram transcritos da LC 123 e precisam de conferência antes de aprovar.</div>' +
+    (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="srules">Aprovar ' + pend + ' tabela(s)</button><span class="mut">Sem aprovação o motor não calcula. A aprovação fica na auditoria em seu nome e recalcula as empresas.</span></div>' : '') + '</section>';
+}
+
 function viewRegras() {
-  setHead("Regras e legislação", "Catálogo de obrigações. Nenhuma regra vale sem a aprovação do responsável técnico.");
-  return getJson("/api/regras").then(function (r) {
+  setHead("Regras e legislação", "Catálogo de obrigações e tabelas de cálculo. Nenhuma regra vale sem a aprovação do responsável técnico.");
+  return Promise.all([getJson("/api/regras"), getJson("/api/simples/regras")]).then(function (both) {
+    var r = both[0], sr = both[1];
     var pend = r.rules.filter(function (x) { return !x.approved_by; }).length;
     var rows = r.rules.map(function (x) {
       var ADJ = { NEXT_BUSINESS_DAY: "em dia não útil, prorroga", PREVIOUS_BUSINESS_DAY: "em dia não útil, antecipa", NONE: "sem ajuste" };
@@ -509,7 +561,8 @@ function viewRegras() {
     }).join("");
     $("view").innerHTML = '<section class="card"><h2>' + r.rules.length + ' regras · ' + pend + ' aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Regra</th><th>Esfera</th><th>Prazo</th><th>Fundamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="empty">Calendário: fins de semana e feriados nacionais. Na dúvida a IARIS usa a data mais cedo: dia só sem expediente bancário (Carnaval, Paixão, Corpus Christi) antecipa, mas não prorroga. Feriados municipais ainda não entram.</div>' +
-      (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="rules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira prazos e fundamentos antes de aprovar. A aprovação fica na auditoria em seu nome e completa os mapas das empresas.</span></div>' : '') + '</section>';
+      (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="rules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira prazos e fundamentos antes de aprovar. A aprovação fica na auditoria em seu nome e completa os mapas das empresas.</span></div>' : '') + '</section>' +
+      simplesRulesHtml(sr.rules);
   });
 }
 
@@ -536,6 +589,11 @@ document.addEventListener("click", function (ev) {
       b.disabled = true;
       post("/api/regras/aprovar", "aprovar").then(function (r) { toast(r.approved + " regra(s) aprovada(s); " + r.obligationsAdded + " obrigação(ões) adicionada(s) aos mapas."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
     }
+    if (b.dataset.act === "srules") {
+      if (!window.confirm("Aprovar as tabelas do Simples Nacional propostas?\\n\\nConfira alíquotas, parcelas a deduzir e repartição com a LC 123. A aprovação fica registrada na auditoria em seu nome.")) return;
+      b.disabled = true;
+      post("/api/simples/regras/aprovar", "aprovar").then(function (r) { toast(r.approved.length + " tabela(s) aprovada(s); " + r.recalculated + " cálculo(s) atualizado(s)."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
+    }
     if (b.dataset.act === "certs") {
       b.disabled = true;
       post("/api/certificados/conferir", "conferir").then(function (r) {
@@ -558,7 +616,7 @@ document.addEventListener("click", function (ev) {
       b.disabled = true;
       post("/api/empresa/" + id + "/competencia/" + pa + "/declaracao", "buscar").then(function (r) {
         toast(r.found ? "Declaração lida: " + r.months + " mês(es) de receita." : "Não há declaração transmitida nesse PA.");
-      }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; return loadCentral(); }).then(function () { return loadConferencia(id); });
+      }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; return loadCentral(); }).then(function () { loadSimples(id); return loadConferencia(id); });
     }
     if (b.dataset.act === "exc") {
       var dec = b.dataset.dec, note = null;

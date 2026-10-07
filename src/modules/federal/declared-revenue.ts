@@ -41,6 +41,19 @@ async function storeParsed(tx: PoolClient, entityId: string, competence: string,
     );
     months += ins.rowCount ?? 0;
   }
+  // Débito declarado por atividade (seção 2.7): referência do motor do Simples.
+  for (const a of content.activities) {
+    await tx.query(
+      `INSERT INTO pgdas_declared_tax (id, tenant_id, entity_id, competence, declaration_number, pdf_id, seq, activity, annex,
+                                       local_withheld, factor_r, revenue, irpj, csll, cofins, pis, cpp, icms, ipi, iss, total,
+                                       rbt12, rba, rbaa, sublimit, local_impeded)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+       ON CONFLICT (tenant_id, pdf_id, seq) DO NOTHING`,
+      [newId(), entityId, content.period ?? competence, number, pdfId, a.seq, a.activity, a.annex, a.localWithheld, a.factorR, a.revenue,
+       a.taxes.IRPJ, a.taxes.CSLL, a.taxes.COFINS, a.taxes.PIS, a.taxes.CPP, a.taxes.ICMS, a.taxes.IPI, a.taxes.ISS, a.total,
+       content.rbt12, content.rba, content.rbaa, content.sublimit, content.localImpeded],
+    );
+  }
   return { content, months };
 }
 

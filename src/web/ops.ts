@@ -91,6 +91,16 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `Receita ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}: declarado × NFS-e diverge em ${Number(p.difference).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`;
     case "EXCEPTION_DECIDED":
       return p.decision === "RETIFICAR" ? "Exceção decidida: retificar o PGDAS-D" : p.decision === "ADIAR" ? "Exceção adiada para revisão posterior" : "Exceção decidida: diferença mantida com justificativa";
+    case "SIMPLES_RULES_APPROVED":
+      return `Tabelas do Simples aprovadas: ${(p.rules as string[]).join(", ")}`;
+    case "SIMPLES_CALCULATED": {
+      const pa = `${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}`;
+      const brl = (v: unknown) => Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      if (p.status === "CONFERE") return `Simples ${pa}: cálculo confere com o declarado (${brl(p.total)})`;
+      if (p.status === "DIVERGE") return `Simples ${pa}: cálculo ${brl(p.total)} × referência ${brl(p.reference_total)}`;
+      if (p.status === "CALCULADO") return `Simples ${pa} apurado pelas NFS-e: ${brl(p.total)} (a declarar)`;
+      return `Simples ${pa}: ${String(p.status).toLowerCase().replace(/_/g, " ")}`;
+    }
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
@@ -108,9 +118,13 @@ export async function centralData(tx: PoolClient) {
     has_cert: boolean;
     dfe_docs: number;
     awaiting: number;
+    simples: { competence: string; status: string; total: string | null } | null;
   }>(
     `SELECT e.id, coalesce(e.trade_name, e.legal_name) AS name, e.cnpj,
             (SELECT count(*)::int FROM dfe_document x WHERE x.entity_id = e.id AND x.kind IN ('NFE', 'RES_NFE')) AS dfe_docs,
+            (SELECT json_build_object('competence', s.competence, 'status', s.status, 'total', s.total::text)
+               FROM simples_calculation s WHERE s.entity_id = e.id
+              ORDER BY s.competence DESC, s.created_at DESC LIMIT 1) AS simples,
             (SELECT count(*)::int FROM dfe_document r WHERE r.entity_id = e.id AND r.kind = 'RES_NFE' AND r.situation = '1'
                AND NOT EXISTS (SELECT 1 FROM dfe_document f WHERE f.entity_id = r.entity_id AND f.kind = 'NFE' AND f.access_key = r.access_key)
                AND NOT EXISTS (SELECT 1 FROM nfe_manifestation m WHERE m.entity_id = r.entity_id AND m.access_key = r.access_key)) AS awaiting,
@@ -159,8 +173,18 @@ export async function centralData(tx: PoolClient) {
           if (!e.has_cert) return { kind: "wait", text: "aguarda certificado A1" };
           if (e.awaiting) return { kind: "wait", text: `${e.awaiting} NF-e aguardando ciência` };
           return { kind: e.dfe_docs ? "done" : "run", text: e.dfe_docs ? `${e.dfe_docs} NF-e recebidas` : "busca SEFAZ ativa" };
-        case "Tributos":
+        case "Tributos": {
+          const sc = e.simples;
+          if (sc) {
+            const pa = `${sc.competence.slice(5, 7)}/${sc.competence.slice(0, 4)}`;
+            if (sc.status === "CALCULADO") return { kind: "run", text: `Simples ${pa} calculado` };
+            if (sc.status === "CONFERE") return { kind: "done", text: `Simples ${pa} confere` };
+            if (sc.status === "DIVERGE") return { kind: "wait", text: `Simples ${pa} diverge` };
+            if (sc.status === "REGRA_PENDENTE") return { kind: "wait", text: "tabelas a aprovar" };
+            return { kind: "wait", text: `Simples ${pa}: ${sc.status.toLowerCase().replace(/_/g, " ")}` };
+          }
           return e.has_pgdas ? { kind: "done", text: "Receita sincronizada" } : { kind: "future", text: "Fase 5" };
+        }
         default: {
           const proc = PROCESSES.find((p) => p.name.startsWith(stage) || (stage === "Cliente" && p.id === "relacionamento"));
           return { kind: "future", text: proc ? proc.phase : "planejado" };

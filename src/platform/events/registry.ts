@@ -171,6 +171,24 @@ export const EventContracts = {
       decided_by: z.string(),
     }),
   },
+  SIMPLES_RULES_APPROVED: {
+    1: z.object({
+      rules: z.array(z.string()).min(1),
+      approved_by: z.string(),
+    }),
+  },
+  SIMPLES_CALCULATED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      mode: z.enum(["CONFERENCIA", "APURACAO"]),
+      status: z.string(),
+      total: z.string().nullable(),
+      reference_total: z.string().nullable(),
+      difference: z.string().nullable(),
+      rules: z.array(z.string()),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;
