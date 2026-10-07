@@ -23,7 +23,7 @@ import { resolvePendingItem } from "../pending/pending.js";
  *
  * O nome do arquivo nunca é gravado nem exibido (há escritórios que anotam a
  * senha no nome): a referência no banco é pelo CNPJ.
- * A IARES abre o .pfx só para conferir: senha, CNPJ do titular e validade.
+ * A IARIS abre o .pfx só para conferir: senha, CNPJ do titular e validade.
  * No banco ficam apenas dados públicos (titular, série, validade, impressão
  * digital) e a referência ao arquivo — nunca a chave privada nem a senha.
  */

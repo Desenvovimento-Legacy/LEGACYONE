@@ -152,7 +152,7 @@ function checklistFor(f: EntityFacts): ChecklistItem[] {
   const s = new Set(f.services);
   const items: ChecklistItem[] = [];
   if ((s.has("FISCAL") || s.has("CONTABIL")) && !f.hasClientCertificate) {
-    items.push({ type: "CLIENT_CERTIFICATE", responsible: "CLIENT", info: "Enviar o certificado A1 (e-CNPJ) da empresa e a senha pelo canal seguro", impact: "Sem ele a IARES não busca NF-e e NFS-e automaticamente" });
+    items.push({ type: "CLIENT_CERTIFICATE", responsible: "CLIENT", info: "Enviar o certificado A1 (e-CNPJ) da empresa e a senha pelo canal seguro", impact: "Sem ele a IARIS não busca NF-e e NFS-e automaticamente" });
   }
   if (s.has("FISCAL")) {
     items.push({ type: "STATE_REGISTRATION", responsible: "CLIENT", info: "Informar a inscrição estadual (ou confirmar que a empresa não tem)", impact: "Necessária para as obrigações estaduais e notas de mercadoria" });
@@ -359,7 +359,7 @@ export function nextDueDates(
   return out;
 }
 
-/** Mapa de acessos: o que a IARES consegue acessar por empresa, calculado dos dados. */
+/** Mapa de acessos: o que a IARIS consegue acessar por empresa, calculado dos dados. */
 export async function accessMap(tx: PoolClient, entityId: string) {
   const r = await tx.query<{ poa_to: string | null; cert: boolean; cert_to: string | null; open: string[] }>(
     `SELECT (SELECT max(coalesce(valid_to, 'infinity'::date))::text FROM power_of_attorney p

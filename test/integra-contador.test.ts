@@ -173,7 +173,7 @@ describe("Credential Vault (arquivo local)", () => {
   });
 
   it("confere o certificado A1 com a senha sem expor a chave", () => {
-    const dir = mkdtempSync(join(tmpdir(), "iares-pfx-"));
+    const dir = mkdtempSync(join(tmpdir(), "iaris-pfx-"));
     const key = join(dir, "k.pem");
     const crt = join(dir, "c.pem");
     const pfx = join(dir, "c.pfx");

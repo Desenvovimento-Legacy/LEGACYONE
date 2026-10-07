@@ -1,8 +1,8 @@
 {
-  "name": "iares",
+  "name": "iaris",
   "version": "0.1.0",
   "private": true,
-  "description": "IARES — sistema operacional contábil autônomo",
+  "description": "IARIS — sistema operacional contábil autônomo",
   "type": "module",
   "engines": {
     "node": ">=22"

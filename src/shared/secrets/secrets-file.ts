@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 /**
  * Credential Vault — backend de arquivo local (fase piloto).
  *
- * Lê um arquivo KEY=VALOR fora do repositório (ex.: C:\IARES\cofre\segredos.env,
+ * Lê um arquivo KEY=VALOR fora do repositório (ex.: C:\IARIS\cofre\segredos.env,
  * com ACL restrita ao usuário). Regras:
  *  - os valores nunca são impressos, logados, serializados nem enviados a LLM;
  *  - quem precisa de um segredo pede pelo nome e recebe só aquele valor;
@@ -79,11 +79,12 @@ export function secretStoreFromText(text: string, location = "memória"): Secret
 }
 
 /**
- * Caminho padrão do cofre: IARES_SECRETS_FILE, ou, no Windows, a pasta
- * centralizada C:\IARES\cofre\segredos.env. Os locais antigos
- * (C:\AIRES\cofre, C:\AIRES-COFRE, C:\IARIS-COFRE) valem só se o novo não existir.
+ * Caminho padrão do cofre: IARIS_SECRETS_FILE, ou, no Windows, a pasta
+ * centralizada C:\IARIS\cofre\segredos.env. Os locais antigos
+ * (C:\IARES\cofre, C:\AIRES\cofre, C:\AIRES-COFRE, C:\IARIS-COFRE) valem só se o novo não existir.
  */
 export const WINDOWS_VAULT_CANDIDATES = [
+  "C:\\IARIS\\cofre\\segredos.env",
   "C:\\IARES\\cofre\\segredos.env",
   "C:\\AIRES\\cofre\\segredos.env",
   "C:\\AIRES-COFRE\\segredos.env",
@@ -91,7 +92,7 @@ export const WINDOWS_VAULT_CANDIDATES = [
 ];
 
 export function defaultSecretsPath(): string | null {
-  const env = process.env.IARES_SECRETS_FILE ?? process.env.AIRES_SECRETS_FILE ?? process.env.IARIS_SECRETS_FILE;
+  const env = process.env.IARIS_SECRETS_FILE ?? process.env.IARES_SECRETS_FILE ?? process.env.AIRES_SECRETS_FILE;
   if (env) return env;
   if (process.platform !== "win32") return null;
   return WINDOWS_VAULT_CANDIDATES.find((p) => existsSync(p)) ?? WINDOWS_VAULT_CANDIDATES[0]!;

@@ -63,7 +63,7 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
     const url = `${base}/api/empresa/${entityId}/competencia/2026-08/buscar`;
     expect((await fetch(url, { method: "POST" })).status).toBe(403);
     expect(
-      (await fetch(url, { method: "POST", headers: { "X-IARES-Acao": "buscar", Origin: "https://evil.example" } })).status,
+      (await fetch(url, { method: "POST", headers: { "X-IARIS-Acao": "buscar", Origin: "https://evil.example" } })).status,
     ).toBe(403);
     expect(integra.calls).toEqual([]);
   });
@@ -72,7 +72,7 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
     const { base, integra, entityId } = await start();
     const r = await fetch(`${base}/api/empresa/${entityId}/competencia/2026-08/buscar`, {
       method: "POST",
-      headers: { "X-IARES-Acao": "buscar" },
+      headers: { "X-IARIS-Acao": "buscar" },
     });
     const body = await r.json();
     expect(r.status, JSON.stringify(body)).toBe(200);
@@ -88,7 +88,7 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
     const { base, integra, entityId } = await start(1);
     const r = await fetch(`${base}/api/empresa/${entityId}/competencia/2026-08/buscar`, {
       method: "POST",
-      headers: { "X-IARES-Acao": "buscar" },
+      headers: { "X-IARIS-Acao": "buscar" },
     });
     expect(r.status).toBe(429);
     expect(integra.calls).toEqual([]);

@@ -1,5 +1,5 @@
 /**
- * Natureza jurídica (tabela da Receita) -> tipo de entidade do IARES.
+ * Natureza jurídica (tabela da Receita) -> tipo de entidade do IARIS.
  * Códigos não mapeados retornam null e viram pendência para classificação humana:
  * o sistema não chuta o tipo de entidade.
  */

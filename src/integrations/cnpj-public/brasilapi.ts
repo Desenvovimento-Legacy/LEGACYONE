@@ -104,7 +104,7 @@ export class BrasilApiCnpjSource implements CnpjPublicDataSource {
     for (let attempt = 1; ; attempt++) {
       const res = await fetch(`${this.baseUrl}/${cnpj}`, {
         signal: AbortSignal.timeout(30_000),
-        headers: { accept: "application/json", "user-agent": "iares/0.1 (+https://github.com/Desenvovimento-Legacy)" },
+        headers: { accept: "application/json", "user-agent": "iaris/0.1 (+https://github.com/Desenvovimento-Legacy)" },
       });
       if (res.status === 404) throw new CnpjNotFoundError(cnpj);
       if (res.ok) {
