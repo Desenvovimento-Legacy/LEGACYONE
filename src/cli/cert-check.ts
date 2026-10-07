@@ -13,7 +13,7 @@ import { openSecretsFile } from "../shared/secrets/secrets-file.js";
 if (isMain(import.meta.url)) {
   const vault = openSecretsFile();
   if (!vault) {
-    console.error("✗ Cofre não encontrado (C:\\AIRES\\cofre\\segredos.env)");
+    console.error("✗ Cofre não encontrado (C:\\IARES\\cofre\\segredos.env)");
     process.exit(1);
   }
   const slug = process.env.LEGACY_TENANT ?? "contabilidade-legacy";

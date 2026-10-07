@@ -1,5 +1,5 @@
 /**
- * Catálogo de agentes e processos da AIRES, com a situação de implantação.
+ * Catálogo de agentes e processos da IARES, com a situação de implantação.
  * É a fonte da Central de agentes: muda aqui quando um agente entra em operação.
  */
 export type AgentStatus = "OPERANDO" | "EM_CONSTRUCAO" | "PLANEJADO";
@@ -39,7 +39,7 @@ export const AGENT_NAMES: Record<string, string> = {
   "pending-engine": "Pendências",
   esocial: "eSocial e DCTFWeb",
   ecd: "ECD e ECF",
-  // nomes usados antes da troca para AIRES (histórico imutável)
+  // nomes usados antes da troca para IARES (histórico imutável)
   "one-onboarding": "Implantação",
   "one-search": "Busca Receita",
 };

@@ -25,13 +25,13 @@ import { casesList, centralData, departmentsData, entitiesList, entityDetail, ru
 import { PAGE_HTML } from "./page.js";
 
 /**
- * Tela local do AIRES (piloto). Escuta só em 127.0.0.1.
+ * Tela local do IARES (piloto). Escuta só em 127.0.0.1.
  *
  * Regra de custo: abrir a tela, trocar de competência ou de empresa só lê o
  * banco. A única rota que consulta o SERPRO é POST .../buscar, disparada pelo
  * botão Buscar, que exige confirmação e respeita o teto diário.
  * Proteção contra outro site disparar consultas: a rota exige o cabeçalho
- * X-AIRES-Acao (força preflight de CORS, que este servidor nunca libera) e
+ * X-IARES-Acao (força preflight de CORS, que este servidor nunca libera) e
  * Origin igual ao da própria tela.
  */
 
@@ -75,7 +75,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 /** Toda ação (POST) exige o cabeçalho da própria tela e a mesma origem. */
 function actionAllowed(req: IncomingMessage, port: number, action: string): boolean {
-  return req.headers["x-aires-acao"] === action && sameOrigin(req, port);
+  return req.headers["x-iares-acao"] === action && sameOrigin(req, port);
 }
 
 function sameOrigin(req: IncomingMessage, port: number): boolean {
@@ -388,7 +388,7 @@ export function createWebServer(deps: WebDeps) {
 }
 
 if (isMain(import.meta.url)) {
-  const port = Number(process.env.AIRES_WEB_PORT ?? 3100);
+  const port = Number(process.env.IARES_WEB_PORT ?? process.env.AIRES_WEB_PORT ?? 3100);
   const slug = process.env.LEGACY_TENANT ?? "contabilidade-legacy";
   const admin = createPool(config.adminDatabaseUrl(), 1);
   const app = createPool(config.databaseUrl(), 4);
@@ -426,7 +426,7 @@ if (isMain(import.meta.url)) {
   };
   // Agente Documentos: busca automática na SEFAZ (sem custo). Cada empresa só é
   // consultada quando a regra de espera de 1 h permite.
-  if (deps.dfe && process.env.AIRES_DFE_AUTO !== "0") {
+  if (deps.dfe && process.env.IARES_DFE_AUTO !== "0") {
     let running = false;
     const tick = async () => {
       if (running) return;
@@ -450,8 +450,8 @@ if (isMain(import.meta.url)) {
     setInterval(tick, 5 * 60_000);
   }
   createWebServer(deps).listen(port, "127.0.0.1", () => {
-    console.log(`AIRES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
-    if (deps.dfe && process.env.AIRES_DFE_AUTO !== "0") console.log("Busca de NF-e (SEFAZ) e NFS-e (Nacional): automática, sem custo, respeitando as regras de espera.");
+    console.log(`IARES aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
+    if (deps.dfe && process.env.IARES_DFE_AUTO !== "0") console.log("Busca de NF-e (SEFAZ) e NFS-e (Nacional): automática, sem custo, respeitando as regras de espera.");
     console.log(`Teto de consultas cobradas por dia: ${deps.metering.dailyLimit}. Abrir a tela não consulta o SERPRO.`);
   });
 }

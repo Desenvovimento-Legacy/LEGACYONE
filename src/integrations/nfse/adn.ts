@@ -97,7 +97,7 @@ export class AdnDistribution implements NfseDistribution {
         url,
         {
           method: "GET",
-          headers: { accept: "application/json", "user-agent": "AIRES-Documentos" },
+          headers: { accept: "application/json", "user-agent": "IARES-Documentos" },
           pfx: input.certificate.pfx,
           passphrase: input.certificate.passphrase,
           timeout: 60_000,

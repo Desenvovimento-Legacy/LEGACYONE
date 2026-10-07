@@ -21,7 +21,7 @@ function makePfx(dir: string, name: string, cn: string, password: string): Buffe
 }
 
 function vaultWith(files: Record<string, Buffer>, secrets: Record<string, string>) {
-  const dir = mkdtempSync(join(tmpdir(), "aires-cofre-"));
+  const dir = mkdtempSync(join(tmpdir(), "iares-cofre-"));
   mkdirSync(join(dir, "clientes"));
   for (const [cnpj, pfx] of Object.entries(files)) writeFileSync(join(dir, "clientes", `${cnpj}.pfx`), pfx);
   writeFileSync(join(dir, "segredos.env"), Object.entries(secrets).map(([k, v]) => `${k}=${v}`).join("\n"));
@@ -29,7 +29,7 @@ function vaultWith(files: Record<string, Buffer>, secrets: Record<string, string
 }
 
 describe("certificados A1 dos clientes no cofre local", () => {
-  const work = mkdtempSync(join(tmpdir(), "aires-pfx-"));
+  const work = mkdtempSync(join(tmpdir(), "iares-pfx-"));
   const good = makePfx(work, "matriz", `ALPHA INDUSTRIA LTDA:${CNPJ_MATRIZ}`, "senha-certa");
 
   it("lê só dados públicos: titular (CNPJ do CN), série e validade", () => {
@@ -92,7 +92,7 @@ describe("certificados A1 dos clientes no cofre local", () => {
   it("acha o arquivo em subpasta pelo CNPJ no nome; entre cópias fica a que abre", async () => {
     const t = await newTenant();
     await newEntity(t, CNPJ_MATRIZ);
-    const dir = mkdtempSync(join(tmpdir(), "aires-cofre-"));
+    const dir = mkdtempSync(join(tmpdir(), "iares-cofre-"));
     mkdirSync(join(dir, "clientes", "Certificado Digital"), { recursive: true });
     writeFileSync(join(dir, "clientes", "Certificado Digital", `ALPHA INDUSTRIA LTDA_${CNPJ_MATRIZ} (1).pfx`), Buffer.from("lixo"));
     writeFileSync(join(dir, "clientes", "Certificado Digital", `ALPHA INDUSTRIA LTDA_${CNPJ_MATRIZ}.pfx`), good);

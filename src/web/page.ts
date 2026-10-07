@@ -1,5 +1,5 @@
 /**
- * Tela local da AIRES (uma página, rotas por #). Abrir e navegar só faz GET
+ * Tela local da IARES (uma página, rotas por #). Abrir e navegar só faz GET
  * (banco). Ações humanas e a busca na Receita são POST com confirmação.
  * Atenção: o script abaixo vive dentro de um template literal — não use crase
  * nem cifrão-chave nele; monte textos por concatenação.
@@ -9,7 +9,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AIRES</title>
+<title>IARES</title>
 <style>
   :root {
     --bg: #F3F6F9; --panel: #FFFFFF; --panel2: #F8FAFC; --line: #E2E8F0; --line2: #EDF2F7;
@@ -129,7 +129,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   <nav class="side" aria-label="Menu principal">
     <div class="brand">
       <svg width="32" height="32" viewBox="0 0 30 30" fill="none" stroke="#0F9D8F" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="9" r="2.2"></circle><circle cx="21" cy="7" r="2.2"></circle><circle cx="15" cy="16" r="2.2"></circle><circle cx="23" cy="20" r="2.2"></circle><circle cx="9" cy="22" r="2.2"></circle><path d="M10 10l3.5 4.5M19.5 8.5L16 14M17 17l4.5 2M13.2 17.5L10.5 20.5M15 18.2V27"></path></svg>
-      <div><b>AIRES</b><small>Inteligência Artificial para Resultados, Integração e Soluções</small></div>
+      <div><b>IARES</b><small>Inteligência Artificial para Resultados, Integração e Soluções</small></div>
     </div>
     <div class="grp"><span>OPERAÇÃO</span>
       <a class="nav" href="#/central" data-r="central"><span class="dot" style="background:var(--teal)"></span>Central de agentes</a>
@@ -177,7 +177,7 @@ var mm = function (c) { return c.slice(5, 7) + "/" + c.slice(0, 4); };
 function toast(m) { var t = $("toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(function () { t.style.display = "none"; }, 6000); }
 function asJson(r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b.erro || "HTTP " + r.status); return b; }); }
 function getJson(u) { return fetch(u, { cache: "no-store" }).then(asJson); }
-function post(u, action, body) { return fetch(u, { method: "POST", headers: { "X-AIRES-Acao": action, "content-type": "application/json" }, body: JSON.stringify(body || {}) }).then(asJson); }
+function post(u, action, body) { return fetch(u, { method: "POST", headers: { "X-IARES-Acao": action, "content-type": "application/json" }, body: JSON.stringify(body || {}) }).then(asJson); }
 function setHead(t, s) { $("title").textContent = t; $("subtitle").textContent = s || ""; }
 function lastClosedMonth() { var n = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })); n.setDate(1); n.setMonth(n.getMonth() - 1); return n.getFullYear() + "-" + String(n.getMonth() + 1).padStart(2, "0"); }
 var STATUS_LABEL = { OPERANDO: "operando", EM_CONSTRUCAO: "em construção", PLANEJADO: "planejado" };
@@ -219,7 +219,7 @@ function eventsHtml(evs) {
 }
 
 function viewCentral() {
-  setHead("Central de agentes", "O que a AIRES está fazendo agora, em todas as empresas e processos");
+  setHead("Central de agentes", "O que a IARES está fazendo agora, em todas as empresas e processos");
   return loadCentral().then(function (c) {
     var k = c.kpis;
     var kpis = [
@@ -250,7 +250,7 @@ function viewCentral() {
 }
 
 function viewFila() {
-  setHead("Fila humana", "Só o que a AIRES não pode decidir sozinha. Cada decisão fica registrada na auditoria.");
+  setHead("Fila humana", "Só o que a IARES não pode decidir sozinha. Cada decisão fica registrada na auditoria.");
   return loadCentral().then(function (c) {
     $("view").innerHTML = '<section class="card queue" style="max-width:820px"><h2>' + c.human.length + ' item(ns) esperando você</h2>' +
       (c.human.length ? c.human.map(queueItemHtml).join("") : '<div class="empty">Nada esperando você.</div>') + '</section>';
@@ -271,7 +271,7 @@ function viewCases() {
 }
 
 function viewProcessos() {
-  setHead("Processos", "Todos os processos da AIRES e a situação de cada um");
+  setHead("Processos", "Todos os processos da IARES e a situação de cada um");
   return loadCentral().then(function (c) {
     var rows = c.processes.map(function (p) {
       return '<tr><td><span class="sdot ' + p.status + '" style="display:inline-block;margin-right:8px"></span><b>' + esc(p.name) + '</b></td><td>' + esc(p.summary) + '</td><td>' + STATUS_LABEL[p.status] + '</td><td>' + esc(p.phase) + '</td><td class="mono">' + esc(p.agents.join(", ")) + '</td></tr>';
@@ -334,7 +334,7 @@ function viewEmpresas() {
       return '<tr class="row" data-goto="#/empresa/' + e.id + '"><td><b>' + esc(e.legal_name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td>' + esc((e.regime || "—").replace("_", " ").toLowerCase()) + '</td><td>' + (e.start ? d(e.start) : '<span class="wr st">a definir</span>') + '</td><td class="num">' + e.open_items + '</td></tr>';
     }).join("");
     $("view").innerHTML = '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
-      '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Os .pfx ficam em C:\\\\AIRES\\\\cofre\\\\clientes (pode ser em subpasta, com o CNPJ no nome do arquivo) e a senha no segredos.env (CERT_CNPJ_PASSWORD). A AIRES confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
+      '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Os .pfx ficam em C:\\\\IARES\\\\cofre\\\\clientes (pode ser em subpasta, com o CNPJ no nome do arquivo) e a senha no segredos.env (CERT_CNPJ_PASSWORD). A IARES confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
       '<button data-act="certs">Conferir certificados no cofre</button><div id="certs" style="margin-top:12px"></div></section>';
   });
 }
@@ -404,7 +404,7 @@ function viewDocumentos(entityId) {
       var next = !e.hasCertificate ? '<span class="wr">sem certificado</span>' : e.nextAllowedAt && new Date(e.nextAllowedAt) > new Date() ? 'a partir de ' + hm(e.nextAllowedAt) : 'agora';
       if (e.blockedBySequence) next = '<span class="bad st">parada</span><div class="mut" style="font-size:12px">outro sistema já baixa as notas deste CNPJ</div>';
       var row = '<tr><td><a href="#/documentos/' + e.id + '" style="color:var(--ink)"><b>' + esc(e.name) + '</b></a><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td class="num">' + e.fullNfe + '</td><td class="num">' + e.summaries + '</td><td class="num">' + e.documents + '</td><td>' + last + '</td><td>' + next + '</td><td class="num"><button data-act="dfe" data-id="' + e.id + '"' + (e.hasCertificate && r.configured ? '' : ' disabled') + '>Buscar agora</button></td></tr>';
-      if (e.blockedBySequence) row += '<tr><td colspan="7" style="background:var(--amber-bg)"><b class="wr">Busca parada para não renovar o bloqueio.</b> <span class="mut">Informe o último NSU do sistema que já baixa as notas (ou desligue a busca nele) e a AIRES continua daí, depois da espera de 1 hora.</span><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input id="nsu-' + e.id + '" inputmode="numeric" placeholder="último NSU (ex.: 000000000012345)" style="font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);min-width:260px"><button class="warn" data-act="nsu" data-id="' + e.id + '">Usar este NSU</button></div></td></tr>';
+      if (e.blockedBySequence) row += '<tr><td colspan="7" style="background:var(--amber-bg)"><b class="wr">Busca parada para não renovar o bloqueio.</b> <span class="mut">Informe o último NSU do sistema que já baixa as notas (ou desligue a busca nele) e a IARES continua daí, depois da espera de 1 hora.</span><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input id="nsu-' + e.id + '" inputmode="numeric" placeholder="último NSU (ex.: 000000000012345)" style="font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);min-width:260px"><button class="warn" data-act="nsu" data-id="' + e.id + '">Usar este NSU</button></div></td></tr>';
       return row;
     }).join("");
     var docs = r.documents.map(function (x) {
@@ -413,7 +413,7 @@ function viewDocumentos(entityId) {
       return '<tr><td>' + (x.issuedAt ? dt(x.issuedAt) : "—") + '</td><td>' + esc(x.entity) + '</td><td><b>' + esc(x.issuerName || "—") + '</b><div class="mut mono" style="font-size:11px">' + esc(x.issuerDoc || "") + '</div></td><td>' + what + '<div>' + ci + '</div></td><td class="num">' + (x.total ? brl(x.total) : "—") + '</td><td class="mono" style="font-size:11px">' + esc(x.accessKey || "") + '</td></tr>';
     }).join("");
     $("view").innerHTML = '<section class="card"><h2>Busca na SEFAZ por empresa</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">NF-e completas</th><th class="num">Resumos</th><th class="num">Documentos</th><th>Última consulta</th><th>Próxima consulta</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
-      '<div class="empty">Regra da SEFAZ: sem nota nova, a próxima consulta só depois de 1 hora (fora disso o CNPJ fica bloqueado por 1 hora). A AIRES segue essa regra sozinha.</div></section>' +
+      '<div class="empty">Regra da SEFAZ: sem nota nova, a próxima consulta só depois de 1 hora (fora disso o CNPJ fica bloqueado por 1 hora). A IARES segue essa regra sozinha.</div></section>' +
       '<section class="card"><h2>' + (entityId ? "Documentos da empresa" : "Documentos recebidos") + ' (' + r.documents.length + ')</h2>' + (entityId ? '<div style="margin-bottom:8px"><a href="#/documentos">ver todas as empresas</a></div>' : '') +
       '<div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Emitente</th><th>Documento</th><th class="num">Valor</th><th>Chave</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhum documento recebido ainda.</td></tr>') + '</tbody></table></div></section>' +
       nfseHtml(r, entityId);
@@ -493,7 +493,7 @@ function viewRegras() {
       return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:11px">' + esc(x.code) + ' v' + x.version + (!x.approved_by && x.in_use_version ? ' · em uso: v' + x.in_use_version : '') + '</div></td><td>' + esc(x.sphere.toLowerCase()) + '</td><td>' + due + '</td><td>' + esc(x.legal_basis) + (x.notes ? '<div class="mut" style="font-size:12px">' + esc(x.notes) + '</div>' : '') + '</td><td class="st ' + (x.approved_by ? "ok" : "wr") + '">' + (x.approved_by ? "aprovada por " + esc(x.approved_by) : "proposta") + '</td></tr>';
     }).join("");
     $("view").innerHTML = '<section class="card"><h2>' + r.rules.length + ' regras · ' + pend + ' aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Regra</th><th>Esfera</th><th>Prazo</th><th>Fundamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<div class="empty">Calendário: fins de semana e feriados nacionais. Na dúvida a AIRES usa a data mais cedo: dia só sem expediente bancário (Carnaval, Paixão, Corpus Christi) antecipa, mas não prorroga. Feriados municipais ainda não entram.</div>' +
+      '<div class="empty">Calendário: fins de semana e feriados nacionais. Na dúvida a IARES usa a data mais cedo: dia só sem expediente bancário (Carnaval, Paixão, Corpus Christi) antecipa, mas não prorroga. Feriados municipais ainda não entram.</div>' +
       (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="rules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira prazos e fundamentos antes de aprovar. A aprovação fica na auditoria em seu nome e completa os mapas das empresas.</span></div>' : '') + '</section>';
   });
 }
@@ -555,7 +555,7 @@ document.addEventListener("click", function (ev) {
     if (b.dataset.act === "nsu") {
       var v = $("nsu-" + id).value.trim();
       if (!/^[0-9]{1,15}$/.test(v)) { toast("NSU deve ter só números."); return; }
-      if (!window.confirm("Continuar a busca deste CNPJ a partir do NSU " + v + "?\\n\\nNotas com NSU menor não serão baixadas pela AIRES. A decisão fica na auditoria em seu nome.")) return;
+      if (!window.confirm("Continuar a busca deste CNPJ a partir do NSU " + v + "?\\n\\nNotas com NSU menor não serão baixadas pela IARES. A decisão fica na auditoria em seu nome.")) return;
       b.disabled = true;
       post("/api/empresa/" + id + "/notas/nsu", "confirmar", { nsu: v }).then(function (r) { toast("NSU ajustado. Próxima consulta a partir de " + hm(r.nextAllowedAt) + "."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
     }

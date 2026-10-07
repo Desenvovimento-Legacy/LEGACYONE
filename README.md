@@ -1,4 +1,4 @@
-# AIRES
+# IARES
 
 Sistema operacional contábil autônomo, multi-tenant e multiagente.
 
@@ -46,7 +46,7 @@ Serviços locais:
 
 ## Arquitetura
 
-Documento de arquitetura aprovado: AIRES — Arquitetura para Aprovação (Claude Docs).
+Documento de arquitetura aprovado: IARES — Arquitetura para Aprovação (Claude Docs).
 Convenções para quem escreve código neste repositório: [CLAUDE.md](CLAUDE.md).
 
 ## Fase 1 — Onboarding pelo CNPJ (em andamento)
@@ -57,7 +57,7 @@ pnpm onboard 12.ABC.345/01DE-35
 ```
 
 Integra Contador: as credenciais do SERPRO e o certificado A1 do escritório ficam no cofre local
-(`C:\AIRES\cofre\segredos.env`, fora do repositório). Para conferir sem exibir segredos:
+(`C:\IARES\cofre\segredos.env`, fora do repositório). Para conferir sem exibir segredos:
 
 ```powershell
 pnpm integra:check                 # cofre, certificado e autenticação (não bilhetado)
@@ -78,7 +78,7 @@ verifica a procuração e-CAC e transforma em pendência só o que não pode ser
 
 ## Receita Federal: busca mensal (Integra Contador)
 
-Toda consulta ao SERPRO é cobrada. Regras do AIRES:
+Toda consulta ao SERPRO é cobrada. Regras do IARES:
 
 - **Abrir a tela não consulta nada.** Só o botão **Buscar** consulta, depois de confirmação.
 - **Busca da competência = 2 consultas por empresa**: PGDAS-D do período e pagamentos
