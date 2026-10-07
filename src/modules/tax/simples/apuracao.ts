@@ -110,8 +110,8 @@ export async function approveSimplesRules(pool: Pool, tenantId: string, actor: A
     });
     return refs;
   });
-  const recalculated = approved.length ? await refreshAllSimples(pool, tenantId) : 0;
-  return { approved, recalculated };
+  // O recálculo das empresas é reação ao evento SIMPLES_RULES_APPROVED (Orquestrador).
+  return { approved };
 }
 
 export async function simplesRulesList(tx: PoolClient) {
@@ -451,12 +451,12 @@ export async function simulateSimples(tx: PoolClient, entityId: string, now: Dat
   return computeAll(tx, entityId, now, true);
 }
 
-export async function refreshAllSimples(pool: Pool, tenantId: string): Promise<number> {
+export async function refreshAllSimples(pool: Pool, tenantId: string, now: Date = new Date()): Promise<number> {
   const ents = await withTenant(pool, tenantId, (tx) =>
     tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM pgdas_declared_revenue"),
   );
   let n = 0;
-  for (const e of ents.rows) n += (await refreshSimples(pool, tenantId, e.id)).changed;
+  for (const e of ents.rows) n += (await refreshSimples(pool, tenantId, e.id, now)).changed;
   return n;
 }
 

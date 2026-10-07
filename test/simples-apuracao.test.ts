@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { FakeIntegraContador } from "../src/integrations/integra-contador/fake.js";
 import { fetchLastDeclaration } from "../src/modules/federal/declared-revenue.js";
 import { approveSimplesRules, refreshSimples, simplesOverview } from "../src/modules/tax/simples/apuracao.js";
+import { LINKS } from "../src/modules/orchestration/links.js";
+import { runOrchestrator } from "../src/platform/orchestrator/orchestrator.js";
 import { storeExternalSnapshot } from "../src/platform/evidence/snapshot.js";
 import type { Actor } from "../src/shared/actor.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
@@ -73,6 +75,8 @@ describe("apuração do Simples Nacional", () => {
     const a = await approveSimplesRules(appPool, t, LUAN);
     expect(a.approved).toHaveLength(6);
     expect((await approveSimplesRules(appPool, t, LUAN)).approved).toHaveLength(0);
+    // Recalcular é reação ao evento de aprovação (vínculo tabelas-simples).
+    await runOrchestrator(appPool, t, LINKS, { today: () => "2026-10-07" });
 
     rows = await withTenant(appPool, t, (tx) => simplesOverview(tx, entityId));
     const by = Object.fromEntries(rows.map((r) => [r.competence, r]));

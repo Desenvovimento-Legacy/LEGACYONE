@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { newId } from "../../shared/ids.js";
@@ -49,6 +50,13 @@ export interface StoredEvent {
 }
 
 /**
+ * Cadeia de causa: quando um agente reage a um evento (Orquestrador), todo
+ * evento que ele gravar durante a reação aponta para o evento de origem
+ * (causation_id) e herda a correlação. Assim a tela mostra o encadeamento.
+ */
+export const eventCause = new AsyncLocalStorage<{ causationId: string; correlationId: string }>();
+
+/**
  * Grava um evento no outbox DENTRO da transação do chamador (`tx` vem de
  * withTenant). Se a transação fizer rollback, o evento também some.
  * Idempotente: repetir a mesma idempotencyKey devolve o evento já gravado.
@@ -74,8 +82,8 @@ export async function appendEvent(tx: PoolClient, event: NewEvent): Promise<Stor
       event.caseId ?? null,
       event.competence ?? null,
       JSON.stringify(event.producer),
-      event.causationId ?? null,
-      event.correlationId ?? eventId,
+      event.causationId ?? eventCause.getStore()?.causationId ?? null,
+      event.correlationId ?? eventCause.getStore()?.correlationId ?? eventId,
       event.idempotencyKey,
       JSON.stringify(payload),
       JSON.stringify(event.evidenceRefs ?? []),

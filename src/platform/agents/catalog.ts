@@ -160,6 +160,7 @@ export const DEPARTMENTS: DepartmentInfo[] = [
 
 /** Comuns a todos os departamentos. */
 export const SHARED_AGENTS: AgentInfo[] = [
+  { id: "orchestrator", name: "Orquestrador", status: "OPERANDO", summary: "Liga os agentes por evento: quando um termina, o próximo começa sozinho.", capabilities: [cap("Vínculos por evento", true), cap("Cadeia de causa visível", true), cap("Refazer com limite e escalar", true)] },
   { id: "case-engine", name: "Cases e pendências", status: "OPERANDO", summary: "Toda operação é um Case; o que falta vira pendência.", capabilities: [cap("Cases", true), cap("Pendências", true), cap("Fila humana", true)] },
   { id: "relationship", name: "Relacionamento", status: "PLANEJADO", summary: "Um pedido consolidado ao cliente.", capabilities: [cap("Pedido consolidado"), cap("Portal do cliente"), cap("WhatsApp e e-mail")] },
 ];

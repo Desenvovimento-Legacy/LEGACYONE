@@ -1,5 +1,7 @@
 import type { PoolClient } from "pg";
 import { guidesNeedingAttention } from "../modules/tax/guides.js";
+import { EVENT_LABEL, LINKS } from "../modules/orchestration/links.js";
+import { MAX_ATTEMPTS } from "../platform/orchestrator/orchestrator.js";
 import { agentName, DEPARTMENTS, PIPELINE_STAGES, PROCESSES, SHARED_AGENTS, type AgentInfo } from "../platform/agents/catalog.js";
 import { formatCnpj } from "../shared/br/documents.js";
 import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
@@ -312,9 +314,34 @@ export async function humanQueue(tx: PoolClient) {
       since: g.created_at.toISOString(),
     };
   });
+  // Vínculo que falhou MAX_ATTEMPTS vezes no mesmo evento espera uma pessoa.
+  const failed = await tx.query<{ link_id: string; agent: string; event_type: string; entity_id: string | null; entity: string | null; error: string; at: Date }>(
+    `SELECT DISTINCT ON (r.link_id, r.event_id) r.link_id, r.agent, r.event_type, r.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, r.error, r.finished_at AS at
+       FROM agent_reaction r LEFT JOIN entity e ON e.id = r.entity_id
+      WHERE r.status = 'ERRO'
+        AND NOT EXISTS (SELECT 1 FROM inbox i WHERE i.consumer = r.link_id AND i.event_id = r.event_id)
+        AND (SELECT count(*) FROM agent_reaction x WHERE x.link_id = r.link_id AND x.event_id = r.event_id AND x.status = 'ERRO') >= $1
+      ORDER BY r.link_id, r.event_id, r.finished_at DESC`,
+    [MAX_ATTEMPTS],
+  );
+  const links = failed.rows.map((f) => {
+    const l = LINKS.find((x) => x.id === f.link_id);
+    return {
+      kind: "link",
+      id: f.link_id,
+      type: "VINCULO_FALHOU",
+      entityId: f.entity_id,
+      entity: f.entity,
+      caseId: null,
+      title: `${agentName(f.agent)}: não conseguiu "${l?.does ?? f.link_id}" depois de ${EVENT_LABEL[f.event_type] ?? f.event_type}`,
+      impact: `Tentou ${MAX_ATTEMPTS} vezes. Último erro: ${f.error}`,
+      since: f.at.toISOString(),
+    };
+  });
   return [
     ...catalog,
     ...ciencia,
+    ...links,
     ...guides,
     ...pend.rows.map((p) => ({
       kind: p.case_id && divergences.has(p.case_id) ? "divergence" : p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
@@ -485,6 +512,8 @@ export async function departmentsData(tx: PoolClient) {
        SELECT producer->>'name' AS id, occurred_at AS at FROM outbox
        UNION ALL
        SELECT actor_id, occurred_at FROM audit_log WHERE actor_kind = 'AGENT'
+       UNION ALL
+       SELECT agent, finished_at FROM agent_reaction WHERE status = 'OK'
      )
      SELECT id, max(at) AS last_at,
             count(*) FILTER (WHERE at > now() - interval '24 hours')::int AS n24,
@@ -523,4 +552,63 @@ export async function departmentsData(tx: PoolClient) {
     }),
     shared: SHARED_AGENTS.map(view),
   };
+}
+
+/** Vínculos entre agentes e as últimas reações (tela "Vínculos dos agentes"). */
+export async function linksData(tx: PoolClient) {
+  const stats = await tx.query<{ link_id: string; ok: number; erro: number; last_at: Date | null }>(
+    `SELECT link_id, count(*) FILTER (WHERE status = 'OK')::int AS ok, count(*) FILTER (WHERE status = 'ERRO')::int AS erro, max(finished_at) AS last_at
+       FROM agent_reaction WHERE finished_at > now() - interval '7 days' GROUP BY link_id`,
+  );
+  const by = new Map(stats.rows.map((r) => [r.link_id, r]));
+  const recent = await tx.query<{ link_id: string; agent: string; event_type: string; events: number; entity: string | null; status: string; result: Record<string, unknown>; error: string | null; finished_at: Date; ms: number; caused: string[] }>(
+    `SELECT r.link_id, r.agent, r.event_type, r.events, coalesce(e.trade_name, e.legal_name) AS entity, r.status, r.result, r.error, r.finished_at,
+            (extract(epoch FROM r.finished_at - r.started_at) * 1000)::int AS ms,
+            coalesce((SELECT array_agg(o.type ORDER BY o.occurred_at) FROM outbox o
+                       WHERE o.causation_id = r.event_id AND o.occurred_at BETWEEN r.started_at AND r.finished_at), '{}') AS caused
+       FROM agent_reaction r LEFT JOIN entity e ON e.id = r.entity_id
+      ORDER BY r.finished_at DESC LIMIT 40`,
+  );
+  return {
+    links: LINKS.map((l) => {
+      const st = by.get(l.id);
+      return {
+        id: l.id,
+        on: l.on.map((t) => ({ type: t, label: EVENT_LABEL[t] ?? t })),
+        agent: l.agent,
+        agentName: agentName(l.agent),
+        does: l.does,
+        ok7d: st?.ok ?? 0,
+        errors7d: st?.erro ?? 0,
+        lastAt: st?.last_at ? st.last_at.toISOString() : null,
+      };
+    }),
+    recent: recent.rows.map((r) => ({
+      link: r.link_id,
+      agentName: agentName(r.agent),
+      event: EVENT_LABEL[r.event_type] ?? r.event_type,
+      events: r.events,
+      entity: r.entity,
+      status: r.status,
+      result: r.result,
+      error: r.error,
+      at: r.finished_at.toISOString(),
+      ms: r.ms,
+      caused: r.caused.map((t) => describeEventType(t)),
+    })),
+  };
+}
+
+function describeEventType(t: string): string {
+  const L: Record<string, string> = {
+    REVENUE_DIVERGENCE_DETECTED: "divergência de receita",
+    SIMPLES_CALCULATED: "Simples calculado",
+    GUIDE_STATUS_CHANGED: "situação de guia",
+    CASE_CREATED: "Case aberto",
+    CASE_STATUS_CHANGED: "Case atualizado",
+    CASE_COMPLETED: "Case concluído",
+    PENDING_ITEM_CREATED: "pendência aberta",
+    NFSE_BATCH_RECEIVED: "NFS-e recebidas",
+  };
+  return L[t] ?? t;
 }

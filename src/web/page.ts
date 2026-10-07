@@ -28,6 +28,13 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   body:not(.p-confirmar) button[data-act=services], body:not(.p-confirmar) button[data-act=nsu], body:not(.p-confirmar) button[data-act=certs],
   body:not(.p-aprovar) button[data-act=approve], body:not(.p-aprovar) button[data-act=rules], body:not(.p-aprovar) button[data-act=srules],
   body:not(.p-aprovar) button[data-act=ciencia], body:not(.p-aprovar) button[data-act=exc] { display: none; }
+  .lks { display: grid; gap: 10px; }
+  .lk { display: grid; grid-template-columns: minmax(0, 1.2fr) auto minmax(0, .7fr) auto minmax(0, 2fr); gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--panel2); }
+  .lk-lbl { display: block; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
+  .lk-arrow { color: var(--teal); font-size: 18px; font-weight: 700; }
+  .lk .caps { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ev { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--blue-bg); color: var(--blue-ink); border: 1px solid var(--blue-line); }
+  @media (max-width: 760px) { .lk { grid-template-columns: 1fr; } .lk-arrow { transform: rotate(90deg); justify-self: start; } }
   button.sair { background: transparent; border: 1px solid var(--line); color: var(--ink2); padding: 5px 12px; border-radius: 999px; font: inherit; font-size: 12px; cursor: pointer; }
   button.sair:hover { background: var(--panel2); }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
@@ -145,6 +152,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
     </div>
     <div class="grp"><span>DEPARTAMENTOS</span>
       <a class="nav" href="#/departamentos" data-r="departamentos"><span class="dot" style="background:var(--teal)"></span>Funcionamento dos agentes</a>
+      <a class="nav" href="#/vinculos" data-r="vinculos"><span class="dot" style="background:var(--teal)"></span>Vínculos dos agentes</a>
       <a class="nav" href="#/depto/societario" data-r="depto-societario"><span class="dot" id="dd-societario" style="background:var(--off)"></span>Societário</a>
       <a class="nav" href="#/depto/fiscal" data-r="depto-fiscal"><span class="dot" id="dd-fiscal" style="background:var(--off)"></span>Fiscal</a>
       <a class="nav" href="#/depto/folha" data-r="depto-folha"><span class="dot" id="dd-folha" style="background:var(--off)"></span>Folha</a>
@@ -572,6 +580,42 @@ function viewDepto(id) {
   });
 }
 
+/* ---------------- Vínculos dos agentes ---------------- */
+function resultText(r) {
+  if (!r) return "";
+  var parts = [];
+  Object.keys(r).forEach(function (k) {
+    var v = r[k];
+    if (v === null || v === undefined || typeof v === "object") return;
+    var L = { opened: "abertas", updated: "atualizadas", closed: "fechadas", calculated: "competências calculadas", changed: "mudanças", guides: "guias", documents: "documentos", calls: "consultas", status: "situação", skipped: "pulado" };
+    parts.push((L[k] || k) + ": " + v);
+  });
+  return parts.join(" · ");
+}
+function viewVinculos() {
+  setHead("Vínculos dos agentes", "Quando um agente termina, o próximo começa sozinho. Sem repasse manual.");
+  return getJson("/api/vinculos").then(function (r) {
+    var cards = r.links.map(function (l) {
+      var on = l.on.map(function (e) { return '<span class="ev">' + esc(e.label) + '</span>'; }).join(" ");
+      var st = l.lastAt ? 'última reação ' + hm(l.lastAt) + ' · ' + l.ok7d + ' em 7 dias' + (l.errors7d ? ' · <span class="bad">' + l.errors7d + ' com erro</span>' : '') : '<span class="mut">ainda não reagiu</span>';
+      return '<div class="lk"><div class="lk-when"><span class="lk-lbl">Quando</span><div class="caps">' + on + '</div></div>' +
+        '<div class="lk-arrow" aria-hidden="true">→</div>' +
+        '<div class="lk-who"><span class="lk-lbl">Agente</span><b>' + esc(l.agentName) + '</b></div>' +
+        '<div class="lk-arrow" aria-hidden="true">→</div>' +
+        '<div class="lk-does"><span class="lk-lbl">Faz</span>' + esc(l.does) + '<div class="mut" style="font-size:12px;margin-top:4px">' + st + '</div></div></div>';
+    }).join("");
+    var rows = r.recent.map(function (x) {
+      var res = x.status === "OK" ? esc(resultText(x.result)) : '<span class="bad">' + esc(x.error || "erro") + '</span>';
+      var caused = x.caused.length ? '<div class="mut" style="font-size:11px">gerou: ' + esc(x.caused.join(", ")) + '</div>' : '';
+      return '<tr><td>' + dt(x.at) + '<div class="mut" style="font-size:11px">' + x.ms + ' ms</div></td><td>' + esc(x.event) + (x.events > 1 ? ' <span class="mut">(' + x.events + ')</span>' : '') + '</td><td>' + esc(x.entity || "todas") + '</td><td><b>' + esc(x.agentName) + '</b></td><td>' + res + caused + '</td><td class="st ' + (x.status === "OK" ? "ok" : "bad") + '">' + (x.status === "OK" ? "feito" : "erro") + '</td></tr>';
+    }).join("");
+    $("view").innerHTML = '<section class="card"><h2>' + r.links.length + ' vínculos ativos</h2><div class="lks">' + cards + '</div>' +
+      '<div class="empty">Cada evento é tratado uma vez por vínculo. Erro é refeito até 3 vezes; depois vai para a Fila humana. Nenhum vínculo transmite nada nem faz consulta cobrada.</div></section>' +
+      '<section class="card"><h2>Últimas reações</h2><div class="scroll"><table><thead><tr><th>Quando</th><th>O que aconteceu</th><th>Empresa</th><th>Agente</th><th>Resultado</th><th>Situação</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="6" class="empty">Nenhuma reação ainda.</td></tr>') + '</tbody></table></div></section>';
+  });
+}
+
 /* ---------------- Regras ---------------- */
 function simplesRulesHtml(list) {
   var pend = list.filter(function (x) { return !x.approved_by && !x.superseded; }).length;
@@ -629,7 +673,7 @@ document.addEventListener("click", function (ev) {
     if (b.dataset.act === "srules") {
       if (!window.confirm("Aprovar as tabelas do Simples Nacional propostas?\\n\\nConfira alíquotas, parcelas a deduzir e repartição com a LC 123. A aprovação fica registrada na auditoria em seu nome.")) return;
       b.disabled = true;
-      post("/api/simples/regras/aprovar", "aprovar").then(function (r) { toast(r.approved.length + " tabela(s) aprovada(s); " + r.recalculated + " cálculo(s) atualizado(s)."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
+      post("/api/simples/regras/aprovar", "aprovar").then(function (r) { toast(r.approved.length + " tabela(s) aprovada(s). As empresas foram recalculadas pelo agente Tributos."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
     }
     if (b.dataset.act === "certs") {
       b.disabled = true;
@@ -703,7 +747,7 @@ document.addEventListener("click", function (ev) {
   if (tc) { var u = $("tl-" + tc.dataset.tl); if (u) u.hidden = !u.hidden; }
 });
 
-var ROUTES = { departamentos: viewDepartamentos, depto: viewDepto, documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
+var ROUTES = { vinculos: viewVinculos, departamentos: viewDepartamentos, depto: viewDepto, documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
 function route() {
   var parts = location.hash.replace(/^#\\/?/, "").split("/");
   var r = parts[0] || "central";

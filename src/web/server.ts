@@ -8,6 +8,8 @@ import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
 import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
+import { LINKS } from "../modules/orchestration/links.js";
+import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import { formatCnpj } from "../shared/br/documents.js";
@@ -39,7 +41,7 @@ import {
 } from "../platform/access/access.js";
 import { parseAuthKey } from "../platform/access/crypto.js";
 import { AUTH_HTML } from "./auth-page.js";
-import { casesList, centralData, departmentsData, entitiesList, entityDetail, rulesList } from "./ops.js";
+import { casesList, centralData, departmentsData, entitiesList, entityDetail, linksData, rulesList } from "./ops.js";
 import { PAGE_HTML } from "./page.js";
 
 /**
@@ -74,6 +76,8 @@ export interface WebDeps {
   nfse?: NfseSyncDeps | null;
   /** IARIS_AUTH_KEY do cofre: cifra o segredo do autenticador de cada pessoa. */
   authKey: Buffer;
+  /** Orquestrador: roda os vínculos entre agentes (ex.: depois de uma ação na tela). */
+  orchestrate?: () => Promise<unknown>;
   /** Endereço público do túnel, ex.: https://iaris.exemplo.com.br. Nulo = só nesta máquina. */
   publicOrigin?: string | null;
   now?: () => Date;
@@ -357,7 +361,7 @@ export function createWebServer(deps: WebDeps) {
             { entityId: parts[2]!, competence: `${parts[4]}-01` },
             actor,
           );
-          await refreshGuides(deps.appPool, deps.tenantId, parts[2]!);
+          await deps.orchestrate?.();
           const detail = await withTenant(deps.appPool, deps.tenantId, (tx) => competenceDetail(tx, parts[2]!, `${parts[4]}-01`));
           json(res, 200, { calls: r.calls, detail });
         } catch (err) {
@@ -375,10 +379,9 @@ export function createWebServer(deps: WebDeps) {
         try {
           const r = await fetchLastDeclaration({ appPool: deps.appPool, integra: deps.integra, metering: deps.metering }, deps.tenantId, { entityId: parts[2]!, competence: `${parts[4]}-01` }, actor);
           // Próximo passo automático: conferência vira exceção (ou fecha a que passou a bater).
-          const exceptions = await refreshRevenueExceptions(deps.appPool, deps.tenantId, parts[2]!);
-          const simples = await refreshSimples(deps.appPool, deps.tenantId, parts[2]!);
-          await refreshGuides(deps.appPool, deps.tenantId, parts[2]!);
-          json(res, 200, { ...r, exceptions, simples });
+          // Próximos passos pelos vínculos: conferência, Simples e guias.
+          const chain = await deps.orchestrate?.();
+          json(res, 200, { ...r, chain });
         } catch (err) {
           if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
@@ -404,6 +407,11 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
 
+      // GET /api/vinculos — vínculos entre agentes e últimas reações (só banco).
+      if (req.method === "GET" && url.pathname === "/api/vinculos") {
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => linksData(tx)));
+        return;
+      }
       // GET /api/empresa/:id/guias — DAS por competência: prazo e pagamento (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "guias") {
         const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
@@ -423,7 +431,9 @@ export function createWebServer(deps: WebDeps) {
       if (req.method === "POST" && url.pathname === "/api/simples/regras/aprovar") {
         if (guard("aprovar")) return;
         try {
-          json(res, 200, await approveSimplesRules(deps.appPool, deps.tenantId, actor));
+          const r = await approveSimplesRules(deps.appPool, deps.tenantId, actor);
+          const chain = await deps.orchestrate?.();
+          json(res, 200, { ...r, chain });
         } catch (err) {
           if (err instanceof SimplesActionError) json(res, 409, { erro: err.message });
           else throw err;
@@ -479,6 +489,7 @@ export function createWebServer(deps: WebDeps) {
         // Relê o arquivo a cada clique: senha adicionada depois de abrir a tela já vale.
         const vault = openSecretsFile(deps.vault.location) ?? deps.vault;
         const results = await syncClientCertificates(deps.appPool, deps.tenantId, vault, actor);
+        void deps.orchestrate?.(); // certificado novo dispara a busca de notas, sem segurar a tela
         json(res, 200, {
           results: results.map((r) => ({
             ...r,
@@ -514,7 +525,9 @@ export function createWebServer(deps: WebDeps) {
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "nfse" && parts[4] === "buscar") {
         if (guard("buscar-notas")) return;
         if (!deps.nfse) return json(res, 409, { erro: "Busca de NFS-e não configurada (cofre ausente)" });
-        json(res, 200, await syncEntityNfse(deps.nfse, deps.tenantId, parts[2]!, actor));
+        const nf = await syncEntityNfse(deps.nfse, deps.tenantId, parts[2]!, actor);
+        await deps.orchestrate?.();
+        json(res, 200, nf);
         return;
       }
       // POST /api/empresa/:id/notas/nsu — decisão humana: NSU inicial (o do outro sistema). Não consulta a SEFAZ.
@@ -546,6 +559,7 @@ export function createWebServer(deps: WebDeps) {
             { pendingItemId: parts[2]!, services: body.services as never, startDate: body.startDate ?? "" },
             actor,
           );
+          await deps.orchestrate?.();
           json(res, 200, r);
         } catch (err) {
           if (err instanceof HumanActionError) json(res, 409, { erro: err.message });
@@ -618,6 +632,15 @@ if (isMain(import.meta.url)) {
         }
       : null,
   };
+  // Orquestrador: vínculos entre agentes (só banco; consulta externa só no vínculo de certificado → NFS-e, sem custo).
+  const linkDeps = { nfse: deps.nfse, today: () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }) };
+  deps.orchestrate = async () => {
+    const r = await runOrchestrator(app, tenant.id, LINKS, linkDeps);
+    if (r.reactions || r.errors) console.log(`[orquestrador] ${new Date().toLocaleTimeString("pt-BR")} ${r.reactions} reação(ões)${r.errors ? `, ${r.errors} com erro` : ""}`);
+    return r;
+  };
+  setTimeout(() => void deps.orchestrate?.().catch((e) => console.error(`[orquestrador] ${(e as Error).message}`)), 8_000);
+  setInterval(() => void deps.orchestrate?.().catch((e) => console.error(`[orquestrador] ${(e as Error).message}`)), 30_000);
   // Agente Documentos: busca automática na SEFAZ (sem custo). Cada empresa só é
   // consultada quando a regra de espera de 1 h permite.
   if (deps.dfe && process.env.IARIS_DFE_AUTO !== "0") {
@@ -632,13 +655,9 @@ if (isMain(import.meta.url)) {
         if (deps.nfse) {
           for (const r of await syncAllNfse(deps.nfse, deps.tenantId)) {
             if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NFS-e ${r.entityId.slice(0, 8)}: ${r.calls} lote(s), ${r.documents} documento(s), ${r.status}${r.message ? " " + r.message : ""}`);
-            // Nota nova pode abrir ou fechar exceção de receita.
-            if (r.documents) {
-              await refreshRevenueExceptions(deps.appPool, deps.tenantId, r.entityId);
-              await refreshSimples(deps.appPool, deps.tenantId, r.entityId);
-            }
           }
         }
+        await deps.orchestrate?.(); // nota nova → conferência de receita e Simples (vínculos)
       } catch (err) {
         console.error(`[docs] falha na busca automática: ${(err as Error).message}`);
       } finally {
