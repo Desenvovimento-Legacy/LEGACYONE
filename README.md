@@ -93,3 +93,23 @@ Toda consulta ao SERPRO é cobrada. Regras do IARIS:
 pnpm web                            # tela local em http://127.0.0.1:3100
 pnpm federal:report 01210421000100  # relatório do que já foi buscado (sem consulta)
 ```
+
+## Login (senha + autenticador)
+
+A tela exige login: e-mail, senha (mínimo 12 caracteres) e o código de 6 dígitos de um
+aplicativo autenticador (Google Authenticator, Microsoft Authenticator). Perfis:
+
+- **Leitura**: vê tudo, não executa nada.
+- **Operador**: + buscar na Receita e nas prefeituras, confirmar dados de implantação.
+- **Responsável técnico**: + aprovar regras, tabelas, exceções, ciência e conclusões de Case.
+
+```powershell
+pnpm auth:init                                                  # uma vez: cria IARIS_AUTH_KEY no cofre
+pnpm user:invite luan@exemplo.com.br "Luan Sanchez" RESPONSAVEL_TECNICO   # link de primeiro acesso (72 h, uso único)
+pnpm user:list
+pnpm user:revoke pessoa@exemplo.com.br "motivo"                 # revoga e encerra as sessões
+```
+
+O link do convite vai para a área de transferência. Senha só como hash; segredo do
+autenticador cifrado com a chave do cofre; 5 erros seguidos bloqueiam por 15 minutos.
+Sessão: 12 horas, ou 2 horas sem uso. A tela continua escutando só em 127.0.0.1.

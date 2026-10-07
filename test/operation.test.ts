@@ -11,6 +11,7 @@ import type { Actor } from "../src/shared/actor.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { createWebServer } from "../src/web/server.js";
 import { brasilApiResponse, CNPJ_MATRIZ } from "./fixtures/cnpj.js";
+import { AUTH_KEY, session } from "./auth-helpers.js";
 import { AGENT, appPool, newTenant } from "./helpers.js";
 
 const OFFICE = "11222333000181";
@@ -105,10 +106,14 @@ describe("tela: Central e Fila humana", () => {
       integra: null,
       metering: { provider: "serpro", dailyLimit: 20 },
       port: 0,
+      authKey: AUTH_KEY,
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     close = () => new Promise((r) => server.close(() => r()));
+    const cookie = await session(base, t);
+    const fetch = ((u: string, init?: RequestInit) =>
+      globalThis.fetch(u, { ...init, headers: { ...((init?.headers as Record<string, string>) ?? {}), cookie } })) as typeof globalThis.fetch;
 
     const c = await (await fetch(`${base}/api/central`)).json();
     expect(c.kpis).toMatchObject({ entities: 1, humanQueue: 1 });

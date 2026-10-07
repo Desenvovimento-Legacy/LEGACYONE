@@ -200,6 +200,24 @@ export const EventContracts = {
       documents: z.array(z.string()),
     }),
   },
+  USER_INVITED: {
+    1: z.object({
+      user_id: z.uuid(),
+      role: z.enum(["LEITURA", "OPERADOR", "RESPONSAVEL_TECNICO"]),
+      expires_at: z.iso.datetime(),
+    }),
+  },
+  USER_ENROLLED: {
+    1: z.object({ user_id: z.uuid() }),
+  },
+  USER_ACCESS_CHANGED: {
+    1: z.object({
+      user_id: z.uuid(),
+      role: z.enum(["LEITURA", "OPERADOR", "RESPONSAVEL_TECNICO"]),
+      active: z.boolean(),
+      reason: z.string().nullable(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

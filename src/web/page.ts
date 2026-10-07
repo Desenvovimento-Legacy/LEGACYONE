@@ -23,6 +23,13 @@ export const PAGE_HTML = /* html */ `<!doctype html>
     --shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 1px 3px rgba(15, 23, 42, .04);
   }
   * { box-sizing: border-box; }
+  /* Ações por perfil: o servidor recusa de qualquer forma; aqui só some o botão. */
+  body:not(.p-buscar) button[data-buscar], body:not(.p-buscar) button[data-act=decl], body:not(.p-buscar) button[data-act=dfe], body:not(.p-buscar) button[data-act=nfse],
+  body:not(.p-confirmar) button[data-act=services], body:not(.p-confirmar) button[data-act=nsu], body:not(.p-confirmar) button[data-act=certs],
+  body:not(.p-aprovar) button[data-act=approve], body:not(.p-aprovar) button[data-act=rules], body:not(.p-aprovar) button[data-act=srules],
+  body:not(.p-aprovar) button[data-act=ciencia], body:not(.p-aprovar) button[data-act=exc] { display: none; }
+  button.sair { background: transparent; border: 1px solid var(--line); color: var(--ink2); padding: 5px 12px; border-radius: 999px; font: inherit; font-size: 12px; cursor: pointer; }
+  button.sair:hover { background: var(--panel2); }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
   a { color: var(--blue); text-decoration: none; } a:hover { color: var(--blue-ink); text-decoration: underline; }
   .mono { font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; }
@@ -160,7 +167,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   <main>
     <header class="top">
       <div><h1 id="title">Central de agentes</h1><div class="sub" id="subtitle"></div></div>
-      <div class="pills"><span class="pill ok">Sistema operando</span><span class="pill mono" id="meter">SERPRO –</span></div>
+      <div class="pills"><span class="pill ok">Sistema operando</span><span class="pill mono" id="meter">SERPRO –</span><span class="pill" id="me">—</span><button class="sair" id="sair" type="button">Sair</button></div>
     </header>
     <div class="content" id="view"><div class="empty">Carregando…</div></div>
   </main>
@@ -175,7 +182,7 @@ var dt = function (iso) { return iso ? new Date(iso).toLocaleString("pt-BR", { t
 var hm = function (iso) { var x = new Date(iso); return new Date().toDateString() === x.toDateString() ? x.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }) : dt(iso); };
 var mm = function (c) { return c.slice(5, 7) + "/" + c.slice(0, 4); };
 function toast(m) { var t = $("toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(function () { t.style.display = "none"; }, 6000); }
-function asJson(r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b.erro || "HTTP " + r.status); return b; }); }
+function asJson(r) { if (r.status === 401) { location.replace("/"); throw new Error("Sessão encerrada. Entre de novo."); } return r.json().then(function (b) { if (!r.ok) throw new Error(b.erro || "HTTP " + r.status); return b; }); }
 function getJson(u) { return fetch(u, { cache: "no-store" }).then(asJson); }
 function post(u, action, body) { return fetch(u, { method: "POST", headers: { "X-IARIS-Acao": action, "content-type": "application/json" }, body: JSON.stringify(body || {}) }).then(asJson); }
 function setHead(t, s) { $("title").textContent = t; $("subtitle").textContent = s || ""; }
@@ -706,7 +713,13 @@ function route() {
   return ROUTES[r](parts[1]).catch(function (err) { toast(err.message); });
 }
 window.addEventListener("hashchange", route);
-route();
+$("sair").addEventListener("click", function () { post("/api/sair", "sair").catch(function () {}).then(function () { location.replace("/"); }); });
+getJson("/api/sessao").then(function (me) {
+  me.permissions.forEach(function (p) { document.body.classList.add("p-" + p); });
+  $("me").textContent = me.name + " · " + me.roleLabel;
+  $("me").title = me.email;
+  route();
+}).catch(function (err) { toast(err.message); });
 getJson("/api/departamentos").then(paintDeptDots).catch(function () {});
 </script>
 </body>

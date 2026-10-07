@@ -5,6 +5,7 @@ import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
 import { createWebServer } from "../src/web/server.js";
 import { CNPJ_MATRIZ } from "./fixtures/cnpj.js";
+import { AUTH_KEY, session } from "./auth-helpers.js";
 import { appPool, newEntity, newTenant } from "./helpers.js";
 
 const OFFICE = "11222333000181";
@@ -38,16 +39,20 @@ async function start(dailyLimit = 20) {
     integra,
     metering: { provider: "serpro", dailyLimit },
     port: 0,
+    authKey: AUTH_KEY,
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   close = () => new Promise((r) => server.close(() => r()));
-  return { base, integra, entityId };
+  const cookie = await session(base, t);
+  const fetch = ((u: string, init?: RequestInit) =>
+    globalThis.fetch(u, { ...init, headers: { ...((init?.headers as Record<string, string>) ?? {}), cookie } })) as typeof globalThis.fetch;
+  return { base, integra, entityId, fetch };
 }
 
 describe("tela local: abrir não consulta; só o botão Buscar consulta", () => {
   it("abrir a tela, listar e ver detalhe não chamam o SERPRO", async () => {
-    const { base, integra, entityId } = await start();
+    const { base, integra, entityId, fetch } = await start();
     expect((await fetch(`${base}/`)).status).toBe(200);
     const res = await fetch(`${base}/api/competencia/2026-08`);
     const list = await res.json();
@@ -59,7 +64,7 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
   });
 
   it("Buscar sem o cabeçalho da tela ou vindo de outro site é recusado", async () => {
-    const { base, integra, entityId } = await start();
+    const { base, integra, entityId, fetch } = await start();
     const url = `${base}/api/empresa/${entityId}/competencia/2026-08/buscar`;
     expect((await fetch(url, { method: "POST" })).status).toBe(403);
     expect(
@@ -69,7 +74,7 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
   });
 
   it("Buscar faz 2 consultas e o contador do dia sobe", async () => {
-    const { base, integra, entityId } = await start();
+    const { base, integra, entityId, fetch } = await start();
     const r = await fetch(`${base}/api/empresa/${entityId}/competencia/2026-08/buscar`, {
       method: "POST",
       headers: { "X-IARIS-Acao": "buscar" },
@@ -85,7 +90,7 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
   });
 
   it("teto do dia atingido: Buscar responde 429 e não consulta", async () => {
-    const { base, integra, entityId } = await start(1);
+    const { base, integra, entityId, fetch } = await start(1);
     const r = await fetch(`${base}/api/empresa/${entityId}/competencia/2026-08/buscar`, {
       method: "POST",
       headers: { "X-IARIS-Acao": "buscar" },

@@ -111,6 +111,12 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       };
       return `DAS ${pa}: ${GS[String(p.to)] ?? String(p.to)}${p.due ? ` (vencimento ${fmtDate(String(p.due))})` : ""}`;
     }
+    case "USER_INVITED":
+      return `Convite de acesso enviado (perfil ${String(p.role).replace("_", " ").toLowerCase()})`;
+    case "USER_ENROLLED":
+      return "Pessoa ativou o acesso (senha e autenticador)";
+    case "USER_ACCESS_CHANGED":
+      return p.active ? `Perfil de acesso: ${String(p.role).replace("_", " ").toLowerCase()}` : "Acesso revogado";
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
