@@ -9,6 +9,7 @@ import { isMain } from "../shared/is-main.js";
 /**
  * Relê os PDFs de declaração PGDAS-D já guardados (sem consultar o SERPRO).
  * Uso: pnpm federal:reparse <cnpj> [--texto]
+ *   --completo  mostra o texto inteiro do PDF mais recente
  *   --texto  mostra o trecho "2.1) Discriminativo de Receitas" do PDF mais recente (para ajuste do leitor)
  */
 if (isMain(import.meta.url)) {
@@ -23,7 +24,11 @@ if (isMain(import.meta.url)) {
     await withTenant(app, t.id, async (tx) => {
       const e = (await tx.query<{ id: string }>("SELECT id FROM entity WHERE cnpj = $1", [cnpj])).rows[0];
       if (!e) throw new Error(`Empresa ${cnpj} não encontrada`);
-      if (args.includes("--texto")) {
+      if (args.includes("--completo")) {
+        const p = (await tx.query<{ pdf: Buffer }>("SELECT pdf FROM pgdas_declaration_pdf WHERE entity_id = $1 AND kind = 'DECLARACAO' ORDER BY fetched_at DESC LIMIT 1", [e.id])).rows[0];
+        if (!p) throw new Error("Nenhum PDF guardado");
+        console.log((await pdfText(p.pdf)).replace(/[ \t]+/g, " "));
+      } else if (args.includes("--texto")) {
         const p = (await tx.query<{ pdf: Buffer }>("SELECT pdf FROM pgdas_declaration_pdf WHERE entity_id = $1 AND kind = 'DECLARACAO' ORDER BY fetched_at DESC LIMIT 1", [e.id])).rows[0];
         if (!p) throw new Error("Nenhum PDF guardado");
         const txt = (await pdfText(p.pdf)).replace(/\s+/g, " ");
