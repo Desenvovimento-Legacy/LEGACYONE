@@ -49,15 +49,15 @@ export interface SimplesRules {
 }
 
 /** Última versão APROVADA de cada tabela, vigente na competência. */
-export async function loadSimplesRules(tx: PoolClient, competence: string): Promise<SimplesRules> {
-  const { rows } = await tx.query<{ code: string; version: number; definition: unknown; approved: boolean }>(
-    `SELECT DISTINCT ON (r.code) r.code, r.version, r.definition,
-            EXISTS (SELECT 1 FROM simples_rule_approval a WHERE a.rule_id = r.id) AS approved
+export async function loadSimplesRules(tx: PoolClient, competence: string, opts: { proposed?: boolean } = {}): Promise<SimplesRules> {
+  // proposed = simulação: usa a versão proposta mais recente, sem aprovação (nada é gravado)
+  const { rows } = await tx.query<{ code: string; version: number; definition: unknown }>(
+    `SELECT DISTINCT ON (r.code) r.code, r.version, r.definition
        FROM simples_rule r
       WHERE r.valid_from <= $1 AND (r.valid_to IS NULL OR r.valid_to >= $1)
-        AND EXISTS (SELECT 1 FROM simples_rule_approval a WHERE a.rule_id = r.id)
+        AND ($2 AND r.superseded_at IS NULL OR EXISTS (SELECT 1 FROM simples_rule_approval a WHERE a.rule_id = r.id))
       ORDER BY r.code, r.version DESC`,
-    [competence],
+    [competence, opts.proposed === true],
   );
   const pend = await tx.query<{ code: string }>(
     `SELECT DISTINCT r.code FROM simples_rule r
@@ -416,30 +416,39 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
 }
 
 /** Recalcula todas as competências da empresa e grava o que mudou. */
+async function computeAll(tx: PoolClient, entityId: string, now: Date, proposed: boolean): Promise<SimplesComputation[]> {
+  const ctx: Context = {
+    months: await monthlyData(tx, entityId),
+    declared: await declaredTaxes(tx, entityId),
+    paid: await paidDas(tx, entityId),
+    opening: await openingMonth(tx, entityId),
+  };
+  const firstDeclared = [...ctx.months.entries()].filter(([, m]) => m.declared != null).map(([c]) => c).sort()[0];
+  if (!firstDeclared) return [];
+  const current = `${now.toISOString().slice(0, 7)}-01`;
+  const out: SimplesComputation[] = [];
+  for (const [competence, m] of [...ctx.months.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const declared = m.declared != null;
+    if (declared && Dec.of(m.declared!).isZero() && m.nfseCount === 0) continue;
+    if (!declared && (m.nfseCount === 0 || competence < firstDeclared || competence >= current)) continue;
+    const rules = await loadSimplesRules(tx, competence, { proposed });
+    out.push(computeOne(ctx, rules, competence, declared ? "CONFERENCIA" : "APURACAO"));
+  }
+  return out;
+}
+
 export async function refreshSimples(pool: Pool, tenantId: string, entityId: string, now: Date = new Date()) {
   return withTenant(pool, tenantId, async (tx) => {
-    const ctx: Context = {
-      months: await monthlyData(tx, entityId),
-      declared: await declaredTaxes(tx, entityId),
-      paid: await paidDas(tx, entityId),
-      opening: await openingMonth(tx, entityId),
-    };
-    const firstDeclared = [...ctx.months.entries()].filter(([, m]) => m.declared != null).map(([c]) => c).sort()[0];
-    if (!firstDeclared) return { calculated: 0, changed: 0 };
-    const current = `${now.toISOString().slice(0, 7)}-01`;
-    let calculated = 0;
+    const all = await computeAll(tx, entityId, now, false);
     let changed = 0;
-    for (const [competence, m] of [...ctx.months.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-      const declared = m.declared != null;
-      if (declared && Dec.of(m.declared!).isZero() && m.nfseCount === 0) continue;
-      if (!declared && (m.nfseCount === 0 || competence < firstDeclared || competence >= current)) continue;
-      const rules = await loadSimplesRules(tx, competence);
-      const c = computeOne(ctx, rules, competence, declared ? "CONFERENCIA" : "APURACAO");
-      calculated++;
-      if (await storeComputation(tx, entityId, c)) changed++;
-    }
-    return { calculated, changed };
+    for (const c of all) if (await storeComputation(tx, entityId, c)) changed++;
+    return { calculated: all.length, changed };
   });
+}
+
+/** Simulação com as tabelas PROPOSTAS (antes da aprovação). Não grava nada. */
+export async function simulateSimples(tx: PoolClient, entityId: string, now: Date = new Date()) {
+  return computeAll(tx, entityId, now, true);
 }
 
 export async function refreshAllSimples(pool: Pool, tenantId: string): Promise<number> {
