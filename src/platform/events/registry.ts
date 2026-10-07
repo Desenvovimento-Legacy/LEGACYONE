@@ -218,6 +218,14 @@ export const EventContracts = {
       reason: z.string().nullable(),
     }),
   },
+  XML_BATCH_IMPORTED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      documents: z.number().int(),
+      types: z.record(z.string(), z.number().int()),
+      source: z.enum(["UPLOAD", "PASTA"]),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

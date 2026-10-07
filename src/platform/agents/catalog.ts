@@ -125,7 +125,7 @@ export const DEPARTMENTS: DepartmentInfo[] = [
     name: "Fiscal",
     summary: "Documentos, Receita Federal, apuração, guias e obrigações.",
     agents: [
-      { id: "docs", name: "Documentos", status: "OPERANDO", summary: "Busca as notas sozinho e guarda o XML original.", capabilities: [cap("NFS-e Nacional", true), cap("Ciência com aprovação", true), cap("NF-e SEFAZ (aguarda sequência)"), cap("NFC-e"), cap("CT-e"), cap("NFS-e municipal")] },
+      { id: "docs", name: "Documentos", status: "OPERANDO", summary: "Busca as notas sozinho e guarda o XML original.", capabilities: [cap("NFS-e Nacional", true), cap("Ciência com aprovação", true), cap("CT-e (distribuição nacional)", true), cap("Entrada de XML: upload e pasta", true), cap("NFC-e pelo XML do PDV", true), cap("NF-e SEFAZ (aguarda sequência)"), cap("NFS-e municipal")] },
       { id: "search", name: "Receita Federal", status: "OPERANDO", summary: "PGDAS-D, DAS e pagamentos, com teto de custo.", capabilities: [cap("PGDAS-D e DAS", true), cap("Pagamentos (PagtoWeb)", true), cap("Receita declarada", true), cap("Teto diário de consultas", true)] },
       { id: "obligations", name: "Obrigações", status: "OPERANDO", summary: "Quais obrigações cada empresa tem e quando vencem.", capabilities: [cap("Mapa por empresa", true), cap("Calendário de dias úteis", true), cap("Entrega das obrigações")] },
       { id: "fiscal", name: "Escrita fiscal", status: "PLANEJADO", summary: "Entradas e saídas classificadas.", capabilities: [cap("CFOP e CST"), cap("Retenções"), cap("Créditos")] },

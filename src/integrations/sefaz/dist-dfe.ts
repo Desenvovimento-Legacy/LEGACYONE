@@ -126,3 +126,43 @@ export class SefazDistribution implements DfeDistribution {
     return parseDistResponse(res.body);
   }
 }
+
+/**
+ * CTeDistribuicaoDFe — Ambiente Nacional do CT-e (mesmo desenho da NF-e:
+ * distDFeInt v1.00, distNSU/ultNSU, docZip gzip+base64, TLS mútuo com o e-CNPJ).
+ * Schemas típicos dos documentos: procCTe_v4.00.xsd, procEventoCTe_v4.00.xsd.
+ */
+export const CTE_DIST_URL = "https://www1.cte.fazenda.gov.br/CTeDistribuicaoDFe/CTeDistribuicaoDFe.asmx";
+const CTE_SOAP_ACTION = "http://www.portalfiscal.inf.br/cte/wsdl/CTeDistribuicaoDFe/cteDistDFeInteresse";
+
+export function cteDistNsuEnvelope(cnpj: string, uf: string, ultNsu: string, tpAmb: "1" | "2" = "1"): string {
+  const cUF = UF_CODE[uf];
+  if (!cUF) throw new Error(`UF desconhecida: ${uf}`);
+  if (!/^[0-9A-Z]{12}[0-9]{2}$/.test(cnpj)) throw new Error("CNPJ inválido para a consulta");
+  return (
+    '<?xml version="1.0" encoding="utf-8"?>' +
+    '<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">' +
+    "<soap12:Body>" +
+    '<cteDistDFeInteresse xmlns="http://www.portalfiscal.inf.br/cte/wsdl/CTeDistribuicaoDFe"><cteDadosMsg>' +
+    `<distDFeInt xmlns="http://www.portalfiscal.inf.br/cte" versao="1.00"><tpAmb>${tpAmb}</tpAmb><cUFAutor>${cUF}</cUFAutor>` +
+    `<CNPJ>${cnpj}</CNPJ><distNSU><ultNSU>${nsu15(ultNsu)}</ultNSU></distNSU></distDFeInt>` +
+    "</cteDadosMsg></cteDistDFeInteresse></soap12:Body></soap12:Envelope>"
+  );
+}
+
+export class CteDistribution implements DfeDistribution {
+  constructor(private readonly transport: HttpTransport = httpsTransport, private readonly url = CTE_DIST_URL) {}
+
+  async distNsu(input: { cnpj: string; uf: string; ultNsu: string; certificate: ClientCertificate }): Promise<DistResult> {
+    const res = await this.transport({
+      url: this.url,
+      method: "POST",
+      headers: { "content-type": `application/soap+xml; charset=utf-8; action="${CTE_SOAP_ACTION}"` },
+      body: cteDistNsuEnvelope(input.cnpj, input.uf, input.ultNsu),
+      clientCert: input.certificate,
+      timeoutMs: 60_000,
+    });
+    if (res.status >= 400 && !res.body.includes("retDistDFeInt")) throw new SefazError(`SEFAZ (CT-e) respondeu HTTP ${res.status}`, res.status);
+    return parseDistResponse(res.body);
+  }
+}

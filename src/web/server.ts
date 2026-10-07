@@ -18,7 +18,9 @@ import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
 import { openSecretsFile, type SecretStore } from "../shared/secrets/secrets-file.js";
 import { clientCertificatesDir, clientPasswordKey, loadClientCertificate, syncClientCertificates } from "../platform/identity/client-certificates.js";
-import { SefazDistribution } from "../integrations/sefaz/dist-dfe.js";
+import { CteDistribution, SefazDistribution } from "../integrations/sefaz/dist-dfe.js";
+import { fiscalXmlList, ingestFiles, scanInbox } from "../modules/documents/xml-intake.js";
+import { dirname, join } from "node:path";
 import { setStartingNsu, syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
 import { approveCiencia, dfeStatus, documentsList } from "../modules/documents/documents.js";
 import { AdnDistribution } from "../integrations/nfse/adn.js";
@@ -81,6 +83,8 @@ export interface WebDeps {
   nfse?: NfseSyncDeps | null;
   /** IARIS_AUTH_KEY do cofre: cifra o segredo do autenticador de cada pessoa. */
   authKey: Buffer;
+  /** Pasta de entrada de XML (ex.: C:\\IARIS\\entrada). Nulo = sem pasta. */
+  inbox?: string | null;
   /** Orquestrador: roda os vínculos entre agentes (ex.: depois de uma ação na tela). */
   orchestrate?: () => Promise<unknown>;
   /** Endereço público do túnel, ex.: https://iaris.exemplo.com.br. Nulo = só nesta máquina. */
@@ -163,12 +167,12 @@ function isCompetence(s: string | undefined): s is string {
   return Boolean(s && /^\d{4}-(0[1-9]|1[0-2])$/.test(s));
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function readJson(req: IncomingMessage, maxBytes = 64 * 1024): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > 64 * 1024) throw new HumanActionError("Requisição grande demais");
+    if (size > maxBytes) throw new HumanActionError("Requisição grande demais");
     chunks.push(c as Buffer);
   }
   const text = Buffer.concat(chunks).toString("utf8");
@@ -557,6 +561,30 @@ export function createWebServer(deps: WebDeps) {
         json(res, 200, { configured: Boolean(deps.dfe), ...data });
         return;
       }
+      // GET /api/documentos/xml — XML recebidos por upload, pasta e distribuição de CT-e (só banco).
+      if (req.method === "GET" && url.pathname === "/api/documentos/xml") {
+        const e = url.searchParams.get("empresa");
+        json(res, 200, { inbox: deps.inbox ?? null, ...(await fiscalXmlList(deps.appPool, deps.tenantId, e && /^[0-9a-f-]{36}$/.test(e) ? e : null)) });
+        return;
+      }
+      // POST /api/documentos/upload — XML/ZIP enviados pela tela (até 30 MB por envio).
+      if (req.method === "POST" && url.pathname === "/api/documentos/upload") {
+        if (guard("confirmar")) return;
+        try {
+          const body = (await readJson(req, 42 * 1024 * 1024)) as { files?: { name?: string; data?: string }[] };
+          const files = (body.files ?? [])
+            .filter((f) => typeof f.name === "string" && typeof f.data === "string")
+            .map((f) => ({ name: f.name!.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(f.data!, "base64") }));
+          if (!files.length) return json(res, 400, { erro: "Nenhum arquivo recebido" });
+          const r = await ingestFiles(deps.appPool, deps.tenantId, files, { source: "UPLOAD", actor });
+          await deps.orchestrate?.();
+          json(res, 200, { ...r, items: r.items.slice(0, 500) });
+        } catch (err) {
+          if (err instanceof HumanActionError) json(res, 413, { erro: "Envio acima de 30 MB: mande em partes ou use a pasta de entrada" });
+          else throw err;
+        }
+        return;
+      }
       // POST /api/empresa/:id/notas/buscar — consulta a SEFAZ (sem custo), respeitando a regra de 1 h.
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "notas" && parts[4] === "buscar") {
         if (guard("buscar-notas")) return;
@@ -663,6 +691,7 @@ if (isMain(import.meta.url)) {
       ? {
           appPool: app,
           dist: new SefazDistribution(),
+          cteDist: new CteDistribution(),
           // Relê o cofre a cada busca: certificado ou senha trocados já valem.
           certificates: (cnpj: string) => loadClientCertificate(openSecretsFile(vault.location) ?? vault, cnpj),
         }
@@ -675,6 +704,24 @@ if (isMain(import.meta.url)) {
         }
       : null,
   };
+  // Pasta de entrada de XML: o que cair lá é importado e movido para processados/recusados (nada é apagado).
+  deps.inbox = process.env.IARIS_ENTRADA ?? (vault.location ? join(dirname(vault.location), "..", "entrada") : null);
+  if (deps.inbox) {
+    const docsAgent = { kind: "AGENT" as const, id: "docs" };
+    const inboxTick = async () => {
+      try {
+        const r = await scanInbox(app, tenant.id, deps.inbox!, docsAgent);
+        if (r) {
+          console.log(`[docs] pasta de entrada: ${r.imported} importado(s), ${r.duplicated} repetido(s), ${r.rejected} recusado(s)`);
+          await deps.orchestrate?.();
+        }
+      } catch (err) {
+        console.error(`[docs] pasta de entrada: ${(err as Error).message}`);
+      }
+    };
+    setTimeout(inboxTick, 12_000);
+    setInterval(inboxTick, 2 * 60_000);
+  }
   // Orquestrador: vínculos entre agentes (só banco; consulta externa só no vínculo de certificado → NFS-e, sem custo).
   const linkDeps = { nfse: deps.nfse, today: () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }) };
   deps.orchestrate = async () => {
@@ -694,6 +741,9 @@ if (isMain(import.meta.url)) {
       try {
         for (const r of await syncAllDfe(deps.dfe!, deps.tenantId)) {
           if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NF-e ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
+        }
+        for (const r of await syncAllDfe(deps.dfe!, deps.tenantId, undefined, "CTE")) {
+          if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} CT-e ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
         }
         if (deps.nfse) {
           for (const r of await syncAllNfse(deps.nfse, deps.tenantId)) {

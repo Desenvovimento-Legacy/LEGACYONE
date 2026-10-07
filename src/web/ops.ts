@@ -78,7 +78,7 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `Certificado A1 conferido no cofre, válido até ${fmtDate(String(p.valid_to))}${p.replaced ? " (substitui o anterior)" : ""}`;
     case "DFE_BATCH_RECEIVED": {
       const k = (p.kinds ?? {}) as Record<string, number>;
-      const parts = [k.NFE && `${k.NFE} NF-e completa(s)`, k.RES_NFE && `${k.RES_NFE} resumo(s) de NF-e`, (k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0) && `${(k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0)} evento(s)`].filter(Boolean);
+      const parts = [k.CTE && `${k.CTE} CT-e`, k.NFE && `${k.NFE} NF-e completa(s)`, k.RES_NFE && `${k.RES_NFE} resumo(s) de NF-e`, (k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0) && `${(k.EVENTO ?? 0) + (k.RES_EVENTO ?? 0)} evento(s)`].filter(Boolean);
       return `SEFAZ: ${parts.join(", ") || `${p.documents} documento(s)`}`;
     }
     case "NFSE_BATCH_RECEIVED": {
@@ -119,7 +119,12 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return "Pessoa ativou o acesso (senha e autenticador)";
     case "USER_ACCESS_CHANGED":
       return p.active ? `Perfil de acesso: ${String(p.role).replace("_", " ").toLowerCase()}` : "Acesso revogado";
-    case "NFE_MANIFESTATION_APPROVED":
+    case "XML_BATCH_IMPORTED": {
+      const t = (p.types ?? {}) as Record<string, number>;
+      const N: Record<string, string> = { NFE: "NF-e", NFCE: "NFC-e", CTE: "CT-e", NFSE: "NFS-e", EVENTO_NFE: "evento(s) de NF-e", EVENTO_CTE: "evento(s) de CT-e", OUTRO: "outro(s)" };
+      return `XML recebidos por ${p.source === "PASTA" ? "pasta" : "upload"}: ${Object.entries(t).map(([k, v]) => `${v} ${N[k] ?? k}`).join(", ")}`;
+    }
+        case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
       return type;

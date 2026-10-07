@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import type { ClientCertificate, DfeDistribution, DistResult } from "../../integrations/sefaz/dist-dfe.js";
 import { nsu15 } from "../../integrations/sefaz/dist-dfe.js";
 import { summarizeDfe } from "../../integrations/sefaz/nfe-parse.js";
+import { parseFiscalXml, roleOf } from "../../integrations/fiscal-xml/parse.js";
 import { audit } from "../../platform/audit/audit.js";
 import { appendEvent, type Producer } from "../../platform/events/outbox.js";
 import type { Actor } from "../../shared/actor.js";
@@ -26,9 +27,14 @@ export const ERROR_WAIT_MINUTES = 15;
 export const DOCS_AGENT: Actor = { kind: "AGENT", id: "docs" };
 const PRODUCER: Producer = { kind: "agent", name: "docs", version: "1" };
 
+/** NFE = NFeDistribuicaoDFe · CTE = CTeDistribuicaoDFe (mesmas regras de NSU e espera). */
+export type DfeChannel = "NFE" | "CTE";
+
 export interface DfeSyncDeps {
   appPool: Pool;
   dist: DfeDistribution;
+  /** Distribuição de CT-e. Nulo = não busca CT-e. */
+  cteDist?: DfeDistribution | null;
   /** Certificado do CNPJ, aberto do cofre só em memória; null se não houver. */
   certificates: (cnpj: string) => ClientCertificate | null;
   now?: () => Date;
@@ -44,11 +50,11 @@ export interface DfeCursor {
   lastQueryAt: Date | null;
 }
 
-export async function dfeCursor(tx: PoolClient, entityId: string): Promise<DfeCursor> {
+export async function dfeCursor(tx: PoolClient, entityId: string, channel: DfeChannel = "NFE"): Promise<DfeCursor> {
   const { rows } = await tx.query<{ requested_nsu: string; ult_nsu: string | null; max_nsu: string | null; next_allowed_at: Date; status_code: string; status_message: string; queried_at: Date }>(
     `SELECT requested_nsu, ult_nsu, max_nsu, next_allowed_at, status_code, status_message, queried_at
-       FROM dfe_query WHERE entity_id = $1 ORDER BY queried_at DESC, id DESC LIMIT 1`,
-    [entityId],
+       FROM dfe_query WHERE entity_id = $1 AND channel = $2 ORDER BY queried_at DESC, id DESC LIMIT 1`,
+    [entityId, channel],
   );
   const q = rows[0];
   if (!q) return { ultNsu: nsu15(0), maxNsu: null, nextAllowedAt: null, lastStatus: null, lastMessage: null, lastQueryAt: null };
@@ -80,10 +86,33 @@ function nextAllowed(r: DistResult, now: Date): Date {
   return more ? now : new Date(now.getTime() + WAIT_MINUTES * 60_000);
 }
 
-async function store(tx: PoolClient, entityId: string, requested: string, r: DistResult, now: Date, actor: Actor): Promise<number> {
+async function storeCte(tx: PoolClient, entityId: string, cnpj: string, r: DistResult, actor: Actor, kinds: Record<string, number>): Promise<number> {
+  let inserted = 0;
+  for (const d of r.docs) {
+    const doc = parseFiscalXml(d.xml);
+    const docType = doc?.docType ?? "OUTRO";
+    const ins = await tx.query(
+      `INSERT INTO fiscal_xml (id, tenant_id, entity_id, source, nsu, doc_type, role, access_key, number, issuer_doc, issuer_name, recipient_doc,
+                               recipient_name, issued_at, total, status, event_type, file_name, xml, sha256, received_by)
+       VALUES ($1, current_tenant(), $2, 'CTE_DIST', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       ON CONFLICT DO NOTHING`,
+      [newId(), entityId, d.nsu, docType, doc ? roleOf(doc, cnpj) : "OUTRO", doc?.accessKey ?? null, doc?.number ?? null, doc?.issuerDoc ?? null,
+        doc?.issuerName ?? null, doc?.recipientDoc ?? null, doc?.recipientName ?? null, doc?.issuedAt ?? null, doc?.total ?? null,
+        doc?.status ?? null, doc?.eventType ?? null, d.schema.slice(0, 200), d.xml, createHash("sha256").update(d.xml, "utf8").digest(), actor.id],
+    );
+    if (ins.rowCount) {
+      inserted++;
+      kinds[docType] = (kinds[docType] ?? 0) + 1;
+    }
+  }
+  return inserted;
+}
+
+async function store(tx: PoolClient, entityId: string, requested: string, r: DistResult, now: Date, actor: Actor, channel: DfeChannel = "NFE", cnpj = ""): Promise<number> {
   let inserted = 0;
   const kinds: Record<string, number> = {};
-  for (const d of r.docs) {
+  if (channel === "CTE") inserted = await storeCte(tx, entityId, cnpj, r, actor, kinds);
+  for (const d of channel === "CTE" ? [] : r.docs) {
     const s = summarizeDfe(d.schema, d.xml);
     const ins = await tx.query(
       `INSERT INTO dfe_document (id, tenant_id, entity_id, nsu, kind, schema_name, access_key, issuer_doc, issuer_name, recipient_doc,
@@ -102,23 +131,23 @@ async function store(tx: PoolClient, entityId: string, requested: string, r: Dis
   const queryId = newId();
   await tx.query(
     `INSERT INTO dfe_query (id, tenant_id, entity_id, requested_nsu, status_code, status_message, ult_nsu, max_nsu, documents,
-                            next_allowed_at, actor_kind, actor_id, queried_at)
-     VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [queryId, entityId, requested, r.statusCode, r.statusMessage.slice(0, 500), r.ultNsu, r.maxNsu, inserted, next, actor.kind, actor.id, now],
+                            next_allowed_at, actor_kind, actor_id, queried_at, channel)
+     VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    [queryId, entityId, requested, r.statusCode, r.statusMessage.slice(0, 500), r.ultNsu, r.maxNsu, inserted, next, actor.kind, actor.id, now, channel],
   );
   if (inserted) {
     await appendEvent(tx, {
       type: "DFE_BATCH_RECEIVED",
       schemaVersion: 1,
       producer: PRODUCER,
-      idempotencyKey: `dfe:${entityId}:${requested}:${r.ultNsu ?? ""}`,
+      idempotencyKey: `dfe:${channel === "CTE" ? "cte:" : ""}${entityId}:${requested}:${r.ultNsu ?? ""}`,
       entityId,
       payload: { entity_id: entityId, documents: inserted, kinds, ult_nsu: r.ultNsu, max_nsu: r.maxNsu },
     });
   }
   await audit(tx, {
     actor,
-    action: "documents.dfe_query",
+    action: channel === "CTE" ? "documents.cte_query" : "documents.dfe_query",
     resourceType: "dfe_query",
     resourceId: queryId,
     entityId,
@@ -128,7 +157,9 @@ async function store(tx: PoolClient, entityId: string, requested: string, r: Dis
 }
 
 /** Busca as NF-e de uma empresa até zerar a fila da SEFAZ ou bater a regra de espera. */
-export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityId: string, actor: Actor = DOCS_AGENT): Promise<DfeSyncResult> {
+export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityId: string, actor: Actor = DOCS_AGENT, channel: DfeChannel = "NFE"): Promise<DfeSyncResult> {
+  const dist = channel === "CTE" ? deps.cteDist : deps.dist;
+  if (!dist) return { entityId, calls: 0, documents: 0, outcome: "sem_certificado", statusCode: null, statusMessage: "canal não configurado", nextAllowedAt: null };
   const clock = () => (deps.now ? deps.now() : new Date());
   const ent = await withTenant(deps.appPool, tenantId, async (tx) => {
     const e = await tx.query<{ cnpj: string; uf: string | null }>(
@@ -136,7 +167,7 @@ export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityI
          FROM entity e WHERE e.id = $1`,
       [entityId],
     );
-    return { row: e.rows[0], cursor: await dfeCursor(tx, entityId) };
+    return { row: e.rows[0], cursor: await dfeCursor(tx, entityId, channel) };
   });
   const base = { entityId, calls: 0, documents: 0, statusCode: ent.cursor.lastStatus, statusMessage: ent.cursor.lastMessage };
   if (!ent.row?.cnpj || !ent.row.uf) return { ...base, outcome: "sem_uf", nextAllowedAt: null };
@@ -153,22 +184,22 @@ export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityI
     const now = clock();
     let r: DistResult;
     try {
-      r = await deps.dist.distNsu({ cnpj: ent.row.cnpj, uf: ent.row.uf, ultNsu, certificate });
+      r = await dist.distNsu({ cnpj: ent.row.cnpj, uf: ent.row.uf, ultNsu, certificate });
     } catch (err) {
       const msg = (err as Error).message.slice(0, 300);
       const wait = new Date(now.getTime() + ERROR_WAIT_MINUTES * 60_000);
       await withTenant(deps.appPool, tenantId, (tx) =>
         tx.query(
-          `INSERT INTO dfe_query (id, tenant_id, entity_id, requested_nsu, status_code, status_message, next_allowed_at, actor_kind, actor_id, queried_at)
-           VALUES ($1, current_tenant(), $2, $3, 'ERRO', $4, $5, $6, $7, $8)`,
-          [newId(), entityId, ultNsu, msg, wait, actor.kind, actor.id, now],
+          `INSERT INTO dfe_query (id, tenant_id, entity_id, requested_nsu, status_code, status_message, next_allowed_at, actor_kind, actor_id, queried_at, channel)
+           VALUES ($1, current_tenant(), $2, $3, 'ERRO', $4, $5, $6, $7, $8, $9)`,
+          [newId(), entityId, ultNsu, msg, wait, actor.kind, actor.id, now, channel],
         ),
       );
       return { entityId, calls: calls + 1, documents, outcome: "erro", statusCode: "ERRO", statusMessage: msg, nextAllowedAt: wait };
     }
     calls++;
     const requested = ultNsu;
-    documents += await withTenant(deps.appPool, tenantId, (tx) => store(tx, entityId, requested, r, now, actor));
+    documents += await withTenant(deps.appPool, tenantId, (tx) => store(tx, entityId, requested, r, now, actor, channel, ent.row!.cnpj));
     last = r;
     nextAt = nextAllowed(r, now);
     if ((r.statusCode === "137" || r.statusCode === "138") && r.ultNsu) ultNsu = r.ultNsu;
@@ -208,7 +239,7 @@ export async function setStartingNsu(pool: Pool, tenantId: string, entityId: str
 }
 
 /** Todas as empresas com certificado; respeita a espera de cada uma e para em 656 de sequência. */
-export async function syncAllDfe(deps: DfeSyncDeps, tenantId: string, actor: Actor = DOCS_AGENT): Promise<DfeSyncResult[]> {
+export async function syncAllDfe(deps: DfeSyncDeps, tenantId: string, actor: Actor = DOCS_AGENT, channel: DfeChannel = "NFE"): Promise<DfeSyncResult[]> {
   const ids = await withTenant(deps.appPool, tenantId, (tx) =>
     tx.query<{ id: string }>(
       `SELECT e.id FROM entity e
@@ -218,9 +249,9 @@ export async function syncAllDfe(deps: DfeSyncDeps, tenantId: string, actor: Act
   );
   const out: DfeSyncResult[] = [];
   for (const { id } of ids.rows) {
-    const c = await withTenant(deps.appPool, tenantId, (tx) => dfeCursor(tx, id));
+    const c = await withTenant(deps.appPool, tenantId, (tx) => dfeCursor(tx, id, channel));
     if (blockedBySequence(c)) continue;
-    out.push(await syncEntityDfe(deps, tenantId, id, actor));
+    out.push(await syncEntityDfe(deps, tenantId, id, actor, channel));
   }
   return out;
 }

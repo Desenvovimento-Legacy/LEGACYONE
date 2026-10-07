@@ -28,6 +28,9 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   body:not(.p-confirmar) button[data-act=services], body:not(.p-confirmar) button[data-act=nsu], body:not(.p-confirmar) button[data-act=certs],
   body:not(.p-aprovar) button[data-act=approve], body:not(.p-aprovar) button[data-act=rules], body:not(.p-aprovar) button[data-act=srules],
   body:not(.p-aprovar) button[data-act=ciencia], body:not(.p-aprovar) button[data-act=exc] { display: none; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 8px; background: var(--panel2); }
+  .drop.on { border-color: var(--teal); background: var(--teal-bg); }
+  body:not(.p-confirmar) .drop { display: none; }
   .lks { display: grid; gap: 10px; }
   .lk { display: grid; grid-template-columns: minmax(0, 1.2fr) auto minmax(0, .7fr) auto minmax(0, 2fr); gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--panel2); }
   .lk-lbl { display: block; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
@@ -521,8 +524,58 @@ function viewDocumentos(entityId) {
       '<div class="empty">Regra da SEFAZ: sem nota nova, a próxima consulta só depois de 1 hora (fora disso o CNPJ fica bloqueado por 1 hora). A IARIS segue essa regra sozinha.</div></section>' +
       '<section class="card"><h2>' + (entityId ? "Documentos da empresa" : "Documentos recebidos") + ' (' + r.documents.length + ')</h2>' + (entityId ? '<div style="margin-bottom:8px"><a href="#/documentos">ver todas as empresas</a></div>' : '') +
       '<div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Emitente</th><th>Documento</th><th class="num">Valor</th><th>Chave</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhum documento recebido ainda.</td></tr>') + '</tbody></table></div></section>' +
-      nfseHtml(r, entityId);
+      nfseHtml(r, entityId) +
+      '<section class="card" id="xmlin"><h2>Entrada de XML (upload, pasta e CT-e)</h2><div class="empty">Carregando…</div></section>';
+    loadXmlIn(entityId);
   });
+}
+
+var DT = { NFE: "NF-e", NFCE: "NFC-e", CTE: "CT-e", NFSE: "NFS-e", EVENTO_NFE: "evento de NF-e", EVENTO_CTE: "evento de CT-e", OUTRO: "outro" };
+var RL = { EMITENTE: "emitida", DESTINATARIO: "recebida", TOMADOR: "tomada", PRESTADOR: "prestada", OUTRO: "citada" };
+var SRC = { UPLOAD: "upload", PASTA: "pasta", CTE_DIST: "distribuição CT-e" };
+function loadXmlIn(entityId) {
+  return getJson("/api/documentos/xml" + (entityId ? "?empresa=" + entityId : "")).then(function (r) {
+    var box = $("xmlin"); if (!box) return;
+    var sum = r.summary.map(function (x) {
+      return '<tr><td>' + esc(x.entity) + '</td><td>' + esc(DT[x.doc_type] || x.doc_type) + '</td><td>' + esc(RL[x.role] || x.role) + '</td><td class="num">' + x.n + '</td><td class="num">' + (x.total ? brl(x.total) : "—") + '</td><td>' + (x.first_at ? d(x.first_at.slice(0, 10)) + ' a ' + d(x.last_at.slice(0, 10)) : "—") + '</td></tr>';
+    }).join("");
+    var rec = r.recent.slice(0, 30).map(function (x) {
+      var st = x.status === "CANCELADO" ? ' <span class="bad">cancelado</span>' : x.status === "DENEGADO" ? ' <span class="bad">denegado</span>' : x.status === "SEM_PROTOCOLO" ? ' <span class="wr">sem protocolo</span>' : '';
+      return '<tr><td>' + (x.issued_at ? dt(x.issued_at) : "—") + '</td><td>' + esc(x.entity) + '</td><td>' + esc(DT[x.doc_type] || x.doc_type) + (x.number ? ' nº ' + esc(x.number) : '') + st + '<div class="mut" style="font-size:11px">' + esc(RL[x.role] || x.role) + ' · ' + esc(SRC[x.source] || x.source) + '</div></td><td>' + esc(x.issuer_name || "—") + '</td><td class="num">' + (x.total ? brl(x.total) : "—") + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>Entrada de XML (upload, pasta e CT-e)</h2>' +
+      '<div class="drop" id="drop"><b>Arraste aqui os XML ou ZIP</b><span class="mut">NF-e, NFC-e, CT-e, NFS-e e eventos. A empresa é achada pelo CNPJ do próprio documento.</span>' +
+      '<div class="form-row"><input type="file" id="xmlfiles" multiple accept=".xml,.zip"><button class="warn" data-act="xmlup" type="button">Enviar</button></div></div>' +
+      '<div id="xmlres"></div>' +
+      (r.inbox ? '<div class="empty">Pasta de entrada: <span class="mono">' + esc(r.inbox) + '</span>. O que cair lá (ex.: XML exportado do PDV) entra sozinho a cada 2 minutos e vai para processados ou recusados. Nada é apagado.</div>' : '') +
+      '<h3 class="sec">Resumo</h3><div class="scroll"><table><thead><tr><th>Empresa</th><th>Tipo</th><th>Papel</th><th class="num">Qtde</th><th class="num">Valor autorizado</th><th>Período</th></tr></thead><tbody>' + (sum || '<tr><td colspan="6" class="empty">Nenhum XML recebido por aqui ainda.</td></tr>') + '</tbody></table></div>' +
+      (rec ? '<h3 class="sec">Últimos recebidos</h3><div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Documento</th><th>Emitente</th><th class="num">Valor</th></tr></thead><tbody>' + rec + '</tbody></table></div>' : '');
+    var drop = $("drop");
+    ["dragenter", "dragover"].forEach(function (e) { drop.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.add("on"); }); });
+    ["dragleave", "drop"].forEach(function (e) { drop.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.remove("on"); }); });
+    drop.addEventListener("drop", function (ev) { uploadXml(ev.dataTransfer.files, entityId); });
+  }).catch(function (err) { toast(err.message); });
+}
+function uploadXml(fileList, entityId) {
+  var files = Array.prototype.slice.call(fileList || []);
+  if (!files.length) { toast("Escolha os arquivos XML ou ZIP."); return; }
+  var total = files.reduce(function (n, f) { return n + f.size; }, 0);
+  if (total > 30 * 1024 * 1024) { toast("Até 30 MB por envio. Mande em partes ou use a pasta de entrada."); return; }
+  toast("Enviando " + files.length + " arquivo(s)…");
+  Promise.all(files.map(function (f) {
+    return new Promise(function (ok, fail) {
+      var fr = new FileReader();
+      fr.onload = function () { ok({ name: f.name, data: String(fr.result).split(",")[1] || "" }); };
+      fr.onerror = function () { fail(new Error("Não consegui ler " + f.name)); };
+      fr.readAsDataURL(f);
+    });
+  })).then(function (payload) { return post("/api/documentos/upload", "confirmar", { files: payload }); }).then(function (r) {
+    var bad = r.items.filter(function (i) { return i.status === "SEM_EMPRESA" || i.status === "INVALIDO" || i.status === "IGNORADO"; });
+    toast(r.imported + " importado(s), " + r.duplicated + " já existiam, " + r.rejected + " recusado(s).");
+    return loadXmlIn(entityId).then(function () {
+      if (bad.length) $("xmlres").innerHTML = '<div class="empty"><b>Recusados:</b><br>' + bad.slice(0, 30).map(function (i) { return esc(i.file) + ' — ' + esc(i.reason || i.status); }).join("<br>") + (bad.length > 30 ? '<br>…' : '') + '</div>';
+    });
+  }).catch(function (err) { toast(err.message); });
 }
 
 var ROLE = { PRESTADA: "prestada", TOMADA: "tomada", OUTRA: "outra", EVENTO: "evento" };
@@ -783,6 +836,9 @@ document.addEventListener("click", function (ev) {
       b.disabled = true;
       post("/api/excecao/" + id + "/decidir", "aprovar", { decision: dec, note: note }).then(function () { toast(dec === "RETIFICAR" ? "Registrado: aguardando a declaração retificada." : dec === "ADIAR" ? "Movida para revisão posterior." : "Registrado: diferença mantida com justificativa."); })
         .catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "xmlup") {
+      uploadXml($("xmlfiles").files, (location.hash.split("/")[2] || null));
     }
     if (b.dataset.act === "nfse") {
       b.disabled = true;
