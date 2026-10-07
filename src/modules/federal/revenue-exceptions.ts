@@ -11,7 +11,8 @@ import { REVENUE_TOLERANCE, revenueCrossCheck, type RevenueCheckRow } from "./de
 /**
  * Agente Revisão — exceções da conferência receita declarada × NFS-e prestadas.
  *
- * Divergência → Case EXCEPTION (empresa + competência) aguardando decisão humana,
+ * Divergência → Case EXCEPTION (empresa + competência) aguardando decisão humana
+ * (retificar, manter com justificativa ou adiar para revisão posterior),
  * com hipótese determinística (sem IA): notas canceladas no mês que somam a
  * diferença, NFS-e a maior que o declarado, ou sem explicação automática.
  * Quando a conferência volta a bater (declaração retificada lida, nota corrigida),
@@ -228,7 +229,7 @@ export async function decideRevenueException(
   pool: Pool,
   tenantId: string,
   caseId: string,
-  input: { decision: "RETIFICAR" | "MANTER"; note?: string | null },
+  input: { decision: "RETIFICAR" | "MANTER" | "ADIAR"; note?: string | null },
   actor: Actor,
 ) {
   if (actor.kind !== "USER") throw new Error("Só uma pessoa decide uma exceção");
@@ -241,6 +242,7 @@ export async function decideRevenueException(
     const row = c.rows[0];
     if (!row) throw new Error("Exceção não encontrada");
     if (row.status === "COMPLETED" || row.status === "CANCELLED") throw new Error("Exceção já encerrada");
+    if (input.decision === "ADIAR" && row.status !== "WAITING_HUMAN") throw new Error("Só exceção aguardando decisão pode ir para revisão posterior");
     await tx.query("INSERT INTO exception_decision (id, tenant_id, case_id, decision, note, actor_id) VALUES ($1, current_tenant(), $2, $3, $4, $5)", [
       newId(),
       caseId,
@@ -249,9 +251,14 @@ export async function decideRevenueException(
       actor.id,
     ]);
     const p = await tx.query<{ id: string }>("SELECT id FROM pending_item WHERE status = 'OPEN' AND case_id = $1", [caseId]);
-    const resolution = input.decision === "RETIFICAR" ? `Decisão: retificar o PGDAS-D (${actor.id})` : `Decisão: manter a declaração — ${input.note!.trim()} (${actor.id})`;
+    const resolution =
+      input.decision === "RETIFICAR" ? `Decisão: retificar o PGDAS-D (${actor.id})`
+      : input.decision === "ADIAR" ? `Adiado para revisão posterior (${actor.id})`
+      : `Decisão: manter a declaração — ${input.note!.trim()} (${actor.id})`;
     for (const it of p.rows) await resolvePendingItem(tx, { id: it.id, resolution }, actor);
-    if (input.decision === "RETIFICAR") {
+    if (input.decision === "ADIAR") {
+      // Continua aberta (aguardando decisão), fora da Fila humana; nada é transmitido.
+    } else if (input.decision === "RETIFICAR") {
       // Fica aguardando a declaração retificada; fecha sozinho quando a conferência bater.
       await moveTo(tx, caseId, ["IN_PROGRESS", "WAITING_EXTERNAL"], "Escritório vai retificar o PGDAS-D", actor);
     } else {

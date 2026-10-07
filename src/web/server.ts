@@ -247,7 +247,7 @@ export function createWebServer(deps: WebDeps) {
         if (!actionAllowed(req, deps.port, "aprovar")) return json(res, 403, { erro: "Requisição recusada" });
         try {
           const body = (await readJson(req)) as { decision?: string; note?: string };
-          if (body.decision !== "RETIFICAR" && body.decision !== "MANTER") return json(res, 400, { erro: "Decisão inválida" });
+          if (body.decision !== "RETIFICAR" && body.decision !== "MANTER" && body.decision !== "ADIAR") return json(res, 400, { erro: "Decisão inválida" });
           json(res, 200, await decideRevenueException(deps.appPool, deps.tenantId, parts[2]!, { decision: body.decision, note: body.note ?? null }, USER));
         } catch (err) {
           json(res, 409, { erro: (err as Error).message });

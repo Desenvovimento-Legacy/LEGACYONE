@@ -209,7 +209,7 @@ function queueItemHtml(q) {
       '<table style="margin:2px 0"><tr><td class="mut">Declarado no PGDAS-D</td><td class="num">' + brl(dv.declared) + '</td></tr><tr><td class="mut">NFS-e válidas</td><td class="num">' + brl(dv.nfse) + '</td></tr><tr><td><b>Diferença</b></td><td class="num"><b class="bad">' + brl(dv.difference) + '</b></td></tr></table>' +
       '<p><b>Hipótese:</b> ' + esc(dv.hypothesis) + (dv.responsibility === "ANTERIOR" ? ' <span class="wr">Período do escritório anterior.</span>' : '') + '</p>' +
       (notes ? '<details><summary class="mut" style="cursor:pointer;font-size:12px">Notas envolvidas (' + dv.notes.length + ')</summary><table><thead><tr><th>Número</th><th class="num">Valor</th><th>Cancelada em</th><th>Evento</th></tr></thead><tbody>' + notes + '</tbody></table></details>' : '') +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" data-act="exc" data-dec="RETIFICAR" data-id="' + dv.case_id + '">Vou retificar o PGDAS-D</button><button class="ghost" data-act="exc" data-dec="MANTER" data-id="' + dv.case_id + '">Manter (justificar)</button><a class="nav" style="display:inline-flex" href="#/empresa/' + dv.entity_id + '">Ver conferência</a></div></div>';
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" data-act="exc" data-dec="RETIFICAR" data-id="' + dv.case_id + '">Vou retificar o PGDAS-D</button><button class="ghost" data-act="exc" data-dec="MANTER" data-id="' + dv.case_id + '">Manter (justificar)</button>' + (dv.decision === "ADIAR" ? '' : '<button class="ghost" data-act="exc" data-dec="ADIAR" data-id="' + dv.case_id + '">Revisão posterior</button>') + '<a class="nav" style="display:inline-flex" href="#/empresa/' + dv.entity_id + '">Ver conferência</a></div></div>';
   }
   if (q.kind === "ciencia") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="warn" data-act="ciencia" data-id="' + q.id + '">Aprovar ciência</button><a class="nav" style="display:inline-flex" href="#/documentos/' + q.id + '">Ver as notas</a></div></div>';
@@ -261,8 +261,12 @@ function viewCentral() {
 function viewFila() {
   setHead("Fila humana", "Só o que a IARIS não pode decidir sozinha. Cada decisão fica registrada na auditoria.");
   return loadCentral().then(function (c) {
+    var def = (c.deferred || []).map(function (dv) {
+      return queueItemHtml({ kind: "divergence", divergence: dv, type: "REVISAO_POSTERIOR", since: dv.since, entity: dv.entity, title: "Receita " + mm(dv.competence) + ": declarado no PGDAS-D × NFS-e prestadas não confere" });
+    }).join("");
     $("view").innerHTML = '<section class="card queue" style="max-width:820px"><h2>' + c.human.length + ' item(ns) esperando você</h2>' +
-      (c.human.length ? c.human.map(queueItemHtml).join("") : '<div class="empty">Nada esperando você.</div>') + '</section>';
+      (c.human.length ? c.human.map(queueItemHtml).join("") : '<div class="empty">Nada esperando você.</div>') + '</section>' +
+      (def ? '<section class="card" style="max-width:820px"><h2>Revisão posterior (' + c.deferred.length + ')</h2><div class="mut" style="font-size:12px;margin-bottom:4px">Exceções abertas que você deixou para depois. Nada foi transmitido.</div>' + def + '</section>' : '');
   });
 }
 
@@ -558,12 +562,14 @@ document.addEventListener("click", function (ev) {
     }
     if (b.dataset.act === "exc") {
       var dec = b.dataset.dec, note = null;
-      if (dec === "MANTER") {
+      if (dec === "ADIAR") {
+        if (!window.confirm("Deixar esta exceção para revisão posterior?\\n\\nEla sai da Fila humana, continua aberta e registrada, e nada é transmitido.")) return;
+      } else if (dec === "MANTER") {
         note = window.prompt("Por que manter a declaração como está? (fica na auditoria)");
         if (!note || note.trim().length < 5) { toast("Escreva a justificativa (mínimo 5 caracteres)."); return; }
       } else if (!window.confirm("Registrar que o escritório vai retificar o PGDAS-D desta competência?\\n\\nA exceção fica aguardando a declaração retificada e fecha sozinha quando a conferência bater (use Buscar declaração depois de transmitir).")) return;
       b.disabled = true;
-      post("/api/excecao/" + id + "/decidir", "aprovar", { decision: dec, note: note }).then(function () { toast(dec === "RETIFICAR" ? "Registrado: aguardando a declaração retificada." : "Registrado: diferença mantida com justificativa."); })
+      post("/api/excecao/" + id + "/decidir", "aprovar", { decision: dec, note: note }).then(function () { toast(dec === "RETIFICAR" ? "Registrado: aguardando a declaração retificada." : dec === "ADIAR" ? "Movida para revisão posterior." : "Registrado: diferença mantida com justificativa."); })
         .catch(function (err) { toast(err.message); b.disabled = false; }).then(function () { return loadCentral(); }).then(route);
     }
     if (b.dataset.act === "nfse") {

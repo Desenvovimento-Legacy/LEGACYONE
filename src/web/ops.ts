@@ -90,7 +90,7 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
     case "REVENUE_DIVERGENCE_DETECTED":
       return `Receita ${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}: declarado × NFS-e diverge em ${Number(p.difference).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`;
     case "EXCEPTION_DECIDED":
-      return p.decision === "RETIFICAR" ? "Exceção decidida: retificar o PGDAS-D" : "Exceção decidida: diferença mantida com justificativa";
+      return p.decision === "RETIFICAR" ? "Exceção decidida: retificar o PGDAS-D" : p.decision === "ADIAR" ? "Exceção adiada para revisão posterior" : "Exceção decidida: diferença mantida com justificativa";
     case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
@@ -184,6 +184,7 @@ export async function centralData(tx: PoolClient) {
     stages: PIPELINE_STAGES,
     pipeline: entities.rows.map((e) => ({ id: e.id, name: e.name, cnpj: formatCnpj(e.cnpj), cells: stageFor(e) })),
     human,
+    deferred: (await openRevenueExceptions(tx)).filter((d) => d.decision === "ADIAR"),
     events: events.rows.map((ev) => ({
       type: ev.type,
       at: ev.occurred_at.toISOString(),

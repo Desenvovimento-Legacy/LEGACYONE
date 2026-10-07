@@ -63,6 +63,21 @@ describe("exceções da conferência de receita", () => {
     const qi = q.find((x) => x.kind === "divergence" && x.caseId === jul.case_id)!;
     expect((qi as { divergence?: unknown }).divergence).toMatchObject({ hypothesis_code: "CANCELADAS_TOTAL" });
 
+    // Revisão posterior: sai da fila, continua aberta, pode ser decidida depois.
+    await decideRevenueException(appPool, t, jul.case_id, { decision: "ADIAR" }, LUAN);
+    await withTenant(appPool, t, async (tx) => {
+      const q2 = await humanQueue(tx);
+      expect(q2.find((x) => x.caseId === jul.case_id)).toBeUndefined();
+      const left = await openRevenueExceptions(tx);
+      expect(left.find((x) => x.case_id === jul.case_id)).toMatchObject({ decision: "ADIAR", status: "WAITING_HUMAN" });
+    });
+    await refreshRevenueExceptions(appPool, t, entityId);
+    await withTenant(appPool, t, async (tx) => {
+      const p = await tx.query("SELECT count(*)::int AS n FROM pending_item WHERE status = 'OPEN' AND case_id = $1", [jul.case_id]);
+      expect(p.rows[0].n).toBe(0);
+    });
+    await expect(decideRevenueException(appPool, t, jul.case_id, { decision: "ADIAR" }, LUAN)).resolves.toBeTruthy();
+
     // Decisões
     await expect(decideRevenueException(appPool, t, may.case_id, { decision: "MANTER", note: "" }, LUAN)).rejects.toThrow(/justificativa/);
     await expect(decideRevenueException(appPool, t, jul.case_id, { decision: "RETIFICAR" }, { kind: "AGENT", id: "review" })).rejects.toThrow(/pessoa/);
@@ -76,7 +91,7 @@ describe("exceções da conferência de receita", () => {
       const p = await tx.query("SELECT count(*)::int AS n FROM pending_item WHERE status = 'OPEN' AND case_id = ANY($1)", [[may.case_id, jul.case_id]]);
       expect(p.rows[0].n).toBe(0);
       const a = await tx.query("SELECT count(*)::int AS n FROM audit_log WHERE action = 'review.exception_decided'");
-      expect(a.rows[0].n).toBe(2);
+      expect(a.rows[0].n).toBe(4); // 2 adiamentos + manter + retificar
     });
     // Reprocessar não reabre a pendência de quem já decidiu.
     await refreshRevenueExceptions(appPool, t, entityId);
