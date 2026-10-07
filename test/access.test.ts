@@ -110,4 +110,38 @@ describe("login: senha + autenticador, perfis e sessão", () => {
       expect(a.rows.map((r) => r.action)).toEqual(["user.invite", "user.enroll", "auth.login", "auth.logout"]);
     });
   });
+
+  it("tela de usuários: só o Responsável técnico convida, troca perfil e revoga; nunca fica sem responsável", async () => {
+    const t = await newTenant();
+    const { base } = await server(t);
+    const rt = await enroll(t, "luan@escritorio.test", "RESPONSAVEL_TECNICO");
+    const cookie = await loginCookie(base, rt.email, rt.secret);
+    const call = (path: string, body: unknown, c = cookie) =>
+      fetch(`${base}${path}`, { method: "POST", headers: { cookie: c, "X-IARIS-Acao": "usuarios", "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    const inv = await call("/api/usuarios/convidar", { name: "Carla", email: "carla@escritorio.test", role: "LEITURA" });
+    const ib = await inv.json();
+    expect(inv.status, JSON.stringify(ib)).toBe(200);
+    expect(ib.link).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/convite#t=[A-Za-z0-9_-]{40,}$/);
+    const list = await (await fetch(`${base}/api/usuarios`, { headers: { cookie } })).json();
+    expect(list.users.map((u: { email: string; status: string }) => [u.email, u.status])).toEqual(
+      expect.arrayContaining([["carla@escritorio.test", "CONVITE_PENDENTE"], ["luan@escritorio.test", "ATIVO"]]),
+    );
+
+    // Leitura não administra usuários.
+    const le = await enroll(t, "leo@escritorio.test", "LEITURA");
+    const lc = await loginCookie(base, le.email, le.secret);
+    expect((await fetch(`${base}/api/usuarios`, { headers: { cookie: lc } })).status).toBe(403);
+    expect((await call("/api/usuarios/convidar", { name: "X", email: "x@escritorio.test", role: "LEITURA" }, lc)).status).toBe(403);
+
+    // Perfil e revogação, com as travas.
+    expect((await call("/api/usuarios/perfil", { email: "leo@escritorio.test", role: "OPERADOR" })).status).toBe(200);
+    expect(await (await fetch(`${base}/api/sessao`, { headers: { cookie: lc } })).json()).toMatchObject({ role: "OPERADOR" });
+    const last = await call("/api/usuarios/perfil", { email: "luan@escritorio.test", role: "LEITURA" });
+    expect(last.status).toBe(409);
+    expect((await last.json()).erro).toMatch(/Responsável técnico/);
+    expect((await call("/api/usuarios/revogar", { email: "luan@escritorio.test" })).status).toBe(409);
+    expect((await call("/api/usuarios/revogar", { email: "leo@escritorio.test", reason: "teste" })).status).toBe(200);
+    expect((await fetch(`${base}/api/central`, { headers: { cookie: lc } })).status).toBe(401);
+  });
 });

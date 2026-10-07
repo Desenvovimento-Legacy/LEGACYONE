@@ -21,12 +21,12 @@ import { base32Encode, matchTotp, newTotpSecret, otpauthUri } from "./totp.js";
 
 export const Role = z.enum(["LEITURA", "OPERADOR", "RESPONSAVEL_TECNICO"]);
 export type Role = z.infer<typeof Role>;
-export type Permission = "ver" | "buscar" | "confirmar" | "aprovar";
+export type Permission = "ver" | "buscar" | "confirmar" | "aprovar" | "usuarios";
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   LEITURA: ["ver"],
   OPERADOR: ["ver", "buscar", "confirmar"],
-  RESPONSAVEL_TECNICO: ["ver", "buscar", "confirmar", "aprovar"],
+  RESPONSAVEL_TECNICO: ["ver", "buscar", "confirmar", "aprovar", "usuarios"],
 };
 export const ROLE_LABEL: Record<Role, string> = {
   LEITURA: "Leitura",
@@ -385,6 +385,52 @@ export async function revokeUser(deps: AccessDeps, emailInput: string, reason: s
   });
 }
 
+/** Quantos responsáveis técnicos ativos sobram se este usuário deixar de ser um. */
+async function otherActiveRts(tx: PoolClient, userId: string): Promise<number> {
+  const { rows } = await tx.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM app_user u
+       JOIN LATERAL (SELECT role, active FROM user_access WHERE user_id = u.id ORDER BY changed_at DESC, id DESC LIMIT 1) a ON true
+      WHERE u.id <> $1 AND a.active AND a.role = 'RESPONSAVEL_TECNICO'`,
+    [userId],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/** Troca o perfil (nova linha de histórico). Nunca deixa o escritório sem responsável técnico. */
+export async function changeRole(deps: AccessDeps, emailInput: string, role: Role, actor: Actor) {
+  const email = Email.parse(emailInput);
+  const newRole = Role.parse(role);
+  return withTenant(deps.appPool, deps.tenantId, async (tx) => {
+    const { rows } = await tx.query<{ id: string }>("SELECT id FROM app_user WHERE email = $1", [email]);
+    const userId = rows[0]?.id;
+    if (!userId) throw new AccessError(`Usuário ${email} não existe`);
+    const access = await currentAccess(tx, userId);
+    if (!access?.active) throw new AccessError("Acesso revogado: envie um convite novo para reativar");
+    if (access.role === newRole) return { userId, changed: false };
+    if (access.role === "RESPONSAVEL_TECNICO" && (await otherActiveRts(tx, userId)) === 0) {
+      throw new AccessError("O escritório precisa de ao menos um Responsável técnico ativo");
+    }
+    await setAccess(tx, userId, newRole, true, "perfil alterado", actor);
+    await audit(tx, { actor, action: "user.role_changed", resourceType: "app_user", resourceId: userId, data: { email, from: access.role, to: newRole } });
+    return { userId, changed: true };
+  });
+}
+
+/** Revogação feita pela tela: não deixa revogar a si mesmo nem o último responsável técnico. */
+export async function revokeUserGuarded(deps: AccessDeps, emailInput: string, reason: string, actor: Actor) {
+  const email = Email.parse(emailInput);
+  if (email === actor.id) throw new AccessError("Você não pode revogar o próprio acesso");
+  await withTenant(deps.appPool, deps.tenantId, async (tx) => {
+    const { rows } = await tx.query<{ id: string }>("SELECT id FROM app_user WHERE email = $1", [email]);
+    if (!rows[0]) throw new AccessError(`Usuário ${email} não existe`);
+    const access = await currentAccess(tx, rows[0].id);
+    if (access?.active && access.role === "RESPONSAVEL_TECNICO" && (await otherActiveRts(tx, rows[0].id)) === 0) {
+      throw new AccessError("O escritório precisa de ao menos um Responsável técnico ativo");
+    }
+  });
+  return revokeUser(deps, email, reason, actor);
+}
+
 export async function listUsers(deps: Pick<AccessDeps, "appPool" | "tenantId">) {
   return withTenant(deps.appPool, deps.tenantId, async (tx) => {
     const { rows } = await tx.query<{
@@ -394,9 +440,11 @@ export async function listUsers(deps: Pick<AccessDeps, "appPool" | "tenantId">) 
       active: boolean | null;
       enrolled: boolean;
       last_login: Date | null;
+      invite_expires: Date | null;
     }>(
       `SELECT u.email, u.name, a.role, a.active,
               EXISTS (SELECT 1 FROM user_credential c WHERE c.user_id = u.id) AS enrolled,
+              (SELECT max(expires_at) FROM user_invitation i WHERE i.user_id = u.id AND i.used_at IS NULL AND i.expires_at > now()) AS invite_expires,
               (SELECT max(created_at) FROM user_session s WHERE s.user_id = u.id) AS last_login
          FROM app_user u
          LEFT JOIN LATERAL (SELECT role, active FROM user_access WHERE user_id = u.id ORDER BY changed_at DESC, id DESC LIMIT 1) a ON true

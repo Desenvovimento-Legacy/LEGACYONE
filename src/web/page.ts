@@ -35,6 +35,12 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .lk .caps { display: flex; flex-wrap: wrap; gap: 4px; }
   .ev { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--blue-bg); color: var(--blue-ink); border: 1px solid var(--blue-line); }
   @media (max-width: 760px) { .lk { grid-template-columns: 1fr; } .lk-arrow { transform: rotate(90deg); justify-self: start; } }
+  body:not(.p-usuarios) .only-usuarios { display: none; }
+  .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .form-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .form-row input, .form-row select, td select { font: inherit; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .linkbox { margin-top: 12px; padding: 12px; border-radius: 10px; background: var(--teal-bg); border: 1px solid var(--teal-line); display: grid; gap: 8px; }
+  .linkbox input { width: 100%; font-family: Consolas, ui-monospace, monospace; font-size: 12px; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--teal-line); background: var(--panel); color: var(--ink); }
   button.sair { background: transparent; border: 1px solid var(--line); color: var(--ink2); padding: 5px 12px; border-radius: 999px; font: inherit; font-size: 12px; cursor: pointer; }
   button.sair:hover { background: var(--panel2); }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
@@ -168,6 +174,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
     </div>
     <div class="grp"><span>CONTROLE</span>
       <a class="nav" href="#/regras" data-r="regras"><span class="dot" style="background:var(--teal)"></span>Regras e legislação</a>
+      <a class="nav only-usuarios" href="#/usuarios" data-r="usuarios"><span class="dot" style="background:var(--teal)"></span>Usuários e acessos</a>
       <a class="nav dis" href="#/central"><span class="dot" style="background:var(--off)"></span>Revisão independente</a>
       <a class="nav dis" href="#/central"><span class="dot" style="background:var(--off)"></span>Auditoria</a>
     </div>
@@ -616,6 +623,60 @@ function viewVinculos() {
   });
 }
 
+/* ---------------- Usuários ---------------- */
+var ROLES = [["LEITURA", "Leitura"], ["OPERADOR", "Operador"], ["RESPONSAVEL_TECNICO", "Responsável técnico"]];
+var USTATUS = { ATIVO: '<span class="st ok">ativo</span>', CONVITE_PENDENTE: '<span class="st wr">convite pendente</span>', CONVITE_VENCIDO: '<span class="st bad">convite vencido</span>', REVOGADO: '<span class="mut">revogado</span>' };
+function roleSelect(id, value, attrs) {
+  return '<select id="' + id + '"' + (attrs || "") + '>' + ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (r[0] === value ? " selected" : "") + '>' + r[1] + '</option>'; }).join("") + '</select>';
+}
+function viewUsuarios() {
+  setHead("Usuários e acessos", "Quem entra na IARIS e o que cada perfil pode fazer. Só o Responsável técnico administra.");
+  return getJson("/api/usuarios").then(function (r) {
+    var rows = r.users.map(function (u, i) {
+      var me = u.email === r.me;
+      var acts = u.status === "REVOGADO" || u.status === "CONVITE_VENCIDO"
+        ? '<button class="ghost" data-act="ureinv" data-i="' + i + '">Novo convite</button>'
+        : (u.status === "CONVITE_PENDENTE" ? '<button class="ghost" data-act="ureinv" data-i="' + i + '">Gerar link de novo</button> ' : '') + (me ? '<span class="mut">você</span>' : '<button class="ghost" data-act="urevoke" data-i="' + i + '">Revogar</button>');
+      var role = u.status === "REVOGADO" ? esc(u.roleLabel || "—") : roleSelect("ur-" + i, u.role, ' data-act-change="urole" data-i="' + i + '"' + (me ? " disabled" : ""));
+      return '<tr><td><b>' + esc(u.name) + '</b><div class="mut" style="font-size:12px">' + esc(u.email) + '</div></td><td>' + role + '</td><td>' + (USTATUS[u.status] || esc(u.status)) + (u.inviteExpires ? '<div class="mut" style="font-size:11px">vale até ' + dt(u.inviteExpires) + '</div>' : '') + '</td><td>' + (u.lastLogin ? dt(u.lastLogin) : '<span class="mut">nunca</span>') + '</td><td class="num">' + acts + '</td></tr>';
+    }).join("");
+    window._users = r.users;
+    $("view").innerHTML =
+      '<section class="card"><h2>Convidar pessoa</h2>' +
+      '<form id="uform" class="form-row"><label>Nome<input id="uname" required minlength="2" autocomplete="off"></label><label>E-mail<input id="uemail" type="email" required autocomplete="off"></label><label>Perfil' + roleSelect("urole", "LEITURA") + '</label><button class="warn" type="submit">Gerar convite</button></form>' +
+      '<div id="ulink"></div>' +
+      '<div class="empty">O convite vale 72 horas e só funciona uma vez. A pessoa cria a senha e liga o aplicativo autenticador no primeiro acesso. Nenhum e-mail é enviado: copie o link e mande pelo canal que preferir.</div></section>' +
+      '<section class="card"><h2>' + r.users.length + ' usuário(s)</h2><div class="scroll"><table><thead><tr><th>Pessoa</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="empty"><b>Leitura</b>: vê tudo, não executa nada. <b>Operador</b>: também busca na Receita e nas prefeituras e confirma dados. <b>Responsável técnico</b>: também aprova regras, exceções e conclusões, e administra usuários. Toda mudança fica na auditoria.</div></section>';
+    $("uform").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      invite({ name: $("uname").value, email: $("uemail").value, role: $("urole").value });
+    });
+  });
+}
+function showInviteLink(body, r) {
+  $("ulink").innerHTML = '<div class="linkbox"><b>Convite de ' + esc(body.name) + ' pronto' + (r.created ? '' : ' (o link anterior deixou de valer)') + '</b><input id="ulinkv" readonly value="' + esc(r.link) + '"><div class="form-row"><button class="warn" type="button" id="ucopy">Copiar link</button><span class="mut" style="font-size:12px">Vale até ' + dt(r.expiresAt) + '. Este link aparece só agora.</span></div></div>';
+  $("ucopy").addEventListener("click", function () {
+    var v = $("ulinkv"); v.focus(); v.select();
+    var done = function () { toast("Link copiado."); };
+    if (navigator.clipboard) navigator.clipboard.writeText(v.value).then(done).catch(function () { document.execCommand("copy"); done(); });
+    else { document.execCommand("copy"); done(); }
+  });
+}
+function invite(body) {
+  return post("/api/usuarios/convidar", "usuarios", body)
+    .then(function (r) { return viewUsuarios().then(function () { showInviteLink(body, r); }); })
+    .catch(function (err) { toast(err.message); });
+}
+document.addEventListener("change", function (ev) {
+  var el = ev.target;
+  if (!el.dataset || el.dataset.actChange !== "urole") return;
+  var u = window._users[Number(el.dataset.i)];
+  var label = el.options[el.selectedIndex].text;
+  if (!window.confirm("Mudar o perfil de " + u.name + " para " + label + "?")) { el.value = u.role; return; }
+  post("/api/usuarios/perfil", "usuarios", { email: u.email, role: el.value }).then(function () { toast("Perfil de " + u.name + ": " + label + "."); }).catch(function (err) { toast(err.message); }).then(route);
+});
+
 /* ---------------- Regras ---------------- */
 function simplesRulesHtml(list) {
   var pend = list.filter(function (x) { return !x.approved_by && !x.superseded; }).length;
@@ -674,6 +735,18 @@ document.addEventListener("click", function (ev) {
       if (!window.confirm("Aprovar as tabelas do Simples Nacional propostas?\\n\\nConfira alíquotas, parcelas a deduzir e repartição com a LC 123. A aprovação fica registrada na auditoria em seu nome.")) return;
       b.disabled = true;
       post("/api/simples/regras/aprovar", "aprovar").then(function (r) { toast(r.approved.length + " tabela(s) aprovada(s). As empresas foram recalculadas pelo agente Tributos."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
+    }
+    if (b.dataset.act === "urevoke") {
+      var ur = window._users[Number(b.dataset.i)];
+      var why = window.prompt("Revogar o acesso de " + ur.name + "? Escreva o motivo (fica na auditoria).");
+      if (why === null) return;
+      b.disabled = true;
+      post("/api/usuarios/revogar", "usuarios", { email: ur.email, reason: why }).then(function () { toast("Acesso de " + ur.name + " revogado; sessões encerradas."); }).catch(function (err) { toast(err.message); }).then(route);
+    }
+    if (b.dataset.act === "ureinv") {
+      var ui = window._users[Number(b.dataset.i)];
+      if (!window.confirm("Gerar um convite novo para " + ui.name + "? O link anterior deixa de valer.")) return;
+      invite({ name: ui.name, email: ui.email, role: ui.role || "LEITURA" });
     }
     if (b.dataset.act === "certs") {
       b.disabled = true;
@@ -747,7 +820,7 @@ document.addEventListener("click", function (ev) {
   if (tc) { var u = $("tl-" + tc.dataset.tl); if (u) u.hidden = !u.hidden; }
 });
 
-var ROUTES = { vinculos: viewVinculos, departamentos: viewDepartamentos, depto: viewDepto, documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
+var ROUTES = { usuarios: viewUsuarios, vinculos: viewVinculos, departamentos: viewDepartamentos, depto: viewDepto, documentos: viewDocumentos, central: viewCentral, fila: viewFila, cases: viewCases, processos: viewProcessos, receita: viewReceita, empresas: viewEmpresas, empresa: viewEmpresa, regras: viewRegras };
 function route() {
   var parts = location.hash.replace(/^#\\/?/, "").split("/");
   var r = parts[0] || "central";

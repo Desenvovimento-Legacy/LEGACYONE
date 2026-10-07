@@ -29,9 +29,14 @@ import { ZodError } from "zod";
 import {
   AccessError,
   acceptInvitation,
+  changeRole,
+  inviteUser,
+  listUsers,
   login,
   logout,
   openInvitation,
+  revokeUserGuarded,
+  Role,
   ROLE_LABEL,
   sessionFromToken,
   SESSION_HOURS,
@@ -99,6 +104,7 @@ const ACTION_PERMISSION: Record<string, Permission> = {
   confirmar: "confirmar",
   conferir: "confirmar",
   aprovar: "aprovar",
+  usuarios: "usuarios",
 };
 
 function html(res: ServerResponse, body: string) {
@@ -405,6 +411,43 @@ export function createWebServer(deps: WebDeps) {
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "conferencia") {
         json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => revenueCrossCheck(tx, parts[2]!)) });
         return;
+      }
+
+      // ---------------------------------------------------------------- Usuários (só Responsável técnico)
+      if (url.pathname === "/api/usuarios" && req.method === "GET") {
+        if (!user.permissions.includes("usuarios")) return json(res, 403, { erro: `Seu perfil (${ROLE_LABEL[user.role]}) não administra usuários` });
+        const users = await listUsers(access);
+        return json(res, 200, {
+          me: user.email,
+          users: users.map((u) => ({
+            email: u.email,
+            name: u.name,
+            role: u.role,
+            roleLabel: u.role ? ROLE_LABEL[u.role] : null,
+            status: !u.active ? "REVOGADO" : u.enrolled ? "ATIVO" : u.invite_expires ? "CONVITE_PENDENTE" : "CONVITE_VENCIDO",
+            inviteExpires: u.invite_expires ? u.invite_expires.toISOString() : null,
+            lastLogin: u.last_login ? u.last_login.toISOString() : null,
+          })),
+        });
+      }
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "usuarios" && ["convidar", "perfil", "revogar"].includes(parts[2] ?? "")) {
+        if (guard("usuarios")) return;
+        try {
+          const body = (await readJson(req)) as { email?: string; name?: string; role?: string; reason?: string };
+          if (parts[2] === "convidar") {
+            const role = Role.parse(body.role);
+            const r = await inviteUser(access, { email: body.email ?? "", name: body.name ?? "", role }, actor);
+            const origin = deps.publicOrigin && req.headers.host === publicHost(deps) ? deps.publicOrigin : `http://${req.headers.host}`;
+            // O link só volta nesta resposta (o banco guarda o hash do token).
+            return json(res, 200, { created: r.created, expiresAt: r.expiresAt.toISOString(), link: `${origin}/convite#t=${r.token}` });
+          }
+          if (parts[2] === "perfil") return json(res, 200, await changeRole(access, body.email ?? "", Role.parse(body.role), actor));
+          return json(res, 200, await revokeUserGuarded(access, body.email ?? "", (body.reason ?? "").trim() || "revogado pelo escritório", actor));
+        } catch (err) {
+          if (err instanceof AccessError) return json(res, 409, { erro: err.message });
+          if (err instanceof ZodError) return json(res, 400, { erro: err.issues.map((i) => i.message).join("; ") });
+          throw err;
+        }
       }
 
       // GET /api/vinculos — vínculos entre agentes e últimas reações (só banco).
