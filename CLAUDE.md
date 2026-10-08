@@ -50,5 +50,9 @@ pnpm typecheck
 pnpm test           # exige Postgres com as variáveis do .env
 ```
 
+**Toda alteração vai para o GitHub** (`origin/main`, Desenvovimento-Legacy/LEGACYONE):
+com typecheck e testes passando, commit e push na mesma hora — nunca deixar
+trabalho só local. Depois, no PC do escritório: `git pull` e `pnpm db:migrate`.
+
 Idioma do código: identificadores em inglês; comentários, mensagens de erro e
 documentação em português.
