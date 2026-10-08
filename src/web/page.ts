@@ -666,7 +666,7 @@ function loadConferencia(id) {
 var KIND = { NFE: "NF-e completa", RES_NFE: "resumo de NF-e", EVENTO: "evento", RES_EVENTO: "resumo de evento", OUTRO: "outro" };
 var CI = { APROVADA: "ciência aprovada · envio à SEFAZ pendente", ENVIADA: "ciência enviada", REGISTRADA: "ciência registrada", REJEITADA: "ciência rejeitada" };
 function viewDocumentos(entityId) {
-  setHead("Documentos fiscais", "NF-e e eventos que a SEFAZ distribui para cada empresa. A busca é automática e não tem custo.");
+  setHead("Documentos fiscais", "NF-e, CT-e e NFS-e de cada empresa. Busca sem custo no início e no fim do dia, ou quando você pedir.");
   return getJson("/api/documentos" + (entityId ? "?empresa=" + entityId : "")).then(function (r) {
     var st = r.status.map(function (e) {
       var last = e.lastQueryAt ? dt(e.lastQueryAt) + '<div class="mut" style="font-size:12px">' + esc((e.lastStatus || "") + " " + (e.lastMessage || "")) + '</div>' : '<span class="mut">nunca</span>';
@@ -681,13 +681,27 @@ function viewDocumentos(entityId) {
       var ci = x.kind !== "RES_NFE" ? "" : x.hasFull ? '<span class="ok">XML completo</span>' : x.ciencia ? '<span class="wr">' + esc(CI[x.ciencia] || x.ciencia) + '</span>' : x.situation === "1" ? '<span class="wr">aguarda sua ciência</span>' : '';
       return '<tr><td>' + (x.issuedAt ? dt(x.issuedAt) : "—") + '</td><td>' + esc(x.entity) + '</td><td><b>' + esc(x.issuerName || "—") + '</b><div class="mut mono" style="font-size:11px">' + esc(x.issuerDoc || "") + '</div></td><td>' + what + '<div>' + ci + '</div></td><td class="num">' + (x.total ? brl(x.total) : "—") + '</td><td class="mono" style="font-size:11px">' + esc(x.accessKey || "") + '</td></tr>';
     }).join("");
-    $("view").innerHTML = '<section class="card"><h2>Busca na SEFAZ por empresa</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">NF-e completas</th><th class="num">Resumos</th><th class="num">Documentos</th><th>Última consulta</th><th>Próxima consulta</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
+    var sc = r.schedule || { slots: [], last: [] };
+    var lastRun = sc.last && sc.last[0] ? dt(sc.last[0].ran_at) + (sc.last[0].trigger === "PESSOA" ? ' (pedido)' : ' (horário)') : 'ainda não rodou';
+    var head = '<section class="card"><h2>Busca de notas</h2><div class="form-row" style="align-items:center">' +
+      '<div>Horários automáticos: <b>' + esc((sc.slots || []).join(" e ")) + '</b> · Última busca: ' + lastRun + (sc.next ? ' · Próxima: ' + dt(sc.next) : '') + '</div>' +
+      '<button class="warn" data-buscar="1" id="busca-todas"' + (r.configured ? '' : ' disabled') + '>Buscar notas agora (todas as empresas)</button></div>' +
+      '<div class="empty">Se o computador estiver desligado no horário, a busca roda assim que o sistema abrir. NF-e e CT-e seguem a regra da SEFAZ (sem nota nova, 1 hora de espera por CNPJ).</div></section>';
+    $("view").innerHTML = head + '<section class="card"><h2>Busca na SEFAZ por empresa</h2><div class="scroll"><table><thead><tr><th>Empresa</th><th class="num">NF-e completas</th><th class="num">Resumos</th><th class="num">Documentos</th><th>Última consulta</th><th>Próxima consulta</th><th></th></tr></thead><tbody>' + st + '</tbody></table></div>' +
       '<div class="empty">Regra da SEFAZ: sem nota nova, a próxima consulta só depois de 1 hora (fora disso o CNPJ fica bloqueado por 1 hora). A IARIS segue essa regra sozinha.</div></section>' +
       '<section class="card"><h2>' + (entityId ? "Documentos da empresa" : "Documentos recebidos") + ' (' + r.documents.length + ')</h2>' + (entityId ? '<div style="margin-bottom:8px"><a href="#/documentos">ver todas as empresas</a></div>' : '') +
       '<div class="scroll"><table><thead><tr><th>Emissão</th><th>Empresa</th><th>Emitente</th><th>Documento</th><th class="num">Valor</th><th>Chave</th></tr></thead><tbody>' + (docs || '<tr><td colspan="6" class="empty">Nenhum documento recebido ainda.</td></tr>') + '</tbody></table></div></section>' +
       nfseHtml(r, entityId) +
       '<section class="card" id="xmlin"><h2>Entrada de XML (upload, pasta e CT-e)</h2><div class="empty">Carregando…</div></section>';
     loadXmlIn(entityId);
+    var bt = $("busca-todas");
+    if (bt) bt.addEventListener("click", function () {
+      bt.disabled = true; toast("Buscando notas de todas as empresas…");
+      post("/api/documentos/buscar", "buscar-notas", {}).then(function (x) {
+        toast("Busca concluída: " + x.nfe + " NF-e, " + x.cte + " CT-e, " + x.nfse + " NFS-e novas" + (x.waiting ? " (" + x.waiting + " empresa(s) na espera da SEFAZ)" : "") + ".");
+        return viewDocumentos(entityId);
+      }).catch(function (e) { toast(e.message); bt.disabled = false; });
+    });
   });
 }
 

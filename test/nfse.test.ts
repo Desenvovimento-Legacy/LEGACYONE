@@ -53,6 +53,11 @@ describe("NFS-e Nacional (ADN)", () => {
     expect(adn.calls).toEqual([0, 2]);
     expect(r.nextAllowedAt!.getTime() - now.getTime()).toBe(NFSE_IDLE_MINUTES * 60_000);
     expect((await syncEntityNfse(deps, t, entityId)).outcome).toBe("aguardando");
+    // Pedido de uma pessoa não espera a pausa da própria IARIS (sem documento novo)
+    adn.calls.length = 0;
+    (adn as unknown as { responses: unknown[] }).responses.push(parseLote(404, "NENHUM_DOCUMENTO_LOCALIZADO"));
+    expect((await syncEntityNfse(deps, t, entityId, { kind: "USER", id: "luan" })).outcome).toBe("ok");
+    expect(adn.calls).toEqual([2]);
     await withTenant(appPool, t, async (tx) => {
       const list = await nfseList(tx, entityId);
       expect(list.map((x) => x.role).sort()).toEqual(["PRESTADA", "TOMADA"]);

@@ -116,7 +116,10 @@ export async function syncEntityNfse(deps: NfseSyncDeps, tenantId: string, entit
     return { cnpj: e.rows[0]?.cnpj ?? null, cursor: await nfseCursor(tx, entityId) };
   });
   const base = { entityId, calls: 0, documents: 0, status: cursor.lastStatus, message: cursor.lastMessage };
-  if (cursor.nextAllowedAt && cursor.nextAllowedAt > clock()) return { ...base, outcome: "aguardando", nextAllowedAt: cursor.nextAllowedAt };
+  // Pedido de uma pessoa ignora a pausa da própria IARIS (sem documento novo); limite (429) e falha do ADN continuam valendo.
+  const ownPause = cursor.lastStatus !== "LIMITE" && cursor.lastStatus !== "ERRO";
+  const waitApplies = !(actor.kind === "USER" && ownPause);
+  if (waitApplies && cursor.nextAllowedAt && cursor.nextAllowedAt > clock()) return { ...base, outcome: "aguardando", nextAllowedAt: cursor.nextAllowedAt };
   const certificate = cnpj ? deps.certificates(cnpj) : null;
   if (!cnpj || !certificate) return { ...base, outcome: "sem_certificado", nextAllowedAt: null };
 

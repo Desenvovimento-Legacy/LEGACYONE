@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Pool } from "pg";
 import { config } from "../config.js";
+import type { Actor } from "../shared/actor.js";
 import { SERPRO_PROVIDER, serproFromVault, serproMetering } from "../integrations/integra-contador/from-vault.js";
 import type { IntegraContador } from "../integrations/integra-contador/types.js";
 import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../modules/federal/federal-sync.js";
@@ -11,6 +12,7 @@ import { decideRevenueException, refreshRevenueExceptions } from "../modules/fed
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
 import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
+import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
 import { classifyMovement, pendingMovements } from "../modules/ledger/auto-posting.js";
@@ -96,6 +98,9 @@ export interface WebDeps {
   inbox?: string | null;
   /** Orquestrador: roda os vínculos entre agentes (ex.: depois de uma ação na tela). */
   orchestrate?: () => Promise<unknown>;
+  /** Busca de notas (NF-e, CT-e, NFS-e) para todas as empresas; horários fixos ou pedido de pessoa. */
+  searchNotes?: (actor: Actor) => Promise<{ nfe: number; cte: number; nfse: number; waiting: number }>;
+  noteSlots?: string[];
   /** Endereço público do túnel, ex.: https://iaris.exemplo.com.br. Nulo = só nesta máquina. */
   publicOrigin?: string | null;
   now?: () => Date;
@@ -699,7 +704,18 @@ export function createWebServer(deps: WebDeps) {
           nfseStatus: await nfseStatus(tx),
           nfse: await nfseList(tx, entityId && /^[0-9a-f-]{36}$/.test(entityId) ? entityId : null),
         }));
-        json(res, 200, { configured: Boolean(deps.dfe), ...data });
+        const slots = deps.noteSlots ?? DEFAULT_NOTE_SLOTS;
+        const schedule = { slots, next: nextSlot(new Date(), slots).toISOString(), last: (await lastRuns(deps.appPool, deps.tenantId, "busca-notas")).slice(0, 3) };
+        json(res, 200, { configured: Boolean(deps.dfe), schedule, ...data });
+        return;
+      }
+      // POST /api/documentos/buscar — busca de notas agora, todas as empresas (pedido de pessoa; sem custo).
+      if (req.method === "POST" && url.pathname === "/api/documentos/buscar") {
+        if (guard("buscar-notas")) return;
+        if (!deps.searchNotes) return json(res, 409, { erro: "Busca de notas não configurada (cofre ausente)" });
+        const r = await deps.searchNotes(actor);
+        await recordRun(deps.appPool, deps.tenantId, { job: "busca-notas", slot: new Date(), trigger: "PESSOA", actorId: actor.id, result: r });
+        json(res, 200, r);
         return;
       }
       // GET /api/documentos/xml — XML recebidos por upload, pasta e distribuição de CT-e (só banco).
@@ -872,33 +888,54 @@ if (isMain(import.meta.url)) {
   };
   setTimeout(() => void deps.orchestrate?.().catch((e) => console.error(`[orquestrador] ${(e as Error).message}`)), 8_000);
   setInterval(() => void deps.orchestrate?.().catch((e) => console.error(`[orquestrador] ${(e as Error).message}`)), 30_000);
-  // Agente Documentos: busca automática na SEFAZ (sem custo). Cada empresa só é
-  // consultada quando a regra de espera de 1 h permite.
+  // Agente Documentos: busca de notas (sem custo) em horários fixos do dia (padrão 07:00 e 18:00,
+  // IARIS_BUSCA_HORARIOS) e quando uma pessoa pede. Se o computador estava desligado no horário,
+  // roda assim que abrir. As regras de espera da SEFAZ continuam valendo.
   if (deps.dfe && process.env.IARIS_DFE_AUTO !== "0") {
     let running = false;
-    const tick = async () => {
-      if (running) return;
+    const docsAgent = { kind: "AGENT" as const, id: "docs" };
+    deps.noteSlots = parseSlots(process.env.IARIS_BUSCA_HORARIOS, DEFAULT_NOTE_SLOTS);
+    deps.searchNotes = async (who) => {
+      const out = { nfe: 0, cte: 0, nfse: 0, waiting: 0 };
+      if (running) return out;
       running = true;
       try {
-        for (const r of await syncAllDfe(deps.dfe!, deps.tenantId)) {
+        for (const r of await syncAllDfe(deps.dfe!, deps.tenantId, who)) {
+          out.nfe += r.documents;
+          if (r.outcome === "aguardando") out.waiting++;
           if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NF-e ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
         }
-        for (const r of await syncAllDfe(deps.dfe!, deps.tenantId, undefined, "CTE")) {
+        for (const r of await syncAllDfe(deps.dfe!, deps.tenantId, who, "CTE")) {
+          out.cte += r.documents;
           if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} CT-e ${r.entityId.slice(0, 8)}: ${r.calls} consulta(s), ${r.documents} documento(s), cStat ${r.statusCode}`);
         }
         if (deps.nfse) {
-          for (const r of await syncAllNfse(deps.nfse, deps.tenantId)) {
+          for (const r of await syncAllNfse(deps.nfse, deps.tenantId, who)) {
+            out.nfse += r.documents;
             if (r.calls) console.log(`[docs] ${new Date().toLocaleTimeString("pt-BR")} NFS-e ${r.entityId.slice(0, 8)}: ${r.calls} lote(s), ${r.documents} documento(s), ${r.status}${r.message ? " " + r.message : ""}`);
           }
         }
-        await deps.orchestrate?.(); // nota nova → conferência de receita e Simples (vínculos)
+        await deps.orchestrate?.(); // nota nova → conferência, Simples, tributos e contabilidade (vínculos)
       } catch (err) {
-        console.error(`[docs] falha na busca automática: ${(err as Error).message}`);
+        console.error(`[docs] falha na busca de notas: ${(err as Error).message}`);
       } finally {
         running = false;
       }
+      return out;
     };
-    setTimeout(tick, 15_000);
+    const slotCheck = async () => {
+      try {
+        const due = await dueSlot(app, tenant.id, "busca-notas", deps.noteSlots!);
+        if (!due) return;
+        console.log(`[docs] busca de notas do horário ${due.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}`);
+        const r = await deps.searchNotes!(docsAgent);
+        await recordRun(app, tenant.id, { job: "busca-notas", slot: due, trigger: "HORARIO", actorId: docsAgent.id, result: r });
+      } catch (err) {
+        console.error(`[docs] agenda da busca: ${(err as Error).message}`);
+      }
+    };
+    setTimeout(slotCheck, 20_000);
+    setInterval(slotCheck, 60_000);
     // Ao iniciar: conferência de receita de todas as empresas com declaração lida (só banco).
     setTimeout(async () => {
       try {
@@ -922,7 +959,6 @@ if (isMain(import.meta.url)) {
         console.error(`[revisão] falha na conferência: ${(err as Error).message}`);
       }
     }, 5_000);
-    setInterval(tick, 5 * 60_000);
   }
   // Agente Guias: situação do DAS muda com o tempo (prazo passa); só banco, sem custo.
   const guidesTick = async () => {
@@ -951,7 +987,7 @@ if (isMain(import.meta.url)) {
   setInterval(guidesTick, 60 * 60_000);
   createWebServer(deps).listen(port, "127.0.0.1", () => {
     console.log(`IARIS aberto em http://127.0.0.1:${port}  (Ctrl+C para fechar)`);
-    if (deps.dfe && process.env.IARIS_DFE_AUTO !== "0") console.log("Busca de NF-e (SEFAZ) e NFS-e (Nacional): automática, sem custo, respeitando as regras de espera.");
+    if (deps.dfe && process.env.IARIS_DFE_AUTO !== "0") console.log(`Busca de notas (NF-e, CT-e, NFS-e): ${(deps.noteSlots ?? DEFAULT_NOTE_SLOTS).join(" e ")} e quando pedir na tela; sem custo.`);
     console.log(`Teto de consultas cobradas por dia: ${deps.metering.dailyLimit}. Abrir a tela não consulta o SERPRO.`);
   });
 }
