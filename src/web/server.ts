@@ -14,8 +14,10 @@ import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverv
 import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
+import { incomeStatement, ledgerDetail, openItems } from "../modules/ledger/reports.js";
+import { addAlias, PartnerError, partnerRegistry, syncPartners } from "../modules/ledger/partners.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
-import { approveTakenServicesRule, classifyMovement, classifySupplier, pendingMovements, pendingTaken, takenRuleStatus } from "../modules/ledger/auto-posting.js";
+import { approveTakenServicesRule, classifyMovement, classifySupplier, pendingMovements, pendingTaken, runAutoPosting, takenRuleStatus } from "../modules/ledger/auto-posting.js";
 import { SERVICE_ACCOUNT_BY_ITEM, SERVICE_ACCOUNT_BY_SUBITEM } from "../modules/ledger/service-accounts.js";
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
@@ -513,6 +515,63 @@ export function createWebServer(deps: WebDeps) {
         }
         json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => withholdingsOverview(tx, parts[2]!, today)));
         return;
+      }
+      // GET /api/empresa/:id/parceiros?mes=AAAA-MM — cadastro de fornecedores e clientes com o perfil do mês.
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "parceiros" && !parts[4]) {
+        const mes = url.searchParams.get("mes") ?? new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7);
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { erro: "Mês inválido (AAAA-MM)" });
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, async (tx) => {
+          await syncPartners(tx, parts[2]!);
+          return partnerRegistry(tx, parts[2]!, mes);
+        }));
+        return;
+      }
+      // POST /api/empresa/:id/parceiros/:pid/apelido — "no banco este parceiro aparece como …".
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "parceiros" && parts[5] === "apelido") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req, 4096)) as { texto?: string };
+        try {
+          const pattern = await withTenant(deps.appPool, deps.tenantId, (tx) => addAlias(tx, parts[2]!, parts[4]!, String(body.texto ?? ""), actor));
+          const r = await runAutoPosting(deps.appPool, deps.tenantId, parts[2]!);
+          json(res, 200, { pattern, posted: r.posted });
+        } catch (err) {
+          if (err instanceof PartnerError) json(res, 400, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // GET /api/empresa/:id/contabil/razao?conta=&de=&ate=[&parceiro=] — razão da conta com saldo acumulado e parceiro.
+      // GET /api/empresa/:id/contabil/dre?mes=AAAA-MM — DRE do mês e acumulado no ano.
+      // GET /api/empresa/:id/contabil/abertos?conta=2.1.1.01|1.1.2.01&ate= — saldo em aberto por fornecedor/cliente.
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "contabil" && parts[4]) {
+        const id = parts[2]!;
+        const isDate = (v: string | null): v is string => v !== null && /^\d{4}-\d{2}-\d{2}$/.test(v);
+        const isAcc = (v: string | null): v is string => v !== null && /^\d+(\.\d+)*$/.test(v);
+        if (parts[4] === "razao") {
+          const conta = url.searchParams.get("conta");
+          const de = url.searchParams.get("de");
+          const ate = url.searchParams.get("ate");
+          const parceiro = url.searchParams.get("parceiro") || null;
+          if (!isAcc(conta) || !isDate(de) || !isDate(ate)) return json(res, 400, { erro: "Informe conta, de e ate (AAAA-MM-DD)" });
+          const r = await withTenant(deps.appPool, deps.tenantId, (tx) => ledgerDetail(tx, id, conta, de, ate, parceiro));
+          if (!r) return json(res, 404, { erro: "Conta não encontrada" });
+          json(res, 200, { ...r, lines: r.lines.slice(-2000), truncated: r.lines.length > 2000 });
+          return;
+        }
+        if (parts[4] === "dre") {
+          const mes = url.searchParams.get("mes");
+          if (mes === null || !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { erro: "Mês inválido (AAAA-MM)" });
+          json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => incomeStatement(tx, id, mes)));
+          return;
+        }
+        if (parts[4] === "abertos") {
+          const conta = url.searchParams.get("conta");
+          const ate = url.searchParams.get("ate");
+          if (!isAcc(conta) || !isDate(ate)) return json(res, 400, { erro: "Informe conta e ate (AAAA-MM-DD)" });
+          json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => openItems(tx, id, conta, ate)));
+          return;
+        }
+        return json(res, 404, { erro: "Relatório não encontrado" });
       }
       // GET /api/empresa/:id/contabil[?mes=AAAA-MM] — plano, contas bancárias, balancete e pendentes (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "contabil") {

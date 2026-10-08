@@ -455,6 +455,153 @@ function viewEmpresa(id) {
   });
 }
 
+var CTB_TABS = [["bal", "Balancete"], ["dre", "DRE"], ["raz", "Razão"], ["forn", "Fornecedores em aberto"], ["cli", "Clientes em aberto"], ["parc", "Cadastro de parceiros"]];
+var CTB = { entity: null, tab: "bal", raz: null };
+function monthEnd(m) { return new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).toISOString().slice(0, 10); }
+function dc(v) { var n = Number(v); return n === 0 ? '0,00' : brl(Math.abs(n).toFixed(2)) + (n > 0 ? ' D' : ' C'); }
+
+function showCtb(id, r, tab, raz) {
+  CTB.entity = id; CTB.tab = tab; if (raz) CTB.raz = raz;
+  document.querySelectorAll("#ctb-tabs [data-tab]").forEach(function (b) { b.className = b.getAttribute("data-tab") === tab ? "" : "ghost"; });
+  var out = $("ctb-rep"); if (!out) return;
+  var end = monthEnd(r.month), ini = r.month + "-01";
+  var openRaz = function (conta, nome, parceiro, parceiroNome, de) {
+    showCtb(id, r, "raz", { conta: conta, nome: nome, parceiro: parceiro || "", parceiroNome: parceiroNome || "", de: de || ini, ate: end });
+  };
+  var wireRaz = function () {
+    out.querySelectorAll("[data-raz]").forEach(function (a) {
+      a.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        openRaz(a.getAttribute("data-raz"), a.getAttribute("data-nome") || "", a.getAttribute("data-parc"), a.getAttribute("data-pnome"), a.getAttribute("data-de"));
+      });
+    });
+  };
+  if (tab === "bal") {
+    var tb = r.trial.rows.map(function (x) {
+      var pad = (x.level - 1) * 12;
+      return '<tr' + (x.analytic ? '' : ' style="font-weight:600"') + '><td class="mono" style="padding-left:' + (8 + pad) + 'px"><a href="#" data-raz="' + esc(x.code) + '" data-nome="' + esc(x.name) + '">' + esc(x.code) + '</a></td><td>' + esc(x.name) + '</td><td class="num">' + dc(x.opening) + '</td><td class="num">' + brl(x.debit) + '</td><td class="num">' + brl(x.credit) + '</td><td class="num">' + dc(x.closing) + '</td></tr>';
+    }).join("");
+    out.innerHTML = '<div class="scroll"><table><thead><tr><th>Conta</th><th>Nome</th><th class="num">Saldo anterior</th><th class="num">Débitos</th><th class="num">Créditos</th><th class="num">Saldo atual</th></tr></thead><tbody>' + tb + '</tbody></table></div>' +
+      '<div class="empty">Débitos ' + brl(r.trial.totals.debit) + ' · Créditos ' + brl(r.trial.totals.credit) + (r.trial.totals.balanced ? ' · <span class="ok">débitos = créditos ✓</span>' : ' · <span class="bad">não fecha</span>') + '. Clique na conta para abrir o razão. Contabilidade a partir de ' + d(r.chartFrom) + '; saldos anteriores vêm do escritório anterior (a implantar).</div>';
+    wireRaz();
+    return;
+  }
+  if (tab === "dre") {
+    out.innerHTML = '<div class="empty">Carregando DRE…</div>';
+    getJson("/api/empresa/" + id + "/contabil/dre?mes=" + r.month).then(function (x) {
+      var rows = x.monthLines.map(function (l, i) {
+        var y = x.ytdLines[i];
+        var st = l.strong ? ' style="font-weight:700;border-top:1px solid #d7dde6"' : '';
+        var cls = function (v) { return Number(v) < 0 ? "num bad" : "num"; };
+        return '<tr' + st + '><td style="padding-left:' + (8 + l.level * 16) + 'px">' + esc(l.label) + '</td><td class="' + cls(l.value) + '">' + brl(l.value) + '</td><td class="' + cls(y.value) + '">' + brl(y.value) + '</td></tr>';
+      }).join("");
+      out.innerHTML = '<div class="scroll"><table><thead><tr><th>Demonstração do resultado</th><th class="num">' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + '</th><th class="num">Acumulado ' + d(x.ytdFrom) + ' a ' + d(x.to) + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="empty">Montada direto do razão (grupos 3 e 4 do plano). Sem saldo de abertura do escritório anterior, o acumulado começa no início da contabilidade.</div>';
+    }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    return;
+  }
+  if (tab === "raz") {
+    var z = CTB.raz || { conta: "", nome: "", parceiro: "", parceiroNome: "", de: ini, ate: end };
+    var dl = '<datalist id="ctb-accs">' + r.accounts.map(function (a) { return '<option value="' + esc(a.code) + '">' + esc(a.name) + '</option>'; }).join("") + '</datalist>';
+    out.innerHTML = '<div class="form-row" style="margin-bottom:8px"><label>Conta<input id="rz-conta" list="ctb-accs" value="' + esc(z.conta) + '" placeholder="ex.: 2.1.1.01" style="width:130px"></label>' + dl +
+      '<label>De<input type="date" id="rz-de" value="' + z.de + '"></label><label>Até<input type="date" id="rz-ate" value="' + z.ate + '"></label>' +
+      (z.parceiro ? '<span class="mut" style="font-size:12px">Parceiro: <b>' + esc(z.parceiroNome || z.parceiro) + '</b> <a href="#" id="rz-limpa">(todos)</a></span>' : '') +
+      '<button class="ghost" id="rz-ver">Ver razão</button></div><div id="rz-out">' + (z.conta ? '<div class="empty">Carregando…</div>' : '<div class="empty">Escolha a conta (ou clique numa conta do balancete).</div>') + '</div>';
+    var go = function () {
+      var c = $("rz-conta").value.trim(); if (!c) { toast("Informe a conta."); return; }
+      CTB.raz = { conta: c, nome: "", parceiro: z.parceiro, parceiroNome: z.parceiroNome, de: $("rz-de").value, ate: $("rz-ate").value };
+      var q = "?conta=" + encodeURIComponent(c) + "&de=" + CTB.raz.de + "&ate=" + CTB.raz.ate + (z.parceiro ? "&parceiro=" + encodeURIComponent(z.parceiro) : "");
+      getJson("/api/empresa/" + id + "/contabil/razao" + q).then(function (x) {
+        var showP = !z.parceiro;
+        var lines = x.lines.map(function (l) {
+          return '<tr><td>' + d(l.date) + '</td><td>' + esc(l.history) + '</td>' + (showP ? '<td>' + (l.partnerDoc ? '<a href="#" data-raz="' + esc(x.account.code) + '" data-parc="' + esc(l.partnerDoc) + '" data-pnome="' + esc(l.partner || "") + '" data-de="' + esc(r.chartFrom) + '">' + esc(l.partner || l.partnerDoc) + '</a>' : '<span class="mut">—</span>') + '</td>' : '') +
+            '<td class="num">' + (Number(l.debit) ? brl(l.debit) : '') + '</td><td class="num">' + (Number(l.credit) ? brl(l.credit) : '') + '</td><td class="num">' + dc(l.balance) + '</td></tr>';
+        }).join("");
+        var cols = showP ? 6 : 5;
+        $("rz-out").innerHTML = '<h3 style="font-size:13px;margin:4px 0 6px">' + esc(x.account.code + " " + x.account.name) + '</h3><div class="scroll"><table><thead><tr><th>Data</th><th>Histórico</th>' + (showP ? '<th>Parceiro</th>' : '') + '<th class="num">Débito</th><th class="num">Crédito</th><th class="num">Saldo</th></tr></thead><tbody>' +
+          '<tr class="mut"><td colspan="' + (cols - 1) + '">Saldo anterior</td><td class="num">' + dc(x.opening) + '</td></tr>' + (lines || '<tr><td colspan="' + cols + '" class="empty">Sem movimento no período.</td></tr>') +
+          '<tr style="font-weight:700"><td colspan="' + (cols - 3) + '">Totais do período</td><td class="num">' + brl(x.debit) + '</td><td class="num">' + brl(x.credit) + '</td><td class="num">' + dc(x.closing) + '</td></tr></tbody></table></div>' +
+          (x.truncated ? '<div class="empty">Mostrando os 2.000 últimos lançamentos; reduza o período.</div>' : '');
+        $("rz-out").querySelectorAll("[data-raz]").forEach(function (a) {
+          a.addEventListener("click", function (ev) { ev.preventDefault(); openRaz(a.getAttribute("data-raz"), "", a.getAttribute("data-parc"), a.getAttribute("data-pnome"), a.getAttribute("data-de")); });
+        });
+      }).catch(function (e) { $("rz-out").innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    };
+    $("rz-ver").addEventListener("click", go);
+    var lp = $("rz-limpa"); if (lp) lp.addEventListener("click", function (ev) { ev.preventDefault(); z.parceiro = ""; z.parceiroNome = ""; CTB.raz = z; showCtb(id, r, "raz"); });
+    if (z.conta) go();
+    return;
+  }
+  if (tab === "forn" || tab === "cli") {
+    var conta = tab === "forn" ? "2.1.1.01" : "1.1.2.01";
+    out.innerHTML = '<div class="empty">Carregando…</div>';
+    getJson("/api/empresa/" + id + "/contabil/abertos?conta=" + conta + "&ate=" + end).then(function (x) {
+      var rows = x.items.map(function (i) {
+        return '<tr><td><a href="#" data-raz="' + conta + '" data-parc="' + esc(i.partnerDoc || "") + '" data-pnome="' + esc(i.partner || "") + '" data-de="' + esc(r.chartFrom) + '"><b>' + esc(i.partner || "sem identificação") + '</b></a><div class="mut mono" style="font-size:11px">' + esc(i.partnerDoc || "") + '</div></td>' +
+          '<td class="num">' + brl(i.debit) + '</td><td class="num">' + brl(i.credit) + '</td><td class="num"><b>' + dc(i.balance) + '</b></td><td>' + d(i.last) + '</td></tr>';
+      }).join("");
+      out.innerHTML = '<div class="scroll"><table><thead><tr><th>' + (tab === "forn" ? "Fornecedor" : "Cliente") + '</th><th class="num">Débitos</th><th class="num">Créditos</th><th class="num">Em aberto</th><th>Último movimento</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="5" class="empty">Nada em aberto até ' + d(end) + '.</td></tr>') + '</tbody></table></div>' +
+        '<div class="empty">Total em aberto em ' + d(end) + ': <b>' + dc(x.total) + '</b> (conta ' + conta + '). ' + (tab === "forn" ? 'Créditos = notas tomadas; débitos = pagamentos identificados no extrato.' : 'Débitos = notas emitidas; créditos = recebimentos identificados no extrato.') + ' Clique no nome para ver o razão do parceiro.</div>';
+      wireRaz();
+    }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    return;
+  }
+  if (tab === "parc") {
+    out.innerHTML = '<div class="empty">Carregando…</div>';
+    getJson("/api/empresa/" + id + "/parceiros?mes=" + r.month).then(function (x) { renderPartners(id, r, out, x); }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+  }
+}
+
+var PST = {
+  NO_MES: '<span class="st ok">nota no mês</span>',
+  ESPERADA: '<span class="st bad">esperada, não chegou</span>',
+  EVENTUAL: '<span class="st">eventual</span>',
+  SEM_NOTA: '<span class="st">sem nota no período</span>'
+};
+function renderPartners(id, r, out, x) {
+  var head = '<th>Parceiro</th><th>Serviço</th>' + x.window.map(function (m) { return '<th class="num" style="font-size:11px">' + m.slice(5, 7) + '/' + m.slice(2, 4) + '</th>'; }).join("") + '<th>No mês</th><th>Conta</th><th class="num">Em aberto</th><th>Aparece no banco como</th>';
+  var table = function (list, role) {
+    if (!list.length) return '<div class="empty">Nenhum ' + (role === "FORNECEDOR" ? "fornecedor" : "cliente") + ' nas notas.</div>';
+    var rows = list.map(function (p) {
+      var cells = p.months.map(function (m) { return '<td class="num" title="' + (m.notes ? m.notes + ' nota(s) · ' + brl(m.total) : 'sem nota') + '">' + (m.notes ? '<b>' + m.notes + '</b>' : '<span class="mut">·</span>') + '</td>'; }).join("");
+      var acc = p.account ? '<span class="mono">' + esc(p.account.code) + '</span><div class="mut" style="font-size:11px">' + (p.account.source === "FORNECEDOR" ? "definida p/ fornecedor" : "pela tabela") + '</div>' : '<span class="mut">a definir</span>';
+      var al = (p.aliases.length ? p.aliases.map(function (a) { return '<span class="mono" style="font-size:11px;background:#eef2f7;border-radius:4px;padding:1px 4px;margin-right:3px">' + esc(a) + '</span>'; }).join("") : '<span class="mut" style="font-size:11px">ainda não visto</span>') +
+        '<div class="only-confirmar" style="margin-top:4px;display:flex;gap:4px"><input id="al-' + p.id + '" placeholder="ex.: DELTA SERV MANUT" style="width:150px;font-size:11px"><button class="ghost" data-al="' + p.id + '" style="font-size:11px;padding:2px 6px">+</button></div>';
+      return '<tr><td><b>' + esc(p.name || p.doc) + '</b><div class="mut mono" style="font-size:11px">' + esc(p.doc) + ' · desde ' + d(p.firstSeen) + '</div>' +
+        (p.officeClient ? '<div style="font-size:11px" class="ok">cliente do escritório: ' + esc(p.officeClient) + '</div>' : '') + '</td>' +
+        '<td class="mono" style="font-size:11px">' + esc(p.codes.join(", ") || "—") + '</td>' + cells +
+        '<td>' + PST[p.status] + (p.expected ? '<div class="mut" style="font-size:11px">média ' + brl(p.expected) + '</div>' : '') + '</td><td>' + acc + '</td>' +
+        '<td class="num">' + (Number(p.open) ? '<a href="#" data-raz="' + (role === "FORNECEDOR" ? "2.1.1.01" : "1.1.2.01") + '" data-parc="' + esc(p.doc) + '" data-pnome="' + esc(p.name || "") + '">' + dc(p.open) + '</a>' : '<span class="mut">—</span>') + '</td><td>' + al + '</td></tr>';
+    }).join("");
+    return '<div class="scroll"><table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  };
+  var miss = x.expectedMissing.length
+    ? '<div class="empty"><b>' + x.expectedMissing.length + ' nota(s) esperada(s) em ' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + ' ainda não chegaram</b> (parceiro recorrente: nota em pelo menos 2 dos 3 meses anteriores): ' +
+      x.expectedMissing.map(function (e) { return esc(e.name || e.doc) + ' (' + (e.role === "FORNECEDOR" ? "fornecedor" : "cliente") + ', média ' + brl(e.expected) + ')'; }).join("; ") + '.</div>'
+    : '<div class="empty">Todos os parceiros recorrentes têm nota em ' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + '.</div>';
+  out.innerHTML = miss +
+    '<h3 style="font-size:13px;margin:12px 0 6px">Fornecedores (' + x.suppliers.length + ')</h3>' + table(x.suppliers, "FORNECEDOR") +
+    '<h3 style="font-size:13px;margin:12px 0 6px">Clientes (' + x.customers.length + ')</h3>' + table(x.customers, "CLIENTE") +
+    '<div class="empty">Cadastro montado sozinho pelas NFS-e. No extrato, a IARIS reconhece o parceiro pelo CNPJ, pelo nome ou por como ele já apareceu no banco, e usa isso para desempatar notas de mesmo valor e quitar várias notas num pagamento só (soma exata). Nunca lança só pelo nome.</div>';
+  out.querySelectorAll("[data-al]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var pid = b.getAttribute("data-al"), v = $("al-" + pid).value.trim();
+      if (!v) { toast("Escreva como aparece no extrato."); return; }
+      post("/api/empresa/" + id + "/parceiros/" + pid + "/apelido", "confirmar", { texto: v }).then(function (y) {
+        toast('Guardado como "' + y.pattern + '".' + (y.posted ? ' ' + y.posted + ' lançamento(s) feitos.' : ''));
+        showCtb(id, r, "parc");
+      }).catch(function (e) { toast(e.message); });
+    });
+  });
+  out.querySelectorAll("[data-raz]").forEach(function (a) {
+    a.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      showCtb(id, r, "raz", { conta: a.getAttribute("data-raz"), nome: "", parceiro: a.getAttribute("data-parc"), parceiroNome: a.getAttribute("data-pnome"), de: r.chartFrom, ate: monthEnd(r.month) });
+    });
+  });
+}
+
 function loadContabil(id, mes) {
   return getJson("/api/empresa/" + id + "/contabil" + (mes ? "?mes=" + mes : "")).then(function (r) {
     var box = $("ctb"); if (!box) return;
@@ -512,18 +659,18 @@ function loadContabil(id, mes) {
     }
     if (r.trial) {
       var sel = '<select id="ctb-mes">' + r.months.map(function (m) { return '<option value="' + m + '"' + (m === r.month ? ' selected' : '') + '>' + m.slice(5, 7) + '/' + m.slice(0, 4) + '</option>'; }).join("") + '</select>';
-      var sign = function (v) { var n = Number(v); return n === 0 ? '0,00' : brl(Math.abs(n).toFixed(2)) + (n > 0 ? ' D' : ' C'); };
-      var tb = r.trial.rows.map(function (x) {
-        var pad = (x.level - 1) * 12;
-        return '<tr' + (x.analytic ? '' : ' style="font-weight:600"') + '><td class="mono" style="padding-left:' + (8 + pad) + 'px">' + esc(x.code) + '</td><td>' + esc(x.name) + '</td><td class="num">' + sign(x.opening) + '</td><td class="num">' + brl(x.debit) + '</td><td class="num">' + brl(x.credit) + '</td><td class="num">' + sign(x.closing) + '</td></tr>';
-      }).join("");
-      h += '<h3 style="font-size:13px;margin:12px 0 6px">Balancete ' + sel + '</h3><div class="scroll"><table><thead><tr><th>Conta</th><th>Nome</th><th class="num">Saldo anterior</th><th class="num">Débitos</th><th class="num">Créditos</th><th class="num">Saldo atual</th></tr></thead><tbody>' + tb + '</tbody></table></div>' +
-        '<div class="empty">Débitos ' + brl(r.trial.totals.debit) + ' · Créditos ' + brl(r.trial.totals.credit) + (r.trial.totals.balanced ? ' · <span class="ok">débitos = créditos ✓</span>' : ' · <span class="bad">não fecha</span>') + '. Contabilidade a partir de ' + d(r.chartFrom) + '. Saldos anteriores ao início vêm do escritório anterior (a implantar).</div>';
+      h += '<div id="ctb-tabs" style="display:flex;gap:6px;margin:16px 0 8px;flex-wrap:wrap;align-items:center">' +
+        CTB_TABS.map(function (t) { return '<button class="ghost" data-tab="' + t[0] + '">' + t[1] + '</button>'; }).join("") +
+        '<span style="margin-left:auto;font-size:12px" class="mut">Mês ' + sel + '</span></div><div id="ctb-rep"></div>';
     } else {
       h += '<div class="empty">Nenhum lançamento ainda.</div>';
     }
     box.innerHTML = h;
     var ms = $("ctb-mes"); if (ms) ms.addEventListener("change", function () { loadContabil(id, ms.value); });
+    if (r.trial) {
+      box.querySelectorAll("[data-tab]").forEach(function (b) { b.addEventListener("click", function () { CTB.raz = null; showCtb(id, r, b.getAttribute("data-tab")); }); });
+      showCtb(id, r, CTB.entity === id ? CTB.tab : "bal");
+    }
     var bo = box.querySelector("[data-act=ofx]");
     if (bo) bo.addEventListener("click", function () {
       var f = $("ctb-ofx").files[0]; if (!f) { toast("Escolha o arquivo OFX."); return; }

@@ -309,6 +309,9 @@ export const EventContracts = {
       method: z.enum(["PROCURACAO", "GOVBR", "CERTIFICADO", "SENHA_PORTAL"]).optional(),
     }),
   },
+  PARTNERS_REGISTERED: {
+    1: z.object({ entity_id: z.uuid(), suppliers: z.number().int(), customers: z.number().int(), source: z.enum(["NFSE", "PESSOA"]) }),
+  },
   ACCOUNTING_RULES_APPROVED: {
     1: z.object({ rule_set: z.string(), approved_by: z.string() }),
   },

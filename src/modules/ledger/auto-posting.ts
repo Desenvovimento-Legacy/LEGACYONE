@@ -6,6 +6,8 @@ import type { Actor } from "../../shared/actor.js";
 import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
+import { normalize } from "../../shared/text.js";
+import { identifyPartner, learnAlias, loadPartnerIndex, syncPartners, type IdentifiedPartner, type PartnerIndex } from "./partners.js";
 import { LedgerError, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
 import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
 
@@ -40,8 +42,7 @@ const addDays = (iso: string, n: number) => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
-export const normalize = (s: string | null) =>
-  (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+export { normalize };
 const brl = (v: string) => Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
 
 /** Conta do tributo pelo item do DARF (código; senão descrição). Nulo = não sei: fica para pessoa. */
@@ -57,7 +58,15 @@ export function federalItemAccount(code: string | null, description: string | nu
   return null;
 }
 
-interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor }
+interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex }
+
+/** Parceiro (cliente ou fornecedor) gravado na linha: base de razão auxiliar e contas em aberto. */
+const partner = (doc: string | null, name: string | null): Record<string, string> => {
+  const d: Record<string, string> = {};
+  if (doc) d.parceiro_doc = doc;
+  if (name) d.parceiro = name.slice(0, 120);
+  return d;
+};
 interface Stats { posted: number; reversed: number; pending: number; total: Dec; dates: string[] }
 
 async function chartStart(tx: PoolClient, entityId: string): Promise<string | null> {
@@ -79,13 +88,13 @@ async function post(ctx: Ctx, s: Stats, input: Parameters<typeof postEntry>[1]) 
 
 async function nfseRevenue(ctx: Ctx, s: Stats) {
   const { rows } = await ctx.tx.query<{
-    id: string; number: string | null; taker: string | null; issued: string; value: string; key: string | null; withheld: string | null; cancelled: boolean;
+    id: string; number: string | null; taker: string | null; taker_doc: string | null; issued: string; value: string; key: string | null; withheld: string | null; cancelled: boolean;
   }>(
     `WITH cancelled AS (
        SELECT DISTINCT access_key FROM nfse_document
         WHERE entity_id = $1 AND role = 'EVENTO' AND access_key IS NOT NULL
           AND (event_type ILIKE '%101101%' OR event_type ILIKE '%105102%' OR event_type ILIKE '%cancel%'))
-     SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS taker,
+     SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS taker, d.taker_doc,
             to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued, d.service_value::text AS value, d.access_key AS key,
             (SELECT (t.total_withheld_calc)::text FROM nfse_tax t WHERE t.nfse_id = d.id AND t.parser = $3) AS withheld,
             d.access_key IS NOT NULL AND d.access_key IN (SELECT access_key FROM cancelled) AS cancelled
@@ -113,7 +122,7 @@ async function nfseRevenue(ctx: Ctx, s: Stats) {
       entityId: ctx.entityId, date: n.issued, origin: "FISCAL", originRef: `nfse_document:${n.id}`, idempotencyKey: key,
       history: `NFS-e nº ${n.number ?? "—"} prestada a ${n.taker ?? "tomador"}`,
       evidence: [{ kind: "nfse_document", id: n.id }], confidence: "1",
-      lines: [{ account: "1.1.2.01", debit: n.value }, { account: "3.1.1.01", credit: n.value }],
+      lines: [{ account: "1.1.2.01", debit: n.value, dimensions: partner(n.taker_doc, n.taker) }, { account: "3.1.1.01", credit: n.value }],
     });
   }
 }
@@ -254,11 +263,12 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
     const totalRet = Dec.of(ret.irrf).add(ret.csrf).add(ret.cp).add(ret.iss);
     const net = Dec.of(n.value).sub(totalRet);
     if (!net.gt("0")) { miss("Retenções maiores que o valor da nota"); continue; }
-    const lines: EntryLine[] = [{ account, debit: Dec.of(n.value).toFixed(2) }, { account: "2.1.1.01", credit: net.toFixed(2) }];
-    if (Dec.of(ret.irrf).gt("0")) lines.push({ account: "2.1.2.02", credit: Dec.of(ret.irrf).toFixed(2), history: "IRRF retido" });
-    if (Dec.of(ret.csrf).gt("0")) lines.push({ account: "2.1.2.03", credit: Dec.of(ret.csrf).toFixed(2), history: "PIS/COFINS/CSLL retidos" });
-    if (Dec.of(ret.iss).gt("0")) lines.push({ account: "2.1.2.04", credit: Dec.of(ret.iss).toFixed(2), history: "ISS retido" });
-    if (Dec.of(ret.cp).gt("0")) lines.push({ account: "2.1.2.05", credit: Dec.of(ret.cp).toFixed(2), history: "INSS retido" });
+    const dim = partner(n.doc, n.supplier);
+    const lines: EntryLine[] = [{ account, debit: Dec.of(n.value).toFixed(2), dimensions: dim }, { account: "2.1.1.01", credit: net.toFixed(2), dimensions: dim }];
+    if (Dec.of(ret.irrf).gt("0")) lines.push({ account: "2.1.2.02", credit: Dec.of(ret.irrf).toFixed(2), history: "IRRF retido", dimensions: dim });
+    if (Dec.of(ret.csrf).gt("0")) lines.push({ account: "2.1.2.03", credit: Dec.of(ret.csrf).toFixed(2), history: "PIS/COFINS/CSLL retidos", dimensions: dim });
+    if (Dec.of(ret.iss).gt("0")) lines.push({ account: "2.1.2.04", credit: Dec.of(ret.iss).toFixed(2), history: "ISS retido", dimensions: dim });
+    if (Dec.of(ret.cp).gt("0")) lines.push({ account: "2.1.2.05", credit: Dec.of(ret.cp).toFixed(2), history: "INSS retido", dimensions: dim });
     try {
       await post(ctx, s, {
         entityId: ctx.entityId, date: n.issued, origin: "FISCAL", originRef: `nfse_document:${n.id}`, idempotencyKey: key,
@@ -273,21 +283,71 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
   }
 }
 
-async function takenPayment(ctx: Ctx, m: Movement): Promise<{ id: string; number: string | null; supplier: string | null } | { why: string; hypotheses: string[] } | null> {
-  const value = Dec.of(m.amount).mul("-1").toFixed(2);
-  const cand = await ctx.tx.query<{ id: string; number: string | null; supplier: string | null; issued: string }>(
-    `SELECT d.id, d.number, d.provider_name AS supplier, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued
-       FROM nfse_document d JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $5
-       JOIN journal_entry e ON e.idempotency_key = 'nfse-tomada:' || d.id::text
-      WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND d.service_value - t.total_withheld_calc = $2
-        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $3 AND $4
-        AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
-        AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE_TOMADA' AND b.reference = d.id::text)`,
-    [ctx.entityId, value, addDays(m.posted_on, -120), m.posted_on, NFSE_TAX_PARSER],
-  );
-  if (!cand.rows.length) return null;
-  if (cand.rows.length > 1) return { why: `${cand.rows.length} NFS-e tomadas em aberto com o mesmo valor`, hypotheses: cand.rows.slice(0, 5).map((c) => `NFS-e ${c.number ?? "—"} de ${c.issued} (${c.supplier ?? "—"})`) };
-  return cand.rows[0]!;
+interface OpenNote { id: string; number: string | null; name: string | null; doc: string | null; issued: string; net: string }
+type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean } | { why: string; hypotheses: string[] } | null;
+
+/** NFS-e (tomadas ou emitidas) já contabilizadas, ainda sem pagamento/recebimento no extrato, até 120 dias antes do movimento. */
+async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): Promise<OpenNote[]> {
+  const sql = role === "TOMADA"
+    ? `SELECT d.id, d.number, d.provider_name AS name, d.provider_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
+              (d.service_value - t.total_withheld_calc)::text AS net
+         FROM nfse_document d JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $4
+         JOIN journal_entry e ON e.idempotency_key = 'nfse-tomada:' || d.id::text
+        WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
+          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE_TOMADA' AND b.reference = d.id::text)
+        ORDER BY d.issued_at, d.number`
+    : `SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS name, d.taker_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
+              coalesce(d.net_value, d.service_value)::text AS net
+         FROM nfse_document d JOIN journal_entry e ON e.idempotency_key = 'nfse:' || d.id::text
+        WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
+          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
+          AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE' AND b.reference = d.id::text)
+          AND $4::text IS NOT NULL
+        ORDER BY d.issued_at, d.number`;
+  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), until, NFSE_TAX_PARSER]);
+  return rows;
+}
+
+/**
+ * Qual(is) nota(s) este movimento quita?
+ * 1. Valor exato de uma nota em aberto; se houver várias, o parceiro reconhecido no histórico desempata.
+ * 2. Sem nota com o valor exato: parceiro reconhecido + soma exata das notas mais antigas dele (pagamento agrupado).
+ * Parceiro reconhecido pelo CNPJ ou apelido que contradiz a nota de mesmo valor = pendência, nunca força.
+ */
+async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): Promise<NoteMatch> {
+  const value = Dec.of(m.amount).cmp("0") < 0 ? Dec.of(m.amount).mul("-1").toFixed(2) : Dec.of(m.amount).toFixed(2);
+  ctx.partners ??= await loadPartnerIndex(ctx.tx, ctx.entityId);
+  const memo = [m.memo, m.payee].filter(Boolean).join(" ");
+  const id = identifyPartner(ctx.partners, memo, role === "TOMADA" ? "FORNECEDOR" : "CLIENTE");
+  const who = id && "doc" in id ? id : null;
+  const all = await openNotes(ctx, role, m.posted_on);
+  const label = (n: OpenNote) => `NFS-e ${n.number ?? "—"} de ${n.issued} (${n.name ?? "—"}) ${brl(n.net)}`;
+  const kind = role === "TOMADA" ? "tomadas" : "emitidas";
+  const byValue = all.filter((n) => Dec.of(n.net).cmp(value) === 0);
+  if (byValue.length) {
+    if (who) {
+      const mine = byValue.filter((n) => n.doc === who.doc);
+      if (mine.length === 1) return { notes: mine, who, grouped: false };
+      if (mine.length > 1) return { why: `${mine.length} NFS-e ${kind} de ${who.name ?? who.doc} em aberto com o mesmo valor`, hypotheses: mine.slice(0, 5).map(label) };
+      if (who.via !== "NOME") return { why: `O banco indica ${who.name ?? who.doc}, mas a NFS-e com esse valor é de outro parceiro`, hypotheses: byValue.slice(0, 5).map(label) };
+    }
+    if (byValue.length === 1) return { notes: byValue, who: null, grouped: false };
+    return { why: `${byValue.length} NFS-e ${kind} em aberto com o mesmo valor`, hypotheses: byValue.slice(0, 5).map(label) };
+  }
+  if (!who) return id && "ambiguous" in id ? { why: "O histórico do banco serve para mais de um parceiro", hypotheses: id.ambiguous.slice(0, 5) } : null;
+  const mine = all.filter((n) => n.doc === who.doc);
+  let acc = Dec.ZERO;
+  for (let k = 0; k < mine.length; k++) {
+    acc = acc.add(mine[k]!.net);
+    const c = acc.cmp(value);
+    if (c === 0 && k >= 1) return { notes: mine.slice(0, k + 1), who, grouped: true };
+    if (c > 0) break;
+  }
+  const open = mine.reduce((s, n) => s.add(n.net), Dec.ZERO);
+  return mine.length
+    ? { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc}: valor não fecha com as notas em aberto (${mine.length} nota(s), ${brl(open.toFixed(2))})`, hypotheses: mine.slice(0, 5).map(label) }
+    : { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc} sem NFS-e em aberto`, hypotheses: [] };
 }
 
 // ------------------------------------------------------------------ extrato → razão
@@ -324,21 +384,6 @@ async function federalPaymentLines(ctx: Ctx, m: Movement): Promise<{ lines: Entr
   if (sum.cmp(value) !== 0) return { why: `Itens do DARF (${brl(sum.toFixed(2))}) não somam o valor pago (${brl(value)})`, hypotheses: [`DARF ${pick.document_number}`] };
   lines.push({ account: m.account_code, credit: value });
   return { lines, ref: pick.id, doc: pick.document_number };
-}
-
-async function nfseReceipt(ctx: Ctx, m: Movement): Promise<{ id: string; number: string | null; taker: string | null } | { why: string; hypotheses: string[] } | null> {
-  const cand = await ctx.tx.query<{ id: string; number: string | null; taker: string | null; issued: string }>(
-    `SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS taker, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued
-       FROM nfse_document d JOIN journal_entry e ON e.idempotency_key = 'nfse:' || d.id::text
-      WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND coalesce(d.net_value, d.service_value) = $2
-        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $3 AND $4
-        AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
-        AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE' AND b.reference = d.id::text)`,
-    [ctx.entityId, m.amount, addDays(m.posted_on, -120), m.posted_on],
-  );
-  if (!cand.rows.length) return null;
-  if (cand.rows.length > 1) return { why: `${cand.rows.length} NFS-e em aberto com o mesmo valor`, hypotheses: cand.rows.slice(0, 5).map((c) => `NFS-e ${c.number ?? "—"} de ${c.issued} (${c.taker ?? "—"})`) };
-  return cand.rows[0]!;
 }
 
 async function ruleFor(ctx: Ctx, m: Movement) {
@@ -391,22 +436,32 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         continue;
       }
       if (f) notes.push(f);
-      const tp = await takenPayment(ctx, m);
-      if (tp && "id" in tp) {
-        const r = await post(ctx, s, { ...base, history: `Pagamento da NFS-e nº ${tp.number ?? "—"} (${tp.supplier ?? "fornecedor"}) — ${memo}`, confidence: "1",
-          evidence: [...base.evidence, { kind: "nfse_document", id: tp.id }],
-          lines: [{ account: "2.1.1.01", debit: value }, { account: m.account_code, credit: value }] });
-        await link(m.id, r.id, "NFSE_TOMADA", tp.id);
+      const tp = await matchNotes(ctx, m, "TOMADA");
+      if (tp && "notes" in tp) {
+        const ns = tp.notes;
+        const r = await post(ctx, s, { ...base, confidence: "1",
+          history: ns.length === 1
+            ? `Pagamento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "fornecedor"}) — ${memo}`
+            : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`,
+          evidence: [...base.evidence, ...ns.map((n) => ({ kind: "nfse_document", id: n.id }))],
+          lines: [...ns.map((n): EntryLine => ({ account: "2.1.1.01", debit: Dec.of(n.net).toFixed(2), history: `NFS-e nº ${n.number ?? "—"}`, dimensions: partner(n.doc, n.name) })), { account: m.account_code, credit: value }] });
+        for (const n of ns) await link(m.id, r.id, "NFSE_TOMADA", n.id);
+        if (ns[0]!.doc && (!tp.who || tp.who.via === "NOME") && !tp.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "FORNECEDOR", memo, m.id, m.posted_on, ctx.actor);
         continue;
       }
       if (tp) notes.push(tp);
     } else {
-      const n = await nfseReceipt(ctx, m);
-      if (n && "id" in n) {
-        const r = await post(ctx, s, { ...base, history: `Recebimento da NFS-e nº ${n.number ?? "—"} (${n.taker ?? "tomador"}) — ${memo}`, confidence: "1",
-          evidence: [...base.evidence, { kind: "nfse_document", id: n.id }],
-          lines: [{ account: m.account_code, debit: value }, { account: "1.1.2.01", credit: value }] });
-        await link(m.id, r.id, "NFSE", n.id);
+      const n = await matchNotes(ctx, m, "PRESTADA");
+      if (n && "notes" in n) {
+        const ns = n.notes;
+        const r = await post(ctx, s, { ...base, confidence: "1",
+          history: ns.length === 1
+            ? `Recebimento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "tomador"}) — ${memo}`
+            : `Recebimento de ${ns.length} NFS-e de ${ns[0]!.name ?? "tomador"} (nº ${ns.map((x) => x.number ?? "—").join(", ")}) — ${memo}`,
+          evidence: [...base.evidence, ...ns.map((x) => ({ kind: "nfse_document", id: x.id }))],
+          lines: [{ account: m.account_code, debit: value }, ...ns.map((x): EntryLine => ({ account: "1.1.2.01", credit: Dec.of(x.net).toFixed(2), history: `NFS-e nº ${x.number ?? "—"}`, dimensions: partner(x.doc, x.name) }))] });
+        for (const x of ns) await link(m.id, r.id, "NFSE", x.id);
+        if (ns[0]!.doc && (!n.who || n.who.via === "NOME") && !n.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "CLIENTE", memo, m.id, m.posted_on, ctx.actor);
         continue;
       }
       if (n) notes.push(n);
@@ -450,6 +505,7 @@ export async function runAutoPosting(pool: Pool, tenantId: string, entityId: str
   return withTenant(pool, tenantId, async (tx) => {
     const start = await chartStart(tx, entityId);
     if (!start) return { entityId, skipped: "sem plano de contas", posted: 0, reversed: 0, pendingFiscal: 0, pendingBank: 0 };
+    await syncPartners(tx, entityId);
     const ctx: Ctx = { tx, entityId, start, actor };
     const fiscal: Stats = { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] };
     await nfseRevenue(ctx, fiscal);
