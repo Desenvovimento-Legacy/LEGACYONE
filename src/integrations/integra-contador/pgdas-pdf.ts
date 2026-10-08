@@ -24,6 +24,21 @@ export function brMoney(s: string): string {
 
 const MONEY = "(\\d{1,3}(?:\\.\\d{3})*,\\d{2})";
 
+/** Versão do leitor: muda quando a leitura de um PDF já guardado passa a dar resultado diferente. */
+export const PGDAS_PDF_PARSER = "pgdas-pdf-2";
+
+/**
+ * Anexo da atividade: o texto do serviço traz "Anexo X"; comércio e indústria não trazem,
+ * e o anexo sai da própria atividade (LC 123/2006, art. 18, § 4º, I e II).
+ */
+function annexOf(text: string): DeclaredActivity["annex"] {
+  const explicit = /Anexo (V|IV|III|II|I)\b/.exec(text)?.[1] as DeclaredActivity["annex"] | undefined;
+  if (explicit) return explicit;
+  if (/^Revenda de mercadorias/i.test(text)) return "I";
+  if (/^Venda de mercadorias industrializadas pelo contribuinte/i.test(text)) return "II";
+  return null;
+}
+
 export interface DeclaredMonth {
   /** AAAA-MM-01 */
   competence: string;
@@ -71,8 +86,8 @@ function parseActivities(flat: string): DeclaredActivity[] {
   for (const m of flat.matchAll(re)) {
     const text = m[1]!.trim();
     const v = m.slice(3, 12).map((x) => brMoney(x!));
-    const annex = (/Anexo (V|IV|III|II|I)\b/.exec(text)?.[1] ?? null) as DeclaredActivity["annex"];
-    const withheld = /sem reten[cç][aã]o/i.test(text) ? false : /com (reten[cç][aã]o|substitui[cç][aã]o)/i.test(text) ? true : null;
+    const annex = annexOf(text);
+    const withheld = /sem (reten[cç][aã]o|substitui[cç][aã]o)/i.test(text) ? false : /com (reten[cç][aã]o|substitui[cç][aã]o)/i.test(text) ? true : null;
     out.push({
       seq: out.length + 1,
       activity: text,

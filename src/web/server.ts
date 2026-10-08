@@ -6,6 +6,7 @@ import type { IntegraContador } from "../integrations/integra-contador/types.js"
 import { COMPETENCE_CALLS, FederalAccessDeniedError, syncCompetence } from "../modules/federal/federal-sync.js";
 import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
 import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
+import { PGDAS_PDF_PARSER } from "../integrations/integra-contador/pgdas-pdf.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
 import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
@@ -780,12 +781,12 @@ if (isMain(import.meta.url)) {
         for (const { id } of ids.rows) {
           const r = await refreshRevenueExceptions(app, tenant.id, id);
           if (r.opened || r.closed || r.updated) console.log(`[revisão] ${id.slice(0, 8)}: ${r.opened} exceção(ões) aberta(s), ${r.updated} atualizada(s), ${r.closed} fechada(s)`);
-          // PDF guardado antes do leitor da seção 2.7: relê sem nova consulta.
+          // PDF lido por versão anterior do leitor: relê sem nova consulta.
           await withTenant(app, tenant.id, async (tx) => {
             const miss = await tx.query(
               `SELECT 1 FROM pgdas_declaration_pdf p WHERE p.entity_id = $1 AND p.kind = 'DECLARACAO'
-                 AND NOT EXISTS (SELECT 1 FROM pgdas_declared_tax t WHERE t.pdf_id = p.id) LIMIT 1`,
-              [id],
+                 AND NOT EXISTS (SELECT 1 FROM pgdas_declared_tax t WHERE t.pdf_id = p.id AND t.parser = $2) LIMIT 1`,
+              [id, PGDAS_PDF_PARSER],
             );
             if (miss.rowCount) await reparseDeclarations(tx, id);
           });

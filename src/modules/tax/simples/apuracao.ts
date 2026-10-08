@@ -193,7 +193,10 @@ async function declaredTaxes(tx: PoolClient, entityId: string): Promise<Map<stri
             t.revenue::text, t.total::text, t.rbt12::text, t.irpj::text, t.csll::text, t.cofins::text, t.pis::text,
             t.cpp::text, t.icms::text, t.ipi::text, t.iss::text
        FROM pgdas_declared_tax t JOIN last l ON l.pdf_id = t.pdf_id AND l.competence = t.competence
-      WHERE t.entity_id = $1 ORDER BY t.competence, t.seq`,
+      WHERE t.entity_id = $1
+        -- leitura da versão mais recente do leitor para esse PDF
+        AND t.parser = (SELECT max(x.parser) FROM pgdas_declared_tax x WHERE x.pdf_id = t.pdf_id)
+      ORDER BY t.competence, t.seq`,
     [entityId],
   );
   const out = new Map<string, DeclaredTaxRow[]>();

@@ -44,9 +44,9 @@ describe("apuração do Simples Nacional", () => {
       const pdf = await tx.query<{ id: string }>("SELECT id FROM pgdas_declaration_pdf WHERE entity_id = $1", [entityId]);
       await tx.query(
         `INSERT INTO pgdas_declared_tax (id, tenant_id, entity_id, competence, declaration_number, pdf_id, seq, activity, annex, local_withheld,
-                                         revenue, irpj, csll, cofins, pis, cpp, icms, ipi, iss, total)
+                                         revenue, irpj, csll, cofins, pis, cpp, icms, ipi, iss, total, parser)
          VALUES ($1, current_tenant(), $2, '2026-08-01', '12345678901234567', $3, 1, 'Serviços - Sujeitos ao Anexo IV, sem retenção', 'IV', false,
-                 25300.50, 284.56, 218.45, 295.33, 63.95, 0, 0, 0, 574.86, 1437.15)`,
+                 25300.50, 284.56, 218.45, 295.33, 63.95, 0, 0, 0, 574.86, 1437.15, 'pgdas-pdf-2')`,
         [newId(), entityId, pdf.rows[0]!.id],
       );
       const snap = await storeExternalSnapshot(tx, { source: "teste", requestKey: "pagtoweb", payload: { x: 1 }, fetchedAt: new Date(), entityId });

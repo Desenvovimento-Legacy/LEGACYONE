@@ -121,4 +121,28 @@ describe("leitura do débito declarado (seção 2.7 do PDF)", () => {
     expect(c.activities[0]).toMatchObject({ seq: 1, annex: "IV", localWithheld: false, factorR: false, revenue: "8000.00", total: "360.00", taxes: { IRPJ: "67.68", ISS: "160.20", CPP: "0.00" } });
     expect(c.activities[1]).toMatchObject({ seq: 2, annex: "III", localWithheld: true, revenue: "2000.00", total: "79.80", taxes: { CPP: "52.08", ISS: "0.00" } });
   });
+
+  it("comércio e indústria: anexo pela atividade (revenda → I; industrializada pelo contribuinte → II) e ICMS-ST", () => {
+    const text = [
+      "Valor do Débito por Tributo para a Atividade (R$):",
+      "Revenda de mercadorias, exceto para o exterior - Sem substituição tributária/tributação monofásica/antecipação com",
+      "encerramento de tributação (o substituto tributário do ICMS deve utilizar essa opção)",
+      "Receita Bruta Informada: R$ 277.055,63",
+      "IRPJ CSLL COFINS PIS/Pasep INSS/CPP ICMS IPI ISS Total",
+      "1.781,55 1.133,71 4.126,71 894,01 13.604,53 10.851,23 0,00 0,00 32.391,74",
+      "Valor do Débito por Tributo para a Atividade (R$):",
+      "Revenda de mercadorias, exceto para o exterior - Com substituição tributária/tributação monofásica/antecipação com",
+      "encerramento de tributação (o substituído tributário do ICMS deve utilizar essa opção)",
+      "Receita Bruta Informada: R$ 33.812,16",
+      "IRPJ CSLL COFINS PIS/Pasep INSS/CPP ICMS IPI ISS Total",
+      "217,42 138,36 503,63 109,11 1.660,31 0,00 0,00 0,00 2.628,83",
+      "Valor do Débito por Tributo para a Atividade (R$):",
+      "Venda de mercadorias industrializadas pelo contribuinte, exceto para o exterior - Sem substituição tributária",
+      "Receita Bruta Informada: R$ 4.191,55",
+      "IRPJ CSLL COFINS PIS/Pasep INSS/CPP ICMS IPI ISS Total",
+      "28,00 17,82 58,59 12,68 190,90 162,90 38,18 0,00 509,07",
+    ].join("\n");
+    const c = parsePgdasDeclarationText(text, "2026-08-01");
+    expect(c.activities.map((a) => [a.annex, a.localWithheld])).toEqual([["I", false], ["I", true], ["II", false]]);
+  });
 });
