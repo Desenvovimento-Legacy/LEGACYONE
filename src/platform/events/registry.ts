@@ -306,6 +306,7 @@ export const EventContracts = {
       valid_from: z.iso.date(),
       valid_to: z.iso.date().nullable(),
       verification: z.enum(["DOCUMENTO", "DECLARACAO"]),
+      method: z.enum(["PROCURACAO", "GOVBR", "CERTIFICADO", "SENHA_PORTAL"]).optional(),
     }),
   },
 } as const satisfies Record<string, Record<number, z.ZodType>>;

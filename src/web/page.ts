@@ -423,12 +423,13 @@ function viewEmpresa(id) {
       '</div><div class="narrow">' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
         '<section class="card"><h2>Mapa de acessos</h2><table>' + acc + '</table>' +
-          '<details class="only-confirmar" style="margin-top:10px"><summary style="cursor:pointer;font-size:13px">Registrar procuração estadual ou municipal</summary>' +
+          '<details class="only-confirmar" style="margin-top:10px"><summary style="cursor:pointer;font-size:13px">Registrar acesso estadual ou municipal</summary>' +
           '<div class="form-row" style="margin-top:8px"><label>Órgão<select id="poa-org"><option value="PREFEITURA">Prefeitura (município da matriz)</option><option value="SEFAZ">SEFAZ (UF da matriz)</option></select></label>' +
+          '<label>Forma de acesso<select id="poa-met"><option value="PROCURACAO">Procuração</option><option value="GOVBR">Conta gov.br</option><option value="CERTIFICADO">Certificado digital</option><option value="SENHA_PORTAL">Senha do portal (vai para o cofre)</option></select></label>' +
           '<label>Válida desde<input type="date" id="poa-ini"></label><label>Até (vazio = sem término)<input type="date" id="poa-fim"></label>' +
-          '<label>Protocolo / nº<input id="poa-prot" style="width:140px"></label><label>Termo ou print (PDF/imagem)<input type="file" id="poa-arq" accept=".pdf,.png,.jpg,.jpeg"></label>' +
+          '<label>Protocolo / nº<input id="poa-prot" style="width:140px"></label><label>Comprovante (opcional: termo ou print)<input type="file" id="poa-arq" accept=".pdf,.png,.jpg,.jpeg"></label>' +
           '<button class="ghost" data-act="poa">Registrar</button></div>' +
-          '<div class="empty">Sem consulta automática nesses órgãos: anexe o termo ou o print da procuração. Faltando ou vencida, a IARIS pede ao cliente; vencendo em até 30 dias, aparece na Fila humana.</div></details></section>' +
+          '<div class="empty">Sem consulta automática nesses órgãos: registre como o escritório acessa (procuração, gov.br, certificado). Senha nunca é digitada aqui. Faltando ou vencida, a IARIS pede ao cliente; vencendo em até 30 dias, aparece na Fila humana.</div></details></section>' +
         '<section class="card"><h2>Cases</h2><table>' + cs + '</table></section>' +
       '</div></div>';
     loadConferencia(id);
@@ -440,8 +441,8 @@ function viewEmpresa(id) {
     if (bpoa) bpoa.addEventListener("click", function () {
       var ini = $("poa-ini").value; if (!ini) { toast("Informe desde quando a procuração vale."); return; }
       var send = function (arquivo) {
-        post("/api/empresa/" + id + "/procuracao", "confirmar", { orgao: $("poa-org").value, inicio: ini, fim: $("poa-fim").value || null, protocolo: $("poa-prot").value, arquivo: arquivo })
-          .then(function (r) { toast("Procuração na " + r.name + " registrada."); viewEmpresa(id); })
+        post("/api/empresa/" + id + "/procuracao", "confirmar", { orgao: $("poa-org").value, forma: $("poa-met").value, inicio: ini, fim: $("poa-fim").value || null, protocolo: $("poa-prot").value, arquivo: arquivo })
+          .then(function (r) { toast("Acesso à " + r.name + " registrado."); viewEmpresa(id); })
           .catch(function (e) { toast(e.message); });
       };
       var f = $("poa-arq").files[0];

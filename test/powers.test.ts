@@ -75,11 +75,20 @@ describe("procurações estaduais e municipais", () => {
       const q = (await humanQueue(tx)).filter((x) => x.kind === "power");
       expect(q).toHaveLength(1);
       const acc = await accessMap(tx, entityId);
-      expect(acc.find((a) => a.system === "SEFAZ-MG (procuração)")).toMatchObject({ status: "PENDENTE", detail: expect.stringMatching(/vencida/) });
+      expect(acc.find((a) => a.system === "SEFAZ-MG")).toMatchObject({ status: "PENDENTE", detail: expect.stringMatching(/vencido/) });
       const doc = await tx.query("SELECT file_name, document_sha256 IS NOT NULL AS sha FROM power_of_attorney WHERE system = 'PREFEITURA'");
       expect(doc.rows[0]).toEqual({ file_name: "termo.pdf", sha: true });
       const ev = await tx.query("SELECT count(*)::int AS n FROM outbox WHERE type = 'POWER_OF_ATTORNEY_REGISTERED'");
       expect(ev.rows[0].n).toBe(2);
+    });
+    // Acesso via gov.br (sem procuração) também resolve o pedido
+    await registerPower(appPool, t, { entityId, system: "SEFAZ", method: "GOVBR", validFrom: today(), validTo: null, protocol: null, scopes: [], file: null }, LUAN);
+    const last = await withTenant(appPool, t, (tx) => powerRequirements(tx, entityId));
+    expect(last[0]).toMatchObject({ system: "SEFAZ", status: "OK", current: { method: "GOVBR" } });
+    await withTenant(appPool, t, async (tx) => {
+      const p = await tx.query("SELECT status FROM pending_item WHERE entity_id = $1 AND type = 'PROCURACAO_SEFAZ'", [entityId]);
+      expect(p.rows[0].status).toBe("RESOLVED");
+      expect((await accessMap(tx, entityId)).find((a) => a.system === "SEFAZ-MG")).toMatchObject({ status: "OK", detail: expect.stringMatching(/gov\.br/) });
     });
   });
 });

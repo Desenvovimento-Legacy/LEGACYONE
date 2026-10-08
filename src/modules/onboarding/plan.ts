@@ -8,7 +8,7 @@ import { appendEvent } from "../../platform/events/outbox.js";
 import { openPendingItem, type ResponsibleSource } from "../../platform/pending/pending.js";
 import { profileAsOf } from "../registry/registry.js";
 import type { BusinessCalendar, DueAdjust } from "../regulatory/calendar.js";
-import { powerRequirements } from "./powers.js";
+import { ACCESS_METHOD_PT, powerRequirements } from "./powers.js";
 
 /**
  * Plano de implantação (seção 4 da especificação). A partir dos fatos da empresa
@@ -398,11 +398,11 @@ export async function accessMap(tx: PoolClient, entityId: string) {
     { system: "eSocial / DCTFWeb", status: poa ? "OK" : "PENDENTE", detail: poa ? "pela procuração e-CAC" : "depende da procuração e-CAC" },
     { system: "SEFAZ (NF-e, CT-e)", status: x.cert ? "OK" : "PENDENTE", detail: x.cert ? `certificado A1 no cofre, válido até ${x.cert_to}` : "aguarda certificado A1 da empresa" },
     ...(await powerRequirements(tx, entityId)).map((r) => ({
-      system: `${r.name} (procuração)`,
+      system: r.name,
       status: r.status === "OK" ? "OK" : r.status === "VENCE_EM_BREVE" ? "A VENCER" : "PENDENTE",
       detail: r.current
-        ? `${r.current.verification === "DOCUMENTO" ? "termo anexado" : "declarada"}${r.current.validTo ? `, válida até ${r.current.validTo.split("-").reverse().join("/")}` : ", sem data de término"}${r.status === "VENCIDA" ? " (vencida)" : ""}`
-        : `falta: a empresa ${r.reason}`,
+        ? `${ACCESS_METHOD_PT[r.current.method]}${r.current.verification === "DOCUMENTO" ? ", comprovante anexado" : ", declarado"}${r.current.validTo ? `, válido até ${r.current.validTo.split("-").reverse().join("/")}` : ""}${r.status === "VENCIDA" ? " (vencido)" : ""}`
+        : `falta acesso: a empresa ${r.reason}`,
     })),
     { system: "Prefeitura (NFS-e)", status: open.has("MUNICIPAL_ACCESS") ? "PENDENTE" : "A VERIFICAR", detail: open.has("MUNICIPAL_ACCESS") ? "aguarda inscrição municipal e acesso" : "NFS-e pelo Emissor Nacional" },
     { system: "Bancos", status: open.has("BANK_ACCOUNTS") ? "PENDENTE" : "A VERIFICAR", detail: open.has("BANK_ACCOUNTS") ? "aguarda bancos e extratos" : "sem pedido aberto" },

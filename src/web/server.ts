@@ -540,14 +540,16 @@ export function createWebServer(deps: WebDeps) {
       // POST /api/empresa/:id/procuracao — procuração estadual (SEFAZ) ou municipal (Prefeitura), com o termo anexado.
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "procuracao") {
         if (guard("confirmar")) return;
-        const body = (await readJson(req, 8 * 1024 * 1024)) as { orgao?: string; inicio?: string; fim?: string | null; protocolo?: string; poderes?: string; arquivo?: { name?: string; data?: string } | null };
+        const body = (await readJson(req, 8 * 1024 * 1024)) as { orgao?: string; forma?: string; inicio?: string; fim?: string | null; protocolo?: string; poderes?: string; arquivo?: { name?: string; data?: string } | null };
+        const methods = ["PROCURACAO", "GOVBR", "CERTIFICADO", "SENHA_PORTAL"] as const;
+        const method = methods.find((m) => m === body.forma) ?? "PROCURACAO";
         if (body.orgao !== "SEFAZ" && body.orgao !== "PREFEITURA") return json(res, 400, { erro: "Órgão inválido" });
         const file = body.arquivo && typeof body.arquivo.name === "string" && typeof body.arquivo.data === "string"
           ? { name: body.arquivo.name.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(body.arquivo.data, "base64") }
           : null;
         try {
           const r = await registerPower(deps.appPool, deps.tenantId, {
-            entityId: parts[2]!, system: body.orgao, validFrom: body.inicio ?? "", validTo: body.fim || null,
+            entityId: parts[2]!, system: body.orgao, method, validFrom: body.inicio ?? "", validTo: body.fim || null,
             protocol: body.protocolo?.trim().slice(0, 100) || null, scopes: (body.poderes ?? "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20), file,
           }, actor);
           await deps.orchestrate?.();

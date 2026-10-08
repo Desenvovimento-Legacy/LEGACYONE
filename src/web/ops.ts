@@ -140,7 +140,7 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       return `${p.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL"} retido ${pa}: ${WS[String(p.to)] ?? String(p.to)}`;
     }
     case "POWER_OF_ATTORNEY_REGISTERED":
-      return `Procuração na ${p.name} registrada${p.valid_to ? `, válida até ${fmtDate(String(p.valid_to))}` : ""} (${p.verification === "DOCUMENTO" ? "termo anexado" : "declarada"})`;
+      return `Acesso à ${p.name} registrado: ${({ PROCURACAO: "procuração", GOVBR: "via gov.br", CERTIFICADO: "certificado digital", SENHA_PORTAL: "senha do portal" } as Record<string, string>)[String(p.method ?? "PROCURACAO")]}${p.valid_to ? `, válido até ${fmtDate(String(p.valid_to))}` : ""}`;
     case "CHART_OF_ACCOUNTS_DEFINED":
       return `Plano de contas definido: ${p.accounts} contas desde ${fmtDate(String(p.valid_from))}`;
     case "BANK_STATEMENT_RECEIVED":
@@ -396,7 +396,7 @@ export async function humanQueue(tx: PoolClient) {
     entityId: p.entity_id,
     entity: p.entity,
     caseId: null,
-    title: `Procuração na ${p.name} vence em ${fmtDate(p.valid_to)}`,
+    title: `Acesso à ${p.name} vence em ${fmtDate(p.valid_to)}`,
     impact: "Peça a renovação ao cliente antes do vencimento. Depois de vencida, vira pedido ao cliente automaticamente.",
     since: p.created_at.toISOString(),
   }));

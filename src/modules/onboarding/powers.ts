@@ -21,6 +21,10 @@ import { entityFacts } from "./plan.js";
 export const DI_AGENT: Actor = { kind: "AGENT", id: "digital-identity" };
 export const POWER_WARN_DAYS = 30;
 export type LocalSystem = "SEFAZ" | "PREFEITURA";
+export type AccessMethod = "PROCURACAO" | "GOVBR" | "CERTIFICADO" | "SENHA_PORTAL";
+export const ACCESS_METHOD_PT: Record<AccessMethod, string> = {
+  PROCURACAO: "procuração", GOVBR: "acesso via gov.br", CERTIFICADO: "certificado digital", SENHA_PORTAL: "senha do portal (no cofre)",
+};
 
 export class PowerError extends Error {}
 
@@ -29,7 +33,7 @@ export interface PowerRequirement {
   jurisdiction: string;
   name: string;
   reason: string;
-  current: { validFrom: string; validTo: string | null; verification: string; protocol: string | null; registeredBy: string | null } | null;
+  current: { validFrom: string; validTo: string | null; verification: string; protocol: string | null; registeredBy: string | null; method: AccessMethod } | null;
   status: "OK" | "VENCE_EM_BREVE" | "VENCIDA" | "FALTA";
 }
 
@@ -84,14 +88,14 @@ export async function powerRequirements(tx: PoolClient, entityId: string, on = t
   }
   const out: PowerRequirement[] = [];
   for (const n of needs) {
-    const p = await tx.query<{ valid_from: string; valid_to: string | null; verification: string; protocol: string | null; registered_by: string | null }>(
-      `SELECT valid_from::text, valid_to::text, verification, protocol, registered_by FROM power_of_attorney
+    const p = await tx.query<{ valid_from: string; valid_to: string | null; verification: string; protocol: string | null; registered_by: string | null; access_method: AccessMethod }>(
+      `SELECT valid_from::text, valid_to::text, verification, protocol, registered_by, access_method FROM power_of_attorney
         WHERE entity_id = $1 AND system = $2 AND jurisdiction = $3 AND valid_from <= $4
         ORDER BY created_at DESC LIMIT 1`,
       [entityId, n.system, n.jurisdiction, on],
     );
     const c = p.rows[0];
-    const current = c ? { validFrom: c.valid_from, validTo: c.valid_to, verification: c.verification, protocol: c.protocol, registeredBy: c.registered_by } : null;
+    const current = c ? { validFrom: c.valid_from, validTo: c.valid_to, verification: c.verification, protocol: c.protocol, registeredBy: c.registered_by, method: c.access_method } : null;
     const status: PowerRequirement["status"] = !c ? "FALTA" : c.valid_to && c.valid_to < on ? "VENCIDA" : c.valid_to && c.valid_to <= addDays(on, POWER_WARN_DAYS) ? "VENCE_EM_BREVE" : "OK";
     out.push({ ...n, current, status });
   }
@@ -110,14 +114,14 @@ export async function refreshPowerRequirements(pool: Pool, tenantId: string, ent
       if (r.status === "FALTA" || r.status === "VENCIDA") {
         const o = await openPendingItem(tx, {
           type, entityId, responsibleSource: "CLIENT", channel: "portal",
-          requiredInformation: `${r.status === "VENCIDA" ? "Renovar" : "Outorgar"} procuração eletrônica na ${r.name} para o escritório${office ? ` (CNPJ ${office})` : ""} e enviar o termo ou print`,
+          requiredInformation: `${r.status === "VENCIDA" ? "Renovar" : "Liberar"} o acesso do escritório à ${r.name}${office ? ` (CNPJ ${office})` : ""}: procuração eletrônica, conta gov.br ou certificado`,
           impact: `Necessária porque a empresa ${r.reason}. Sem ela, o escritório não acessa as declarações e guias desse órgão.`,
         }, actor);
         if (o.created) opened++;
       } else {
         const open = await tx.query<{ id: string }>("SELECT id FROM pending_item WHERE entity_id = $1 AND type = $2 AND status = 'OPEN'", [entityId, type]);
         for (const p of open.rows) {
-          await resolvePendingItem(tx, { id: p.id, resolution: `Procuração na ${r.name} registrada${r.current?.validTo ? `, válida até ${br(r.current.validTo)}` : ""}` }, actor);
+          await resolvePendingItem(tx, { id: p.id, resolution: `Acesso à ${r.name} registrado (${ACCESS_METHOD_PT[r.current?.method ?? "PROCURACAO"]})${r.current?.validTo ? `, válido até ${br(r.current.validTo)}` : ""}` }, actor);
           resolved++;
         }
       }
@@ -134,6 +138,7 @@ async function officeDocument(tx: PoolClient): Promise<string | null> {
 export interface RegisterPowerInput {
   entityId: string;
   system: LocalSystem;
+  method?: AccessMethod;
   validFrom: string;
   validTo: string | null;
   protocol: string | null;
@@ -160,10 +165,10 @@ export async function registerPower(pool: Pool, tenantId: string, input: Registe
     const sha = input.file ? createHash("sha256").update(input.file.bytes).digest() : null;
     await tx.query(
       `INSERT INTO power_of_attorney (id, tenant_id, entity_id, system, grantee_document, scopes, valid_from, valid_to, source, verified_at,
-                                      jurisdiction, jurisdiction_name, protocol, file_name, document, document_sha256, registered_by, verification)
-       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, 'TELA', clock_timestamp(), $8, $9, $10, $11, $12, $13, $14, $15)`,
+                                      jurisdiction, jurisdiction_name, protocol, file_name, document, document_sha256, registered_by, verification, access_method)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, 'TELA', clock_timestamp(), $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [id, input.entityId, input.system, office, input.scopes, input.validFrom, input.validTo, jurisdiction, name, input.protocol,
-        input.file?.name.slice(0, 200) ?? null, input.file?.bytes ?? null, sha, actor.id, input.file ? "DOCUMENTO" : "DECLARACAO"],
+        input.file?.name.slice(0, 200) ?? null, input.file?.bytes ?? null, sha, actor.id, input.file ? "DOCUMENTO" : "DECLARACAO", input.method ?? "PROCURACAO"],
     );
     await appendEvent(tx, {
       type: "POWER_OF_ATTORNEY_REGISTERED",
@@ -171,11 +176,11 @@ export async function registerPower(pool: Pool, tenantId: string, input: Registe
       producer: { kind: "user", name: actor.id, version: "1" },
       idempotencyKey: `procuracao:${id}`,
       entityId: input.entityId,
-      payload: { entity_id: input.entityId, system: input.system, jurisdiction, name, valid_from: input.validFrom, valid_to: input.validTo, verification: input.file ? "DOCUMENTO" : "DECLARACAO" },
+      payload: { entity_id: input.entityId, system: input.system, jurisdiction, name, valid_from: input.validFrom, valid_to: input.validTo, verification: input.file ? "DOCUMENTO" : "DECLARACAO", method: input.method ?? "PROCURACAO" },
     });
     await audit(tx, {
       actor, action: "identity.power_registered", resourceType: "power_of_attorney", resourceId: id, entityId: input.entityId,
-      data: { system: input.system, jurisdiction, name, valid_from: input.validFrom, valid_to: input.validTo, protocol: input.protocol, file: input.file?.name ?? null, sha256: sha?.toString("hex") ?? null },
+      data: { method: input.method ?? "PROCURACAO", system: input.system, jurisdiction, name, valid_from: input.validFrom, valid_to: input.validTo, protocol: input.protocol, file: input.file?.name ?? null, sha256: sha?.toString("hex") ?? null },
       evidenceRefs: input.file ? [`power_of_attorney:${id}`] : [],
     });
     return { id, name };
