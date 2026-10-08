@@ -58,6 +58,10 @@ describe("tributos da NFS-e nacional (NT 007)", () => {
   it("sem código: PIS/COFINS só entram quando o total retido da nota os inclui", () => {
     expect(readNfseTaxes(xml({ serv: "1000.00", irrf: "15.00", csll: "10.00", pis: "6.50", cofins: "30.00", total: "61.50" }))).toMatchObject({ csrf: "46.50", check: "OK" });
     expect(readNfseTaxes(xml({ serv: "1000.00", irrf: "15.00", csll: "10.00", pis: "6.50", cofins: "30.00", total: "25.00" }))).toMatchObject({ csrf: "10.00", check: "OK" });
+    // PIS/COFINS não cumulativos do prestador somados ao total: não é retenção, nota a conferir
+    const nc = readNfseTaxes(xml({ serv: "31.06", pis: "0.52", cofins: "2.36", total: "2.88" }))!;
+    expect(nc).toMatchObject({ csrf: "0.00", check: "DIVERGENTE" });
+    expect(nc.notes[0]).toMatch(/PIS 1,67% e COFINS 7,60%/);
   });
 
   it("ISS retido entra no total; total que não fecha fica DIVERGENTE; sem total fica SEM_TOTAL", () => {

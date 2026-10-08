@@ -13,13 +13,16 @@ import { Dec } from "../../shared/decimal.js";
  *     2 (leiaute anterior)       CSLL retida; PIS e COFINS não retidos
  *     0                          PIS, COFINS e CSLL não retidos
  *     ausente                    vRetCSLL; PIS/COFINS só entram se o vTotalRet da nota os incluir
+ *                                E tiverem a alíquota de retenção (0,65% e 3%, Lei 10.833/2003,
+ *                                art. 31). Com outra alíquota (ex.: 1,65%/7,6% do não cumulativo)
+ *                                são o tributo do prestador: não contam e a nota fica a conferir.
  * ISS retido: tpRetISSQN 2 (tomador) ou 3 (intermediário) → vISSQN.
  *
  * Prova: quando a nota traz vTotalRet, a soma lida tem de bater com ele; se não
  * bater, a nota fica DIVERGENTE (os valores lidos não são "corrigidos").
  */
 
-export const NFSE_TAX_PARSER = "nfse-trib-1";
+export const NFSE_TAX_PARSER = "nfse-trib-2";
 
 export type TaxReadCheck = "OK" | "DIVERGENTE" | "SEM_TOTAL";
 
@@ -130,8 +133,16 @@ export function readNfseTaxes(xml: string): NfseTaxes | null {
     csrf = Dec.of(csllField);
     notes.push(`Código tpRetPisCofins ${code} desconhecido: considerado só vRetCSLL`);
   } else if (totalRead !== null && !pisCofins.isZero() && base.add(csllField).add(pisCofins).cmp(totalRead) === 0) {
-    csrf = Dec.of(csllField).add(pisCofins);
-    notes.push("Sem código: o total retido da nota inclui PIS e COFINS");
+    const pcBase = num(pc.vBCPisCofins) ?? num(obj(dv.vServPrest).vServ) ?? "0";
+    const near = (v: string, rate: string) => Dec.of(v).sub(Dec.of(pcBase).mul(rate).round(2)).cmp("0.01") <= 0 && Dec.of(pcBase).mul(rate).round(2).sub(v).cmp("0.01") <= 0;
+    if (near(pisDue, "0.0065") && near(cofinsDue, "0.03")) {
+      csrf = Dec.of(csllField).add(pisCofins);
+      notes.push("Sem código: o total retido da nota inclui PIS e COFINS com alíquota de retenção (0,65% e 3%)");
+    } else {
+      csrf = Dec.of(csllField);
+      const pct = (v: string) => (Dec.of(pcBase).isZero() ? "?" : Dec.of(v).mul("100").div(pcBase).toFixed(2).replace(".", ","));
+      notes.push(`Sem código: o total retido inclui PIS ${pct(pisDue)}% e COFINS ${pct(cofinsDue)}%, que não é alíquota de retenção (0,65% e 3%): tributo do prestador, não considerado retido`);
+    }
   } else {
     csrf = Dec.of(csllField);
   }
