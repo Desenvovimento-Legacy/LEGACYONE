@@ -47,6 +47,9 @@ import {
   ROLE_LABEL,
   sessionFromToken,
   SESSION_HOURS,
+  TRUST_DAYS,
+  deviceTrusted,
+  forgetDevice,
   userActor,
   type AccessDeps,
   type Permission,
@@ -121,13 +124,17 @@ function html(res: ServerResponse, body: string) {
   res.end(body);
 }
 
-function cookieToken(req: IncomingMessage): string | null {
+function cookieValue(req: IncomingMessage, name: string): string | null {
   for (const part of (req.headers.cookie ?? "").split(";")) {
     const [k, ...v] = part.trim().split("=");
-    if (k === COOKIE) return v.join("=") || null;
+    if (k === name) return v.join("=") || null;
   }
   return null;
 }
+function cookieToken(req: IncomingMessage): string | null {
+  return cookieValue(req, COOKIE);
+}
+const DEVICE_COOKIE = "iaris_dispositivo";
 
 function localOrigins(req: IncomingMessage): string[] {
   const p = req.socket.localPort;
@@ -158,9 +165,9 @@ function clientIp(req: IncomingMessage): string | null {
   return remote ?? null;
 }
 
-function sessionCookie(req: IncomingMessage, deps: WebDeps, token: string, maxAge: number): string {
+function sessionCookie(req: IncomingMessage, deps: WebDeps, token: string, maxAge: number, name = COOKIE): string {
   const secure = Boolean(deps.publicOrigin?.startsWith("https:") && req.headers.host === publicHost(deps));
-  return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+  return `${name}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -276,12 +283,28 @@ export function createWebServer(deps: WebDeps) {
         const user = url.pathname === "/" ? await sessionFromToken(access, cookieToken(req)) : null;
         return html(res, user ? PAGE_HTML : AUTH_HTML);
       }
+      // Computador confiável? (a tela de entrada esconde o código). Não diz de quem é.
+      if (req.method === "GET" && url.pathname === "/api/login/dispositivo") {
+        return json(res, 200, { confiavel: await deviceTrusted(access, cookieValue(req, DEVICE_COOKIE)) });
+      }
+      if (req.method === "POST" && url.pathname === "/api/login/esquecer") {
+        if (!actionAllowed(req, deps, "login")) return json(res, 403, { erro: "Requisição recusada" });
+        await forgetDevice(access, cookieValue(req, DEVICE_COOKIE));
+        res.setHeader("set-cookie", sessionCookie(req, deps, "x", 0, DEVICE_COOKIE));
+        return json(res, 200, { ok: true });
+      }
       if (req.method === "POST" && url.pathname === "/api/login") {
         if (!actionAllowed(req, deps, "login")) return json(res, 403, { erro: "Requisição recusada" });
         try {
-          const body = (await readJson(req)) as { email?: string; password?: string; code?: string };
-          const r = await login(access, { email: body.email ?? "", password: body.password ?? "", code: body.code ?? "" }, meta);
-          res.setHeader("set-cookie", sessionCookie(req, deps, r.token, SESSION_HOURS * 3600));
+          const body = (await readJson(req)) as { email?: string; password?: string; code?: string; confiar?: boolean };
+          const r = await login(
+            access,
+            { email: body.email ?? "", password: body.password ?? "", code: body.code ?? "", trust: body.confiar === true, deviceToken: cookieValue(req, DEVICE_COOKIE) },
+            meta,
+          );
+          const cookies = [sessionCookie(req, deps, r.token, SESSION_HOURS * 3600)];
+          if (r.deviceToken) cookies.push(sessionCookie(req, deps, r.deviceToken, TRUST_DAYS * 86_400, DEVICE_COOKIE));
+          res.setHeader("set-cookie", cookies);
           return json(res, 200, { ok: true, name: r.user.name, role: r.user.role });
         } catch (err) {
           if (err instanceof AccessError) return json(res, 401, { erro: err.message });

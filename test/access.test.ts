@@ -2,7 +2,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeIntegraContador } from "../src/integrations/integra-contador/fake.js";
-import { acceptInvitation, inviteUser, login, MAX_FAILURES, openInvitation, revokeUser, sessionFromToken } from "../src/platform/access/access.js";
+import { acceptInvitation, deviceTrusted, forgetDevice, inviteUser, login, MAX_FAILURES, openInvitation, revokeUser, sessionFromToken } from "../src/platform/access/access.js";
 import { base32Decode, currentStep, totpCode } from "../src/platform/access/totp.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { createWebServer } from "../src/web/server.js";
@@ -59,6 +59,38 @@ describe("login: senha + autenticador, perfis e sessão", () => {
     await revokeUser(deps, "ana@escritorio.test", "saiu do projeto", LUAN);
     expect(await sessionFromToken(deps, ok.token)).toBeNull();
     await expect(login(deps, { email: "ana@escritorio.test", password: PASSWORD, code: totpCode(secret, step - 1) })).rejects.toThrow(/inválidos/);
+  });
+
+  it("computador confiável: 30 dias só com senha; vale só para a pessoa; esquecer, nova credencial ou revogar barram", async () => {
+    const t = await newTenant();
+    const deps = { appPool, tenantId: t, authKey: AUTH_KEY };
+    const ana = await enroll(t, "ana@escritorio.test", "LEITURA");
+    const bia = await enroll(t, "bia@escritorio.test", "LEITURA");
+    const step = currentStep(new Date()) + 1;
+    const first = await login(deps, { email: ana.email, password: PASSWORD, code: totpCode(ana.secret, step), trust: true });
+    expect(first.deviceToken).toBeTruthy();
+    const dev = first.deviceToken!;
+    expect(await deviceTrusted(deps, dev)).toBe(true);
+    // Sem código, com o computador confiável
+    expect((await login(deps, { email: ana.email, password: PASSWORD, code: "", deviceToken: dev })).deviceToken).toBeNull();
+    await expect(login(deps, { email: ana.email, password: "senha-errada-123456", code: "", deviceToken: dev })).rejects.toThrow(/inválidos/);
+    await expect(login(deps, { email: ana.email, password: PASSWORD, code: "" })).rejects.toThrow(/inválidos/);
+    // Outra pessoa no mesmo computador ainda precisa do código
+    await expect(login(deps, { email: bia.email, password: PASSWORD, code: "", deviceToken: dev })).rejects.toThrow(/inválidos/);
+    // Esquecer o computador
+    await forgetDevice(deps, dev);
+    expect(await deviceTrusted(deps, dev)).toBe(false);
+    await expect(login(deps, { email: ana.email, password: PASSWORD, code: "", deviceToken: dev })).rejects.toThrow(/inválidos/);
+    // Credencial nova (novo convite) invalida o computador confiado antes
+    const again = await login(deps, { email: ana.email, password: PASSWORD, code: totpCode(ana.secret, step - 1), trust: true });
+    const re = await inviteUser(deps, { email: ana.email, name: "Ana", role: "LEITURA" }, LUAN);
+    const o = await openInvitation(deps, re.token);
+    await acceptInvitation(deps, { token: re.token, password: PASSWORD, code: totpCode(base32Decode(o.secretBase32.replace(/\s/g, "")), currentStep(new Date())) });
+    expect(await deviceTrusted(deps, again.deviceToken)).toBe(false);
+    // Acesso revogado barra mesmo com computador confiável
+    const b = await login(deps, { email: bia.email, password: PASSWORD, code: totpCode(bia.secret, step), trust: true });
+    await revokeUser(deps, bia.email, "saiu", LUAN);
+    await expect(login(deps, { email: bia.email, password: PASSWORD, code: "", deviceToken: b.deviceToken })).rejects.toThrow(/inválidos/);
   });
 
   it(`bloqueia depois de ${MAX_FAILURES} erros, mesmo com a senha certa`, async () => {

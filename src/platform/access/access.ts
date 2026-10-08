@@ -36,7 +36,9 @@ export const ROLE_LABEL: Record<Role, string> = {
 
 export const INVITE_HOURS = 72;
 export const SESSION_HOURS = 12;
-export const SESSION_IDLE_MINUTES = 120;
+export const SESSION_IDLE_MINUTES = 240;
+/** "Confiar neste computador": dias sem pedir o código do autenticador nesse computador. */
+export const TRUST_DAYS = 30;
 export const MAX_FAILURES = 5;
 export const FAILURE_WINDOW_MINUTES = 15;
 
@@ -247,9 +249,9 @@ export async function acceptInvitation(deps: AccessDeps, input: { token: string;
 
 export async function login(
   deps: AccessDeps,
-  input: { email: string; password: string; code: string },
+  input: { email: string; password: string; code: string; trust?: boolean; deviceToken?: string | null },
   meta: RequestMeta = {},
-): Promise<{ token: string; expiresAt: Date; user: SessionUser }> {
+): Promise<{ token: string; expiresAt: Date; user: SessionUser; deviceToken: string | null }> {
   const now = clock(deps);
   const parsed = Email.safeParse(input.email ?? "");
   const email = parsed.success ? parsed.data : String(input.email ?? "").trim().toLowerCase().slice(0, 200);
@@ -277,16 +279,25 @@ export async function login(
       "SELECT count(*)::int AS n FROM login_attempt WHERE email = $1 AND NOT success AND at > $2::timestamptz - make_interval(mins => $3)",
       [email, now, FAILURE_WINDOW_MINUTES],
     );
-    const { rows } = await tx.query<{ id: string; email: string; name: string; password_hash: string | null; totp_secret_enc: string | null }>(
-      `SELECT u.id, u.email, u.name, c.password_hash, c.totp_secret_enc
+    const { rows } = await tx.query<{ id: string; email: string; name: string; password_hash: string | null; totp_secret_enc: string | null; cred_at: Date | null }>(
+      `SELECT u.id, u.email, u.name, c.password_hash, c.totp_secret_enc, c.created_at AS cred_at
          FROM app_user u
-         LEFT JOIN LATERAL (SELECT password_hash, totp_secret_enc FROM user_credential
+         LEFT JOIN LATERAL (SELECT password_hash, totp_secret_enc, created_at FROM user_credential
                              WHERE user_id = u.id ORDER BY created_at DESC, id DESC LIMIT 1) c ON true
         WHERE u.email = $1`,
       [email],
     );
     const u = rows[0] ?? null;
-    return { blocked: (failures.rows[0]?.n ?? 0) >= MAX_FAILURES, user: u, access: u ? await currentAccess(tx, u.id) : null };
+    // Computador confiável desta pessoa: vigente e criado depois da credencial atual.
+    let device: string | null = null;
+    if (u && input.deviceToken && input.deviceToken.length <= 200) {
+      const d = await tx.query<{ id: string }>(
+        `SELECT id FROM trusted_device WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > $3 AND created_at >= $4`,
+        [sha256(input.deviceToken), u.id, now, u.cred_at ?? now],
+      );
+      device = d.rows[0]?.id ?? null;
+    }
+    return { blocked: (failures.rows[0]?.n ?? 0) >= MAX_FAILURES, user: u, access: u ? await currentAccess(tx, u.id) : null, device };
   });
 
   const passwordOk = await verifyPassword(input.password ?? "", found.user?.password_hash ?? DUMMY_PASSWORD_HASH);
@@ -295,19 +306,32 @@ export async function login(
   if (!u || !u.password_hash || !u.totp_secret_enc) return fail("usuário ou credencial inexistente", u?.id ?? null);
   if (!passwordOk) return fail("senha incorreta", u.id);
   if (!found.access?.active) return fail("acesso revogado", u.id);
-  const step = matchTotp(open(deps.authKey, u.totp_secret_enc), input.code ?? "", now);
-  if (step === null) return fail("código incorreto", u.id);
+  const step = found.device ? null : matchTotp(open(deps.authKey, u.totp_secret_enc), input.code ?? "", now);
+  if (!found.device && step === null) return fail("código incorreto", u.id);
 
   const token = randomToken();
   const expiresAt = new Date(now.getTime() + SESSION_HOURS * 3600_000);
   const role = found.access.role;
   const sessionId = newId();
+  let newDevice: string | null = null;
   const ok = await withTenant(deps.appPool, deps.tenantId, async (tx) => {
-    const used = await tx.query(
-      "INSERT INTO totp_use (tenant_id, user_id, step) VALUES (current_tenant(), $1, $2) ON CONFLICT DO NOTHING",
-      [u.id, step],
-    );
-    if (!used.rowCount) return false;
+    if (found.device) {
+      await tx.query("UPDATE trusted_device SET last_used_at = $1 WHERE id = $2", [now, found.device]);
+    } else {
+      const used = await tx.query(
+        "INSERT INTO totp_use (tenant_id, user_id, step) VALUES (current_tenant(), $1, $2) ON CONFLICT DO NOTHING",
+        [u.id, step],
+      );
+      if (!used.rowCount) return false;
+      if (input.trust) {
+        newDevice = randomToken();
+        await tx.query(
+          `INSERT INTO trusted_device (id, tenant_id, user_id, token_hash, ip, user_agent, created_at, expires_at)
+           VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7)`,
+          [newId(), u.id, sha256(newDevice), meta.ip ?? null, meta.userAgent?.slice(0, 300) ?? null, now, new Date(now.getTime() + TRUST_DAYS * 86_400_000)],
+        );
+      }
+    }
     await tx.query(
       `INSERT INTO user_session (id, tenant_id, user_id, token_hash, ip, user_agent, created_at, last_seen_at, expires_at)
        VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $6, $7)`,
@@ -323,7 +347,7 @@ export async function login(
       action: "auth.login",
       resourceType: "user_session",
       resourceId: sessionId,
-      data: { role, ip: meta.ip ?? null, expires_at: expiresAt.toISOString() },
+      data: { role, ip: meta.ip ?? null, expires_at: expiresAt.toISOString(), trusted_device: found.device, device_trusted_now: Boolean(newDevice) },
     });
     return true;
   });
@@ -331,8 +355,31 @@ export async function login(
   return {
     token,
     expiresAt,
+    deviceToken: newDevice,
     user: { sessionId, userId: u.id, email: u.email, name: u.name, role, permissions: ROLE_PERMISSIONS[role] },
   };
+}
+
+/** Este computador está marcado como confiável (para a tela de entrada esconder o código)? */
+export async function deviceTrusted(deps: AccessDeps, token: string | null | undefined): Promise<boolean> {
+  if (!token || token.length > 200) return false;
+  return withTenant(deps.appPool, deps.tenantId, async (tx) => {
+    const r = await tx.query(
+      `SELECT 1 FROM trusted_device d
+        WHERE d.token_hash = $1 AND d.revoked_at IS NULL AND d.expires_at > $2
+          AND d.created_at >= (SELECT max(c.created_at) FROM user_credential c WHERE c.user_id = d.user_id)`,
+      [sha256(token), clock(deps)],
+    );
+    return Boolean(r.rowCount);
+  });
+}
+
+/** "Esquecer este computador": volta a pedir o código nele. */
+export async function forgetDevice(deps: AccessDeps, token: string | null | undefined): Promise<void> {
+  if (!token || token.length > 200) return;
+  await withTenant(deps.appPool, deps.tenantId, (tx) =>
+    tx.query("UPDATE trusted_device SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL", [clock(deps), sha256(token)]),
+  );
 }
 
 /** Sessão válida (não encerrada, dentro do prazo e da inatividade, acesso ativo) ou null. */

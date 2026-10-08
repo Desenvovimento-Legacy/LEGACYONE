@@ -57,18 +57,28 @@ function post(u, action, body) {
 function busy(form, on) { var b = form.querySelector("button"); b.disabled = on; }
 
 function viewLogin(msg) {
-  $("view").innerHTML = '<h1>Entrar</h1><p class="sub">Use o e-mail, a senha e o código de 6 dígitos do aplicativo autenticador.</p>' +
-    (msg ? '<p class="ok">' + esc(msg) + '</p>' : '') +
-    '<form id="f" autocomplete="on"><label for="email">E-mail</label><input id="email" type="email" autocomplete="username" required>' +
-    '<label for="pw">Senha</label><input id="pw" type="password" autocomplete="current-password" required>' +
-    '<label for="code">Código do autenticador</label><input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>' +
-    '<button type="submit">Entrar</button><div class="err" id="err" role="alert"></div></form>';
-  $("email").focus();
-  $("f").addEventListener("submit", function (ev) {
-    ev.preventDefault(); var f = ev.target; busy(f, true); $("err").textContent = "";
-    post("/api/login", "login", { email: $("email").value, password: $("pw").value, code: $("code").value })
-      .then(function () { location.replace("/"); })
-      .catch(function (e) { $("err").textContent = e.message; $("code").value = ""; busy(f, false); });
+  $("view").innerHTML = '<p class="sub">Carregando…</p>';
+  fetch("/api/login/dispositivo", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return { confiavel: false }; }).then(function (d) {
+    var trusted = Boolean(d && d.confiavel);
+    $("view").innerHTML = '<h1>Entrar</h1><p class="sub">' + (trusted ? 'Este computador está liberado: basta o e-mail e a senha.' : 'Use o e-mail, a senha e o código de 6 dígitos do aplicativo autenticador.') + '</p>' +
+      (msg ? '<p class="ok">' + esc(msg) + '</p>' : '') +
+      '<form id="f" autocomplete="on"><label for="email">E-mail</label><input id="email" type="email" autocomplete="username" required>' +
+      '<label for="pw">Senha</label><input id="pw" type="password" autocomplete="current-password" required>' +
+      (trusted ? '' :
+        '<label for="code">Código do autenticador</label><input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>' +
+        '<label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:10px"><input type="checkbox" id="trust" style="width:auto;margin:0"> Confiar neste computador por 30 dias (só no seu computador)</label>') +
+      '<button type="submit">Entrar</button><div class="err" id="err" role="alert"></div></form>' +
+      (trusted ? '<p class="sub" style="margin-top:14px"><a href="#" id="forget">Não é seu computador? Voltar a pedir o código aqui</a></p>' : '');
+    $("email").focus();
+    var fg = $("forget");
+    if (fg) fg.addEventListener("click", function (ev) { ev.preventDefault(); post("/api/login/esquecer", "login", {}).then(function () { viewLogin("Pronto: este computador volta a pedir o código."); }); });
+    $("f").addEventListener("submit", function (ev) {
+      ev.preventDefault(); var f = ev.target; busy(f, true); $("err").textContent = "";
+      var body = { email: $("email").value, password: $("pw").value, code: $("code") ? $("code").value : "", confiar: Boolean($("trust") && $("trust").checked) };
+      post("/api/login", "login", body)
+        .then(function () { location.replace("/"); })
+        .catch(function (e) { $("err").textContent = e.message; if ($("code")) $("code").value = ""; busy(f, false); });
+    });
   });
 }
 
