@@ -200,6 +200,9 @@ export const EventContracts = {
       documents: z.array(z.string()),
     }),
   },
+  USER_ACCESS_LINK_CREATED: {
+    1: z.object({ user_id: z.uuid(), role: z.enum(["LEITURA", "OPERADOR", "RESPONSAVEL_TECNICO"]), expires_at: z.iso.datetime() }),
+  },
   USER_INVITED: {
     1: z.object({
       user_id: z.uuid(),

@@ -2,7 +2,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeIntegraContador } from "../src/integrations/integra-contador/fake.js";
-import { acceptInvitation, deviceTrusted, forgetDevice, inviteUser, login, MAX_FAILURES, openInvitation, revokeUser, sessionFromToken } from "../src/platform/access/access.js";
+import { acceptInvitation, createAccessLink, deviceTrusted, loginWithLink, forgetDevice, inviteUser, login, MAX_FAILURES, openInvitation, revokeUser, sessionFromToken } from "../src/platform/access/access.js";
 import { base32Decode, currentStep, totpCode } from "../src/platform/access/totp.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { createWebServer } from "../src/web/server.js";
@@ -194,5 +194,49 @@ describe("login: senha + autenticador, perfis e sessão", () => {
       q.end();
     });
     expect(status).toBe(200);
+  });
+
+  it("link de acesso: entra sem senha e sem código, auditado; link novo cancela o anterior; revogar barra", async () => {
+    const t = await newTenant();
+    const deps = { appPool, tenantId: t, authKey: AUTH_KEY };
+    await expect(createAccessLink(deps, { email: "x", name: "Bia", role: "OPERADOR" }, LUAN)).rejects.toThrow();
+    const l1 = await createAccessLink(deps, { email: "Bia@Escritorio.test", name: "Bia", role: "OPERADOR" }, LUAN);
+    expect(l1.created).toBe(true);
+    const s1 = await loginWithLink(deps, l1.token, { ip: "1.2.3.4" });
+    expect(s1.user).toMatchObject({ email: "bia@escritorio.test", role: "OPERADOR" });
+    expect(await sessionFromToken(deps, s1.token)).toMatchObject({ email: "bia@escritorio.test" });
+    // reusável enquanto válido
+    await loginWithLink(deps, l1.token);
+    const l2 = await createAccessLink(deps, { email: "bia@escritorio.test", name: "Bia", role: "OPERADOR" }, LUAN);
+    expect(l2.created).toBe(false);
+    await expect(loginWithLink(deps, l1.token)).rejects.toThrow(/inválido ou vencido/);
+    await loginWithLink(deps, l2.token);
+    await withTenant(appPool, t, async (tx) => {
+      const a = await tx.query("SELECT data->>'via' AS via FROM audit_log WHERE action = 'auth.login' AND actor_id = 'bia@escritorio.test'");
+      expect(a.rows.map((r) => r.via)).toEqual(["link", "link", "link"]);
+      const h = await tx.query("SELECT count(*)::int AS n FROM access_link WHERE token_hash = sha256($1::bytea)", [Buffer.from(l2.token)]);
+      expect(h.rows[0].n).toBe(1); // só o hash
+    });
+    await revokeUser(deps, "bia@escritorio.test", "saiu", LUAN);
+    await expect(loginWithLink(deps, l2.token)).rejects.toThrow(/inválido ou vencido/);
+    expect(await sessionFromToken(deps, s1.token)).toBeNull();
+  });
+
+  it("tela: /entrar com o link abre a sessão; token só no fragmento", async () => {
+    const t = await newTenant();
+    const { base } = await server(t);
+    const deps = { appPool, tenantId: t, authKey: AUTH_KEY };
+    const l = await createAccessLink(deps, { email: "caio@escritorio.test", name: "Caio", role: "LEITURA" }, LUAN);
+    const page = await fetch(`${base}/entrar`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("/api/entrar");
+    expect((await fetch(`${base}/api/entrar`, { method: "POST", body: JSON.stringify({ token: l.token }) })).status).toBe(403);
+    const bad = await fetch(`${base}/api/entrar`, { method: "POST", headers: { "X-IARIS-Acao": "entrar" }, body: JSON.stringify({ token: "nao-existe" }) });
+    expect(bad.status).toBe(401);
+    const ok = await fetch(`${base}/api/entrar`, { method: "POST", headers: { "X-IARIS-Acao": "entrar" }, body: JSON.stringify({ token: l.token }) });
+    expect(ok.status).toBe(200);
+    const cookie = ok.headers.get("set-cookie")!.split(";")[0]!;
+    const me = await fetch(`${base}/api/sessao`, { headers: { cookie } });
+    expect(await me.json()).toMatchObject({ email: "caio@escritorio.test", role: "LEITURA" });
   });
 });

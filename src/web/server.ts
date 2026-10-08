@@ -48,7 +48,9 @@ import {
   AccessError,
   acceptInvitation,
   changeRole,
+  createAccessLink,
   inviteUser,
+  loginWithLink,
   listUsers,
   login,
   logout,
@@ -117,6 +119,17 @@ export interface WebDeps {
 }
 
 const COOKIE = "iaris_sessao";
+const ENTRAR_HTML = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IARIS</title>
+<style>body{font-family:system-ui,sans-serif;background:#0f1720;color:#e6edf3;display:grid;place-items:center;min-height:100vh;margin:0}div{max-width:420px;padding:24px;text-align:center}b{color:#E8A33D}</style></head>
+<body><div><b>IARIS</b><p id="m">Entrando…</p></div><script>
+var t = (location.hash.match(/t=([A-Za-z0-9_-]+)/) || [])[1] || "";
+history.replaceState(null, "", "/entrar");
+if (!t) document.getElementById("m").textContent = "Link incompleto. Abra o link exatamente como recebeu.";
+else fetch("/api/entrar", { method: "POST", headers: { "X-IARIS-Acao": "entrar", "content-type": "application/json" }, body: JSON.stringify({ token: t }) })
+  .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.erro || "Não foi possível entrar"); location.replace("/"); }); })
+  .catch(function (e) { document.getElementById("m").textContent = e.message; });
+</script></body></html>`;
+
 const SECURITY_HEADERS = {
   "cache-control": "no-store",
   "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'",
@@ -327,6 +340,20 @@ export function createWebServer(deps: WebDeps) {
           throw err;
         }
       }
+      // Link pessoal de acesso: /entrar#t=… (o token fica no fragmento: não vai para log de servidor nem de túnel).
+      if (req.method === "GET" && url.pathname === "/entrar") return html(res, ENTRAR_HTML);
+      if (req.method === "POST" && url.pathname === "/api/entrar") {
+        if (!actionAllowed(req, deps, "entrar")) return json(res, 403, { erro: "Requisição recusada" });
+        try {
+          const body = (await readJson(req, 1024)) as { token?: string };
+          const r = await loginWithLink(access, String(body.token ?? ""), meta);
+          res.setHeader("set-cookie", sessionCookie(req, deps, r.token, SESSION_HOURS * 3600));
+          return json(res, 200, { ok: true, name: r.user.name });
+        } catch (err) {
+          if (err instanceof AccessError) return json(res, 401, { erro: err.message });
+          throw err;
+        }
+      }
       if (req.method === "POST" && (url.pathname === "/api/convite/abrir" || url.pathname === "/api/convite/ativar")) {
         if (!actionAllowed(req, deps, "convite")) return json(res, 403, { erro: "Requisição recusada" });
         try {
@@ -473,13 +500,15 @@ export function createWebServer(deps: WebDeps) {
             name: u.name,
             role: u.role,
             roleLabel: u.role ? ROLE_LABEL[u.role] : null,
-            status: !u.active ? "REVOGADO" : u.enrolled ? "ATIVO" : u.invite_expires ? "CONVITE_PENDENTE" : "CONVITE_VENCIDO",
+            status: !u.active ? "REVOGADO" : u.enrolled ? "ATIVO" : u.link_expires ? "LINK" : u.invite_expires ? "CONVITE_PENDENTE" : "CONVITE_VENCIDO",
+            linkExpires: u.link_expires ? u.link_expires.toISOString() : null,
+            linkUsed: u.link_used ? u.link_used.toISOString() : null,
             inviteExpires: u.invite_expires ? u.invite_expires.toISOString() : null,
             lastLogin: u.last_login ? u.last_login.toISOString() : null,
           })),
         });
       }
-      if (req.method === "POST" && parts[0] === "api" && parts[1] === "usuarios" && ["convidar", "perfil", "revogar"].includes(parts[2] ?? "")) {
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "usuarios" && ["convidar", "perfil", "revogar", "link"].includes(parts[2] ?? "")) {
         if (guard("usuarios")) return;
         try {
           const body = (await readJson(req)) as { email?: string; name?: string; role?: string; reason?: string };
@@ -490,6 +519,12 @@ export function createWebServer(deps: WebDeps) {
             const origin = deps.publicOrigin ?? `http://${req.headers.host}`;
             // O link só volta nesta resposta (o banco guarda o hash do token).
             return json(res, 200, { created: r.created, expiresAt: r.expiresAt.toISOString(), link: `${origin}/convite#t=${r.token}` });
+          }
+          if (parts[2] === "link") {
+            const r = await createAccessLink(access, { email: body.email ?? "", name: body.name ?? "", role: Role.parse(body.role) }, actor);
+            const origin = deps.publicOrigin ?? `http://${req.headers.host}`;
+            // O link só volta nesta resposta (o banco guarda o hash do token).
+            return json(res, 200, { created: r.created, expiresAt: r.expiresAt.toISOString(), link: `${origin}/entrar#t=${r.token}` });
           }
           if (parts[2] === "perfil") return json(res, 200, await changeRole(access, body.email ?? "", Role.parse(body.role), actor));
           return json(res, 200, await revokeUserGuarded(access, body.email ?? "", (body.reason ?? "").trim() || "revogado pelo escritório", actor));

@@ -39,6 +39,8 @@ export const SESSION_HOURS = 12;
 export const SESSION_IDLE_MINUTES = 240;
 /** "Confiar neste computador": dias sem pedir o código do autenticador nesse computador. */
 export const TRUST_DAYS = 30;
+/** Link pessoal de acesso (sem senha e sem código): dias de validade. */
+export const LINK_DAYS = 90;
 export const MAX_FAILURES = 5;
 export const FAILURE_WINDOW_MINUTES = 15;
 
@@ -170,6 +172,76 @@ export async function inviteUser(deps: AccessDeps, input: InviteInput, actor: Ac
       data: { email, name, role, created, expires_at: expiresAt.toISOString() },
     });
     return { userId, created, token, expiresAt };
+  });
+}
+
+/**
+ * Link pessoal de acesso: quem abrir entra como esta pessoa, sem senha e sem
+ * código. Cria a pessoa se ainda não existe; um link novo cancela os anteriores.
+ * O token volta só para quem chamou; o banco guarda o hash.
+ */
+export async function createAccessLink(deps: AccessDeps, input: InviteInput, actor: Actor) {
+  const email = Email.parse(input.email);
+  const name = z.string().trim().min(2, "Informe o nome").parse(input.name);
+  const role = Role.parse(input.role);
+  const now = clock(deps);
+  const token = randomToken();
+  const expiresAt = new Date(now.getTime() + LINK_DAYS * 86_400_000);
+  return withTenant(deps.appPool, deps.tenantId, async (tx) => {
+    const found = await tx.query<{ id: string }>("SELECT id FROM app_user WHERE email = $1", [email]);
+    let userId = found.rows[0]?.id;
+    const created = !userId;
+    if (!userId) {
+      userId = newId();
+      await tx.query("INSERT INTO app_user (id, tenant_id, email, name, created_by) VALUES ($1, current_tenant(), $2, $3, $4)", [userId, email, name, actor.id]);
+    }
+    const access = await currentAccess(tx, userId);
+    if (access?.active && access.role === "RESPONSAVEL_TECNICO" && role !== "RESPONSAVEL_TECNICO" && (await otherActiveRts(tx, userId)) === 0) {
+      throw new AccessError("O escritório precisa de ao menos um Responsável técnico ativo");
+    }
+    if (!access || access.role !== role || !access.active) await setAccess(tx, userId, role, true, "link de acesso", actor);
+    await tx.query("UPDATE access_link SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", [userId, now]);
+    const linkId = newId();
+    await tx.query(
+      "INSERT INTO access_link (id, tenant_id, user_id, token_hash, created_by, created_at, expires_at) VALUES ($1, current_tenant(), $2, $3, $4, $5, $6)",
+      [linkId, userId, sha256(token), actor.id, now, expiresAt],
+    );
+    await appendEvent(tx, {
+      type: "USER_ACCESS_LINK_CREATED", schemaVersion: 1, producer: PRODUCER, idempotencyKey: `access-link:${linkId}`,
+      payload: { user_id: userId, role, expires_at: expiresAt.toISOString() },
+    });
+    await audit(tx, { actor, action: "user.access_link", resourceType: "app_user", resourceId: userId, data: { email, name, role, created, expires_at: expiresAt.toISOString() } });
+    return { userId, created, token, expiresAt };
+  });
+}
+
+/** Entrada pelo link pessoal: abre sessão em nome da pessoa (auditada). */
+export async function loginWithLink(deps: AccessDeps, token: string, meta: RequestMeta = {}): Promise<{ token: string; expiresAt: Date; user: SessionUser }> {
+  const now = clock(deps);
+  if (!token || token.length > 200) throw new AccessError("Link inválido ou vencido. Peça um novo ao escritório.");
+  return withTenant(deps.appPool, deps.tenantId, async (tx) => {
+    const { rows } = await tx.query<{ id: string; user_id: string; email: string; name: string }>(
+      `SELECT l.id, l.user_id, u.email, u.name FROM access_link l JOIN app_user u ON u.id = l.user_id
+        WHERE l.token_hash = $1 AND l.revoked_at IS NULL AND l.expires_at > $2`,
+      [sha256(token), now],
+    );
+    const l = rows[0];
+    const access = l ? await currentAccess(tx, l.user_id) : null;
+    if (!l || !access?.active) throw new AccessError("Link inválido ou vencido. Peça um novo ao escritório.");
+    const session = randomToken();
+    const expiresAt = new Date(now.getTime() + SESSION_HOURS * 3600_000);
+    const sessionId = newId();
+    await tx.query("UPDATE access_link SET last_used_at = $2 WHERE id = $1", [l.id, now]);
+    await tx.query(
+      `INSERT INTO user_session (id, tenant_id, user_id, token_hash, ip, user_agent, created_at, last_seen_at, expires_at)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $6, $7)`,
+      [sessionId, l.user_id, sha256(session), meta.ip ?? null, meta.userAgent?.slice(0, 300) ?? null, now, expiresAt],
+    );
+    await audit(tx, {
+      actor: { kind: "USER", id: l.email }, action: "auth.login", resourceType: "user_session", resourceId: sessionId,
+      data: { role: access.role, ip: meta.ip ?? null, expires_at: expiresAt.toISOString(), via: "link", link_id: l.id },
+    });
+    return { token: session, expiresAt, user: { sessionId, userId: l.user_id, email: l.email, name: l.name, role: access.role, permissions: ROLE_PERMISSIONS[access.role] } };
   });
 }
 
@@ -426,6 +498,7 @@ export async function revokeUser(deps: AccessDeps, emailInput: string, reason: s
     const access = await currentAccess(tx, userId);
     if (access?.active) await setAccess(tx, userId, access.role, false, reason, actor);
     await tx.query("UPDATE user_invitation SET used_at = $2 WHERE user_id = $1 AND used_at IS NULL", [userId, now]);
+    await tx.query("UPDATE access_link SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", [userId, now]);
     const ended = await endSessions(tx, userId, "acesso revogado", now);
     await audit(tx, { actor, action: "user.revoke", resourceType: "app_user", resourceId: userId, data: { email, reason, sessions_ended: ended } });
     return { userId, sessionsEnded: ended };
@@ -488,10 +561,14 @@ export async function listUsers(deps: Pick<AccessDeps, "appPool" | "tenantId">) 
       enrolled: boolean;
       last_login: Date | null;
       invite_expires: Date | null;
+      link_expires: Date | null;
+      link_used: Date | null;
     }>(
       `SELECT u.email, u.name, a.role, a.active,
               EXISTS (SELECT 1 FROM user_credential c WHERE c.user_id = u.id) AS enrolled,
               (SELECT max(expires_at) FROM user_invitation i WHERE i.user_id = u.id AND i.used_at IS NULL AND i.expires_at > now()) AS invite_expires,
+              (SELECT max(expires_at) FROM access_link l WHERE l.user_id = u.id AND l.revoked_at IS NULL AND l.expires_at > now()) AS link_expires,
+              (SELECT max(last_used_at) FROM access_link l WHERE l.user_id = u.id AND l.revoked_at IS NULL) AS link_used,
               (SELECT max(created_at) FROM user_session s WHERE s.user_id = u.id) AS last_login
          FROM app_user u
          LEFT JOIN LATERAL (SELECT role, active FROM user_access WHERE user_id = u.id ORDER BY changed_at DESC, id DESC LIMIT 1) a ON true

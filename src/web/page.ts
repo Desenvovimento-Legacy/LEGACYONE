@@ -1037,7 +1037,7 @@ function viewVinculos() {
 
 /* ---------------- Usuários ---------------- */
 var ROLES = [["LEITURA", "Leitura"], ["OPERADOR", "Operador"], ["RESPONSAVEL_TECNICO", "Responsável técnico"]];
-var USTATUS = { ATIVO: '<span class="st ok">ativo</span>', CONVITE_PENDENTE: '<span class="st wr">convite pendente</span>', CONVITE_VENCIDO: '<span class="st bad">convite vencido</span>', REVOGADO: '<span class="mut">revogado</span>' };
+var USTATUS = { ATIVO: '<span class="st ok">ativo</span>', CONVITE_PENDENTE: '<span class="st wr">convite pendente</span>', CONVITE_VENCIDO: '<span class="st bad">convite vencido</span>', LINK: '<span class="st ok">entra pelo link</span>', REVOGADO: '<span class="mut">revogado</span>' };
 function roleSelect(id, value, attrs) {
   return '<select id="' + id + '"' + (attrs || "") + '>' + ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (r[0] === value ? " selected" : "") + '>' + r[1] + '</option>'; }).join("") + '</select>';
 }
@@ -1046,35 +1046,45 @@ function viewUsuarios() {
   return getJson("/api/usuarios").then(function (r) {
     var rows = r.users.map(function (u, i) {
       var me = u.email === r.me;
-      var acts = u.status === "REVOGADO" || u.status === "CONVITE_VENCIDO"
-        ? '<button class="ghost" data-act="ureinv" data-i="' + i + '">Novo convite</button>'
-        : (u.status === "CONVITE_PENDENTE" ? '<button class="ghost" data-act="ureinv" data-i="' + i + '">Gerar link de novo</button> ' : '') + (me ? '<span class="mut">você</span>' : '<button class="ghost" data-act="urevoke" data-i="' + i + '">Revogar</button>');
+      var acts = '<button class="ghost" data-act="ulinkgen" data-i="' + i + '">Link de acesso</button> ' + (u.status === "REVOGADO"
+        ? ''
+        : (me ? '<span class="mut">você</span>' : '<button class="ghost" data-act="urevoke" data-i="' + i + '">Revogar</button>'));
       var role = u.status === "REVOGADO" ? esc(u.roleLabel || "—") : roleSelect("ur-" + i, u.role, ' data-act-change="urole" data-i="' + i + '"' + (me ? " disabled" : ""));
-      return '<tr><td><b>' + esc(u.name) + '</b><div class="mut" style="font-size:12px">' + esc(u.email) + '</div></td><td>' + role + '</td><td>' + (USTATUS[u.status] || esc(u.status)) + (u.inviteExpires ? '<div class="mut" style="font-size:11px">vale até ' + dt(u.inviteExpires) + '</div>' : '') + '</td><td>' + (u.lastLogin ? dt(u.lastLogin) : '<span class="mut">nunca</span>') + '</td><td class="num">' + acts + '</td></tr>';
+      return '<tr><td><b>' + esc(u.name) + '</b><div class="mut" style="font-size:12px">' + esc(u.email) + '</div></td><td>' + role + '</td><td>' + (USTATUS[u.status] || esc(u.status)) + (u.linkExpires ? '<div class="mut" style="font-size:11px">link vale até ' + dt(u.linkExpires) + (u.linkUsed ? ' · usado ' + dt(u.linkUsed) : ' · ainda não usado') + '</div>' : u.inviteExpires ? '<div class="mut" style="font-size:11px">convite vale até ' + dt(u.inviteExpires) + '</div>' : '') + '</td><td>' + (u.lastLogin ? dt(u.lastLogin) : '<span class="mut">nunca</span>') + '</td><td class="num">' + acts + '</td></tr>';
     }).join("");
     window._users = r.users;
     $("view").innerHTML =
-      '<section class="card"><h2>Convidar pessoa</h2>' +
-      '<form id="uform" class="form-row"><label>Nome<input id="uname" required minlength="2" autocomplete="off"></label><label>E-mail<input id="uemail" type="email" required autocomplete="off"></label><label>Perfil' + roleSelect("urole", "LEITURA") + '</label><button class="warn" type="submit">Gerar convite</button></form>' +
+      '<section class="card"><h2>Dar acesso a uma pessoa</h2>' +
+      '<form id="uform" class="form-row"><label>Nome<input id="uname" required minlength="2" autocomplete="off"></label><label>E-mail<input id="uemail" type="email" required autocomplete="off"></label><label>Perfil' + roleSelect("urole", "LEITURA") + '</label><button class="warn" type="submit">Gerar link de acesso</button><button class="ghost" type="button" id="uinv">Convite com senha e código</button></form>' +
       '<div id="ulink"></div>' +
       (r.publicOrigin ? '<div class="empty">Endereço público ligado: <span class="mono">' + esc(r.publicOrigin) + '</span>. O convite abre no computador da pessoa.</div>' : '<div class="empty wr">Endereço público desligado: o convite só abre neste computador. Para mandar a outra pessoa, inicie a IARIS com <span class="mono">pnpm web:publico</span>.</div>') +
-      '<div class="empty">O convite vale 72 horas e só funciona uma vez. A pessoa cria a senha e liga o aplicativo autenticador no primeiro acesso. Nenhum e-mail é enviado: copie o link e mande pelo canal que preferir.</div></section>' +
+      '<div class="empty"><b>Link de acesso</b>: quem abrir o link entra como essa pessoa, sem senha e sem código, por 90 dias. Mande só para ela. Gerar um link novo cancela o anterior; Revogar corta o acesso na hora. Tudo o que ela fizer fica na auditoria no nome dela.</div>' +
+      '<div class="empty"><b>Convite com senha e código</b>: vale 72 horas e só funciona uma vez; a pessoa cria a senha e liga o aplicativo autenticador. Nenhum e-mail é enviado: copie o link e mande pelo canal que preferir.</div></section>' +
       '<section class="card"><h2>' + r.users.length + ' usuário(s)</h2><div class="scroll"><table><thead><tr><th>Pessoa</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="empty"><b>Leitura</b>: vê tudo, não executa nada. <b>Operador</b>: também busca na Receita e nas prefeituras e confirma dados. <b>Responsável técnico</b>: também aprova regras, exceções e conclusões, e administra usuários. Toda mudança fica na auditoria.</div></section>';
     $("uform").addEventListener("submit", function (ev) {
       ev.preventDefault();
+      accessLink({ name: $("uname").value, email: $("uemail").value, role: $("urole").value });
+    });
+    $("uinv").addEventListener("click", function () {
+      if (!$("uform").reportValidity()) return;
       invite({ name: $("uname").value, email: $("uemail").value, role: $("urole").value });
     });
   });
 }
-function showInviteLink(body, r) {
-  $("ulink").innerHTML = '<div class="linkbox"><b>Convite de ' + esc(body.name) + ' pronto' + (r.created ? '' : ' (o link anterior deixou de valer)') + '</b><input id="ulinkv" readonly value="' + esc(r.link) + '"><div class="form-row"><button class="warn" type="button" id="ucopy">Copiar link</button><span class="mut" style="font-size:12px">Vale até ' + dt(r.expiresAt) + '. Este link aparece só agora.</span></div></div>';
+function showInviteLink(body, r, isLink) {
+  $("ulink").innerHTML = '<div class="linkbox"><b>' + (isLink ? 'Link de acesso de ' : 'Convite de ') + esc(body.name) + ' pronto' + (r.created ? '' : ' (o link anterior deixou de valer)') + '</b><input id="ulinkv" readonly value="' + esc(r.link) + '"><div class="form-row"><button class="warn" type="button" id="ucopy">Copiar link</button><span class="mut" style="font-size:12px">Vale até ' + dt(r.expiresAt) + '. Este link aparece só agora.</span></div></div>';
   $("ucopy").addEventListener("click", function () {
     var v = $("ulinkv"); v.focus(); v.select();
     var done = function () { toast("Link copiado."); };
     if (navigator.clipboard) navigator.clipboard.writeText(v.value).then(done).catch(function () { document.execCommand("copy"); done(); });
     else { document.execCommand("copy"); done(); }
   });
+}
+function accessLink(body) {
+  return post("/api/usuarios/link", "usuarios", body)
+    .then(function (r) { return viewUsuarios().then(function () { showInviteLink(body, r, true); }); })
+    .catch(function (err) { toast(err.message); });
 }
 function invite(body) {
   return post("/api/usuarios/convidar", "usuarios", body)
@@ -1155,6 +1165,11 @@ document.addEventListener("click", function (ev) {
       if (why === null) return;
       b.disabled = true;
       post("/api/usuarios/revogar", "usuarios", { email: ur.email, reason: why }).then(function () { toast("Acesso de " + ur.name + " revogado; sessões encerradas."); }).catch(function (err) { toast(err.message); }).then(route);
+    }
+    if (b.dataset.act === "ulinkgen") {
+      var ul = window._users[Number(b.dataset.i)];
+      if (!window.confirm("Gerar link de acesso para " + ul.name + "? Quem abrir o link entra como " + ul.name + ", sem senha e sem código. Um link anterior deixa de valer.")) return;
+      accessLink({ name: ul.name, email: ul.email, role: ul.role || "LEITURA" });
     }
     if (b.dataset.act === "ureinv") {
       var ui = window._users[Number(b.dataset.i)];
