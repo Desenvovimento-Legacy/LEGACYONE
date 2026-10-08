@@ -423,6 +423,7 @@ export function createWebServer(deps: WebDeps) {
         const users = await listUsers(access);
         return json(res, 200, {
           me: user.email,
+          publicOrigin: deps.publicOrigin ?? null,
           users: users.map((u) => ({
             email: u.email,
             name: u.name,
@@ -441,7 +442,8 @@ export function createWebServer(deps: WebDeps) {
           if (parts[2] === "convidar") {
             const role = Role.parse(body.role);
             const r = await inviteUser(access, { email: body.email ?? "", name: body.name ?? "", role }, actor);
-            const origin = deps.publicOrigin && req.headers.host === publicHost(deps) ? deps.publicOrigin : `http://${req.headers.host}`;
+            // Com endereço público ligado, o convite sempre usa ele (abre no computador da pessoa).
+            const origin = deps.publicOrigin ?? `http://${req.headers.host}`;
             // O link só volta nesta resposta (o banco guarda o hash do token).
             return json(res, 200, { created: r.created, expiresAt: r.expiresAt.toISOString(), link: `${origin}/convite#t=${r.token}` });
           }

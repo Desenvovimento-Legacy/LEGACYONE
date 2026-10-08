@@ -17,9 +17,9 @@ afterEach(async () => {
   close = null;
 });
 
-async function server(t: string) {
+async function server(t: string, publicOrigin: string | null = null) {
   const integra = new FakeIntegraContador("11222333000181", {}, {});
-  const s = createWebServer({ appPool, tenantId: t, officeName: "Escritório Teste", integra, metering: { provider: "serpro", dailyLimit: 20 }, port: 0, authKey: AUTH_KEY });
+  const s = createWebServer({ appPool, tenantId: t, officeName: "Escritório Teste", integra, metering: { provider: "serpro", dailyLimit: 20 }, port: 0, authKey: AUTH_KEY, publicOrigin });
   await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
   close = () => new Promise((r) => s.close(() => r()));
@@ -143,5 +143,24 @@ describe("login: senha + autenticador, perfis e sessão", () => {
     expect((await call("/api/usuarios/revogar", { email: "luan@escritorio.test" })).status).toBe(409);
     expect((await call("/api/usuarios/revogar", { email: "leo@escritorio.test", reason: "teste" })).status).toBe(200);
     expect((await fetch(`${base}/api/central`, { headers: { cookie: lc } })).status).toBe(401);
+  });
+
+  it("com endereço público ligado, o convite sai com ele e o host público é aceito", async () => {
+    const t = await newTenant();
+    const { base } = await server(t, "https://exemplo-teste.trycloudflare.com");
+    const rt = await enroll(t, "luan@escritorio.test", "RESPONSAVEL_TECNICO");
+    const cookie = await loginCookie(base, rt.email, rt.secret);
+    const r = await fetch(`${base}/api/usuarios/convidar`, {
+      method: "POST",
+      headers: { cookie, "X-IARIS-Acao": "usuarios", "content-type": "application/json" },
+      body: JSON.stringify({ name: "Ana", email: "ana@escritorio.test", role: "LEITURA" }),
+    });
+    expect((await r.json()).link).toMatch(/^https:\/\/exemplo-teste\.trycloudflare\.com\/convite#t=/);
+    const status = await new Promise<number>((resolve, reject) => {
+      const q = request(`${base}/`, { headers: { host: "exemplo-teste.trycloudflare.com" } }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+      q.on("error", reject);
+      q.end();
+    });
+    expect(status).toBe(200);
   });
 });

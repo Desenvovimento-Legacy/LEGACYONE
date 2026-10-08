@@ -113,3 +113,13 @@ pnpm user:revoke pessoa@exemplo.com.br "motivo"                 # revoga e encer
 O link do convite vai para a área de transferência. Senha só como hash; segredo do
 autenticador cifrado com a chave do cofre; 5 erros seguidos bloqueiam por 15 minutos.
 Sessão: 12 horas, ou 2 horas sem uso. A tela continua escutando só em 127.0.0.1.
+
+## Endereço público (mandar convite para outra pessoa)
+
+```powershell
+pnpm web:publico     # no lugar de pnpm web: abre a IARIS com um endereço HTTPS (túnel Cloudflare)
+```
+
+O endereço aparece na janela e em `C:\IARIS\endereco-publico.txt`, e muda a cada vez que o
+comando é iniciado. Convites gerados na tela já saem com ele. Todo acesso exige login com senha
+e autenticador. Fechar a janela ou desligar o computador tira o endereço do ar.
