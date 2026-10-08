@@ -254,6 +254,35 @@ export const EventContracts = {
       approved_by: z.string(),
     }),
   },
+  CHART_OF_ACCOUNTS_DEFINED: {
+    1: z.object({ entity_id: z.uuid(), chart: z.string(), accounts: z.number().int(), valid_from: z.iso.date() }),
+  },
+  ACCOUNTING_POSTING_CREATED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      entry_id: z.uuid(),
+      date: z.iso.date(),
+      origin: z.enum(["BANCO", "FISCAL", "FOLHA", "TRIBUTOS", "MIGRACAO", "MANUAL"]),
+      total: z.string(),
+      accounts: z.array(z.string()).min(2),
+      rule: z.string().nullable(),
+    }),
+  },
+  ACCOUNTING_POSTING_REVERSED: {
+    1: z.object({ entity_id: z.uuid(), entry_id: z.uuid(), reversal_id: z.uuid(), date: z.iso.date(), reason: z.string() }),
+  },
+  BANK_STATEMENT_RECEIVED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      bank_account_id: z.uuid(),
+      account: z.string(),
+      transactions: z.number().int(),
+      duplicated: z.number().int(),
+      period_start: z.iso.date().nullable(),
+      period_end: z.iso.date().nullable(),
+      balance: z.string().nullable(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;
