@@ -91,10 +91,23 @@ describe("apuração do Simples Nacional", () => {
 
     // Reprocessar sem mudança não grava nem emite de novo.
     expect(await refreshSimples(appPool, t, entityId, NOW)).toMatchObject({ changed: 0 });
+
+    // A → B → A: um cálculo diferente gravado no meio (ex.: versão antiga do sistema) não impede a volta ao certo.
+    await withTenant(appPool, t, (tx) =>
+      tx.query(
+        `INSERT INTO simples_calculation (id, tenant_id, entity_id, competence, mode, status, engine_version, inputs, fingerprint, content_hash)
+         VALUES ($1, current_tenant(), $2, '2026-08-01', 'CONFERENCIA', 'NAO_SUPORTADO', 'antiga', '{}', 'velho', 'velho')`,
+        [newId(), entityId],
+      ),
+    );
+    expect(await refreshSimples(appPool, t, entityId, NOW)).toMatchObject({ changed: 1 });
+    rows = await withTenant(appPool, t, (tx) => simplesOverview(tx, entityId));
+    expect(rows.find((r) => r.competence === "2026-08-01")).toMatchObject({ status: "CONFERE", total: "1437.15" });
+    expect(await refreshSimples(appPool, t, entityId, NOW)).toMatchObject({ changed: 0 });
     await withTenant(appPool, t, async (tx) => {
       const e = await tx.query("SELECT count(*)::int AS n FROM outbox WHERE type = 'SIMPLES_CALCULATED'");
       const c = await tx.query("SELECT count(*)::int AS n FROM simples_calculation");
-      expect(e.rows[0].n).toBe(c.rows[0].n);
+      expect(e.rows[0].n).toBe(c.rows[0].n - 1); // a linha "antiga" do teste entrou sem evento
       const au = await tx.query("SELECT count(*)::int AS n FROM audit_log WHERE action = 'regulatory.simples_rule_approved'");
       expect(au.rows[0].n).toBe(6);
     });

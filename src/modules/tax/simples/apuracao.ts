@@ -468,16 +468,23 @@ async function storeComputation(tx: PoolClient, entityId: string, c: SimplesComp
     inputs: c.inputs,
     result: c.result ? { ...c.result, reason: c.reason, reference: c.reference, taxDifferences: c.taxDifferences } : { reason: c.reason, reference: c.reference },
   };
-  const fingerprint = createHash("sha256")
+  const content = createHash("sha256")
     .update(JSON.stringify({ m: c.mode, s: c.status, r: c.ruleRefs, e: ENGINE_VERSION, ...stored, t: c.total }))
     .digest("hex");
+  // Igual ao último cálculo da competência: nada a gravar. Diferente (inclusive voltando a um resultado antigo): linha nova.
+  const last = await tx.query<{ id: string; content_hash: string | null }>(
+    "SELECT id, content_hash FROM simples_calculation WHERE entity_id = $1 AND competence = $2 ORDER BY created_at DESC, id DESC LIMIT 1",
+    [entityId, c.competence],
+  );
+  if (last.rows[0]?.content_hash === content) return false;
+  const fingerprint = last.rows[0] ? createHash("sha256").update(`${content}:${last.rows[0].id}`).digest("hex") : content;
   const ins = await tx.query(
     `INSERT INTO simples_calculation (id, tenant_id, entity_id, competence, mode, status, rule_refs, engine_version, inputs, result,
-                                      total, reference_kind, reference_total, difference, fingerprint)
-     VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                      total, reference_kind, reference_total, difference, fingerprint, content_hash)
+     VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      ON CONFLICT (tenant_id, entity_id, competence, fingerprint) DO NOTHING`,
     [newId(), entityId, c.competence, c.mode, c.status, c.ruleRefs, ENGINE_VERSION, JSON.stringify(stored.inputs), JSON.stringify(stored.result),
-     c.total, c.reference?.kind ?? null, c.reference?.total ?? null, c.difference, fingerprint],
+     c.total, c.reference?.kind ?? null, c.reference?.total ?? null, c.difference, fingerprint, content],
   );
   if (!ins.rowCount) return false;
   await appendEvent(tx, {
