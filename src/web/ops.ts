@@ -378,7 +378,34 @@ export async function humanQueue(tx: PoolClient) {
                          WHERE m.transaction_id = t.id AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = j.id))
       GROUP BY 1, 2`,
   );
-  const ledgerItems = unposted.rows.map((u) => ({
+  // NFS-e tomadas ainda não contabilizadas (empresas com plano).
+  const taken = await tx.query<{ entity_id: string; entity: string; n: number; oldest: Date }>(
+    `SELECT d.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, count(*)::int AS n, min(d.received_at) AS oldest
+       FROM nfse_document d JOIN entity e ON e.id = d.entity_id
+      WHERE d.role = 'TOMADA' AND d.service_value > 0
+        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date >= (SELECT min(c.valid_from) FROM chart_account c WHERE c.entity_id = d.entity_id AND c.source <> 'BANCO')
+        AND NOT EXISTS (SELECT 1 FROM journal_entry j WHERE j.idempotency_key = 'nfse-tomada:' || d.id::text)
+        AND NOT EXISTS (SELECT 1 FROM nfse_document x WHERE x.entity_id = d.entity_id AND x.role = 'EVENTO' AND x.access_key = d.access_key
+                         AND (x.event_type ILIKE '%101101%' OR x.event_type ILIKE '%105102%' OR x.event_type ILIKE '%cancel%'))
+      GROUP BY 1, 2`,
+  );
+  const ruleOk = await tx.query("SELECT 1 FROM accounting_rule_approval WHERE rule_set = 'tomadas-servico@1'");
+  const takenItems = taken.rows.map((u) => ({
+    kind: "ledger",
+    id: `tomadas:${u.entity_id}`,
+    type: ruleOk.rowCount ? "TOMADAS_A_CLASSIFICAR" : "TOMADAS_REGRA_A_APROVAR",
+    entityId: u.entity_id,
+    entity: u.entity,
+    caseId: null,
+    title: ruleOk.rowCount
+      ? `${u.n} NFS-e tomada(s) sem conta definida (fornecedor a classificar)`
+      : `${u.n} NFS-e tomada(s) aguardando a aprovação da tabela de contas por tipo de serviço`,
+    impact: ruleOk.rowCount
+      ? "Defina a conta do fornecedor uma vez: as notas dele, passadas e futuras, entram sozinhas."
+      : "Aprovada a tabela (tipo de serviço da LC 116 → conta de despesa), as notas tomadas são contabilizadas com as retenções.",
+    since: u.oldest.toISOString(),
+  }));
+  const ledgerItems = [...takenItems, ...unposted.rows.map((u) => ({
     kind: "ledger",
     id: u.entity_id,
     type: "MOVIMENTO_A_CLASSIFICAR",
@@ -388,7 +415,7 @@ export async function humanQueue(tx: PoolClient) {
     title: `${u.n} movimento(s) do extrato aguardando classificação (${Number(u.total).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })})`,
     impact: "Sem DARF, nota ou regra que explique o movimento. Ao classificar, você pode criar a regra e os próximos parecidos entram sozinhos.",
     since: u.oldest.toISOString(),
-  }));
+  }))];
   const powers = (await powersExpiringSoon(tx)).map((p) => ({
     kind: "power",
     id: `${p.entity_id}:${p.name}`,

@@ -7,6 +7,7 @@ import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
 import { LedgerError, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
+import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
 
 /**
  * Motor de contabilização automática (determinístico, sem IA).
@@ -176,6 +177,119 @@ async function simplesProvision(ctx: Ctx, s: Stats) {
   }
 }
 
+// ------------------------------------------------------------------ NFS-e tomadas → razão
+
+export interface PendingTaken {
+  nfseId: string;
+  number: string | null;
+  issued: string;
+  supplierDoc: string | null;
+  supplier: string | null;
+  nationalCode: string | null;
+  value: string;
+  reason: string;
+}
+
+async function takenRuleApproved(tx: PoolClient): Promise<boolean> {
+  const r = await tx.query("SELECT 1 FROM accounting_rule_approval WHERE rule_set = $1", [TAKEN_SERVICES_RULE]);
+  return Boolean(r.rowCount);
+}
+
+/**
+ * NFS-e tomada: D despesa (regra do fornecedor ou tipo de serviço aprovado)
+ *               C 2.1.1.01 Fornecedores (líquido) e C retenções a recolher.
+ */
+async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
+  const approved = await takenRuleApproved(ctx.tx);
+  const { rows } = await ctx.tx.query<{
+    id: string; number: string | null; issued: string; doc: string | null; supplier: string | null; code: string | null; value: string;
+    irrf: string; csrf: string; cp: string; iss: string; check: string | null; cancelled: boolean;
+  }>(
+    `WITH cancelled AS (
+       SELECT DISTINCT access_key FROM nfse_document
+        WHERE entity_id = $1 AND role = 'EVENTO' AND access_key IS NOT NULL
+          AND (event_type ILIKE '%101101%' OR event_type ILIKE '%105102%' OR event_type ILIKE '%cancel%'))
+     SELECT d.id, d.number, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued, d.provider_doc AS doc,
+            d.provider_name AS supplier, t.national_code AS code, d.service_value::text AS value,
+            coalesce(t.irrf, 0)::text AS irrf, coalesce(t.csrf, 0)::text AS csrf, coalesce(t.cp, 0)::text AS cp, coalesce(t.iss_withheld, 0)::text AS iss,
+            t.read_check AS check,
+            d.access_key IS NOT NULL AND d.access_key IN (SELECT access_key FROM cancelled) AS cancelled
+       FROM nfse_document d LEFT JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $3
+      WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND d.service_value > 0
+        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date >= $2
+      ORDER BY d.issued_at`,
+    [ctx.entityId, ctx.start, NFSE_TAX_PARSER],
+  );
+  for (const n of rows) {
+    const key = `nfse-tomada:${n.id}`;
+    if (n.cancelled) {
+      const e = await ctx.tx.query<{ id: string }>("SELECT id FROM journal_entry WHERE idempotency_key = $1", [key]);
+      if (e.rows[0] && (await reverseEntry(ctx.tx, e.rows[0].id, "NFS-e tomada cancelada", ctx.actor)).created) s.reversed++;
+      continue;
+    }
+    const done = await ctx.tx.query("SELECT 1 FROM journal_entry WHERE idempotency_key = $1", [key]);
+    if (done.rowCount) continue;
+    const miss = (reason: string) => {
+      s.pending++;
+      pending.push({ nfseId: n.id, number: n.number, issued: n.issued, supplierDoc: n.doc, supplier: n.supplier, nationalCode: n.code, value: n.value, reason });
+    };
+    if (n.check === null) { miss("Tributos da nota ainda não lidos"); continue; }
+    if (n.check === "DIVERGENTE") { miss("Retenções da nota a conferir (total retido diferente da soma)"); continue; }
+    const rule = n.doc
+      ? await ctx.tx.query<{ account_code: string; history: string; id: string }>(
+          `SELECT id, account_code, history FROM supplier_rule
+            WHERE supplier_doc = $1 AND (entity_id = $2 OR entity_id IS NULL) AND valid_from <= $3 AND (valid_to IS NULL OR valid_to >= $3)
+            ORDER BY (entity_id IS NULL), created_at DESC LIMIT 1`,
+          [n.doc, ctx.entityId, n.issued],
+        )
+      : null;
+    const byRule = rule?.rows[0] ?? null;
+    const proposed = approved ? serviceAccount(n.code) : null;
+    const account = byRule?.account_code ?? proposed;
+    if (!account) {
+      miss(approved ? `Tipo de serviço ${n.code ?? "não informado"} sem conta definida` : "Tabela de contas das NFS-e tomadas aguardando aprovação");
+      continue;
+    }
+    const ret = { irrf: n.irrf, csrf: n.csrf, cp: n.cp, iss: n.iss };
+    const totalRet = Dec.of(ret.irrf).add(ret.csrf).add(ret.cp).add(ret.iss);
+    const net = Dec.of(n.value).sub(totalRet);
+    if (!net.gt("0")) { miss("Retenções maiores que o valor da nota"); continue; }
+    const lines: EntryLine[] = [{ account, debit: Dec.of(n.value).toFixed(2) }, { account: "2.1.1.01", credit: net.toFixed(2) }];
+    if (Dec.of(ret.irrf).gt("0")) lines.push({ account: "2.1.2.02", credit: Dec.of(ret.irrf).toFixed(2), history: "IRRF retido" });
+    if (Dec.of(ret.csrf).gt("0")) lines.push({ account: "2.1.2.03", credit: Dec.of(ret.csrf).toFixed(2), history: "PIS/COFINS/CSLL retidos" });
+    if (Dec.of(ret.iss).gt("0")) lines.push({ account: "2.1.2.04", credit: Dec.of(ret.iss).toFixed(2), history: "ISS retido" });
+    if (Dec.of(ret.cp).gt("0")) lines.push({ account: "2.1.2.05", credit: Dec.of(ret.cp).toFixed(2), history: "INSS retido" });
+    try {
+      await post(ctx, s, {
+        entityId: ctx.entityId, date: n.issued, origin: "FISCAL", originRef: `nfse_document:${n.id}`, idempotencyKey: key,
+        history: `${byRule ? byRule.history : "Serviço tomado"} — NFS-e nº ${n.number ?? "—"} de ${n.supplier ?? n.doc ?? "prestador"}`,
+        rule: byRule ? `supplier_rule:${byRule.id}` : TAKEN_SERVICES_RULE, confidence: "1",
+        evidence: [{ kind: "nfse_document", id: n.id }], lines,
+      });
+    } catch (err) {
+      if (!(err instanceof LedgerError)) throw err;
+      miss(err.message);
+    }
+  }
+}
+
+async function takenPayment(ctx: Ctx, m: Movement): Promise<{ id: string; number: string | null; supplier: string | null } | { why: string; hypotheses: string[] } | null> {
+  const value = Dec.of(m.amount).mul("-1").toFixed(2);
+  const cand = await ctx.tx.query<{ id: string; number: string | null; supplier: string | null; issued: string }>(
+    `SELECT d.id, d.number, d.provider_name AS supplier, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued
+       FROM nfse_document d JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $5
+       JOIN journal_entry e ON e.idempotency_key = 'nfse-tomada:' || d.id::text
+      WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND d.service_value - t.total_withheld_calc = $2
+        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $3 AND $4
+        AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
+        AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE_TOMADA' AND b.reference = d.id::text)`,
+    [ctx.entityId, value, addDays(m.posted_on, -120), m.posted_on, NFSE_TAX_PARSER],
+  );
+  if (!cand.rows.length) return null;
+  if (cand.rows.length > 1) return { why: `${cand.rows.length} NFS-e tomadas em aberto com o mesmo valor`, hypotheses: cand.rows.slice(0, 5).map((c) => `NFS-e ${c.number ?? "—"} de ${c.issued} (${c.supplier ?? "—"})`) };
+  return cand.rows[0]!;
+}
+
 // ------------------------------------------------------------------ extrato → razão
 
 interface Movement { id: string; posted_on: string; amount: string; memo: string | null; payee: string | null; account_code: string; label: string }
@@ -277,6 +391,15 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         continue;
       }
       if (f) notes.push(f);
+      const tp = await takenPayment(ctx, m);
+      if (tp && "id" in tp) {
+        const r = await post(ctx, s, { ...base, history: `Pagamento da NFS-e nº ${tp.number ?? "—"} (${tp.supplier ?? "fornecedor"}) — ${memo}`, confidence: "1",
+          evidence: [...base.evidence, { kind: "nfse_document", id: tp.id }],
+          lines: [{ account: "2.1.1.01", debit: value }, { account: m.account_code, credit: value }] });
+        await link(m.id, r.id, "NFSE_TOMADA", tp.id);
+        continue;
+      }
+      if (tp) notes.push(tp);
     } else {
       const n = await nfseReceipt(ctx, m);
       if (n && "id" in n) {
@@ -331,6 +454,8 @@ export async function runAutoPosting(pool: Pool, tenantId: string, entityId: str
     const fiscal: Stats = { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] };
     await nfseRevenue(ctx, fiscal);
     await simplesProvision(ctx, fiscal);
+    const takenPending: PendingTaken[] = [];
+    await nfseExpenses(ctx, fiscal, takenPending);
     const bank: Stats = { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] };
     const pending: PendingMovement[] = [];
     await bankMovements(ctx, bank, pending);
@@ -418,3 +543,75 @@ export async function classifyMovement(
   const after = r.rule ? await runAutoPosting(pool, tenantId, r.entityId) : null;
   return { ...r, alsoPosted: after?.posted ?? 0 };
 }
+
+/** NFS-e tomadas que esperam uma pessoa (sem conta ou a conferir). Não grava nada. */
+export async function pendingTaken(pool: Pool, tenantId: string, entityId: string): Promise<PendingTaken[]> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
+    const start = await chartStart(client, entityId);
+    if (!start) return [];
+    const pending: PendingTaken[] = [];
+    await nfseExpenses({ tx: client, entityId, start, actor: LEDGER_ENGINE }, { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] }, pending);
+    return pending;
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
+}
+
+/** Decisão humana: as notas deste fornecedor vão para a conta escolhida (na empresa ou no escritório). */
+export async function classifySupplier(
+  pool: Pool,
+  tenantId: string,
+  input: { entityId: string; supplierDoc: string; account: string; history: string; scope: "EMPRESA" | "ESCRITORIO" },
+  actor: Actor,
+) {
+  if (actor.kind !== "USER") throw new LedgerError("Conta do fornecedor é decisão de uma pessoa");
+  if (!/^[0-9A-Z]{11,14}$/.test(input.supplierDoc)) throw new LedgerError("CNPJ/CPF do fornecedor inválido");
+  await withTenant(pool, tenantId, async (tx) => {
+    const acc = await tx.query("SELECT 1 FROM chart_account WHERE entity_id = $1 AND code = $2 AND analytic AND valid_to IS NULL", [input.entityId, input.account]);
+    if (!acc.rowCount) throw new LedgerError(`Conta ${input.account} não é analítica no plano da empresa`);
+    const start = await chartStart(tx, input.entityId);
+    const id = newId();
+    await tx.query(
+      `INSERT INTO supplier_rule (id, tenant_id, entity_id, supplier_doc, account_code, history, valid_from, created_by)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7)`,
+      [id, input.scope === "EMPRESA" ? input.entityId : null, input.supplierDoc, input.account, input.history.trim() || "Serviço tomado", start ?? "2000-01-01", actor.id],
+    );
+    await audit(tx, { actor, action: "ledger.supplier_rule_created", resourceType: "supplier_rule", resourceId: id, entityId: input.entityId,
+      data: { supplier: input.supplierDoc, account: input.account, scope: input.scope } });
+  });
+  return runAutoPosting(pool, tenantId, input.entityId);
+}
+
+/** Aprovação da tabela tipo de serviço → conta (decisão de pessoa). */
+export async function approveTakenServicesRule(pool: Pool, tenantId: string, actor: Actor) {
+  if (actor.kind !== "USER") throw new LedgerError("Só uma pessoa aprova regra de contabilização");
+  await withTenant(pool, tenantId, async (tx) => {
+    const ins = await tx.query(
+      "INSERT INTO accounting_rule_approval (id, tenant_id, rule_set, approved_by) VALUES ($1, current_tenant(), $2, $3) ON CONFLICT DO NOTHING",
+      [newId(), TAKEN_SERVICES_RULE, actor.id],
+    );
+    if (!ins.rowCount) return;
+    await appendEvent(tx, {
+      type: "ACCOUNTING_RULES_APPROVED",
+      schemaVersion: 1,
+      producer: { kind: "user", name: actor.id, version: "1" },
+      idempotencyKey: `regra-contabil:${TAKEN_SERVICES_RULE}`,
+      payload: { rule_set: TAKEN_SERVICES_RULE, approved_by: actor.id },
+    });
+    await audit(tx, { actor, action: "ledger.rule_approved", resourceType: "accounting_rule_approval", resourceId: TAKEN_SERVICES_RULE, ruleRef: TAKEN_SERVICES_RULE, approvedBy: actor.id });
+  });
+  const ents = await withTenant(pool, tenantId, (tx) => tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM chart_account"));
+  let posted = 0;
+  for (const e of ents.rows) posted += (await runAutoPosting(pool, tenantId, e.id)).posted;
+  return { approved: true, posted };
+}
+
+export async function takenRuleStatus(tx: PoolClient) {
+  const r = await tx.query<{ approved_by: string; approved_at: Date }>("SELECT approved_by, approved_at FROM accounting_rule_approval WHERE rule_set = $1", [TAKEN_SERVICES_RULE]);
+  return r.rows[0] ?? null;
+}
+

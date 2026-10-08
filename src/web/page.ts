@@ -491,6 +491,25 @@ function loadContabil(id, mes) {
       }).join("");
       h += '<h3 style="font-size:13px;margin:12px 0 6px">Movimentos para classificar (' + r.pending.length + ')</h3><div class="scroll"><table><thead><tr><th>Data</th><th>Histórico do banco</th><th class="num">Valor</th><th class="only-confirmar">Classificação</th></tr></thead><tbody>' + pend + '</tbody></table></div>';
     }
+    var tk = r.taken || { pending: 0, suppliers: [] };
+    if (!tk.approved) {
+      var pr = Object.keys(tk.proposal.byItem).map(function (k) { var x = tk.proposal.byItem[k]; return '<tr><td class="mono">' + k + '</td><td>' + esc(x.label) + '</td><td class="mono">' + esc(x.account) + '</td></tr>'; }).join("") +
+        Object.keys(tk.proposal.bySubitem).map(function (k) { return '<tr><td class="mono">' + k.slice(0, 2) + '.' + k.slice(2) + '</td><td class="mut">subitem</td><td class="mono">' + esc(tk.proposal.bySubitem[k]) + '</td></tr>'; }).join("");
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">NFS-e tomadas: tabela de contas por tipo de serviço (proposta)</h3>' +
+        '<div class="empty">' + tk.pending + ' nota(s) tomada(s) esperando. Cada nota vira: D despesa (pela tabela ou pela conta do fornecedor) / C Fornecedores (líquido) e C retenções a recolher. Tipo de serviço fora da tabela fica para você definir pelo fornecedor.</div>' +
+        '<details><summary class="mut" style="cursor:pointer;font-size:12px">Ver a tabela</summary><table><thead><tr><th>Item LC 116</th><th>Serviço</th><th>Conta</th></tr></thead><tbody>' + pr + '</tbody></table></details>' +
+        '<div class="only-aprovar" style="margin-top:6px"><button class="warn" data-act="tk-aprovar">Aprovar tabela e contabilizar as tomadas</button></div>';
+    }
+    if (tk.suppliers.length) {
+      var opts2 = r.accounts.filter(function (a) { return /^4\\./.test(a.code) || /^1\\.2\\./.test(a.code) || /^1\\.1\\.5\\./.test(a.code); }).map(function (a) { return '<option value="' + esc(a.code) + '">' + esc(a.code + " " + a.name) + '</option>'; }).join("");
+      var sup = tk.suppliers.map(function (g, i) {
+        return '<tr><td><b>' + esc(g.supplier || "—") + '</b><div class="mut mono" style="font-size:11px">' + esc(g.doc || "") + (g.codes.length ? ' · serviço ' + esc(g.codes.join(", ")) : '') + '</div><div class="mut" style="font-size:11px">' + esc(g.reason) + '</div></td><td class="num">' + g.notes + '</td><td class="num">' + brl(g.total.toFixed(2)) + '</td>' +
+          '<td class="only-confirmar">' + (g.doc ? '<select id="sp-acc-' + i + '"><option value="">conta…</option>' + opts2 + '</select><div style="margin-top:4px"><input id="sp-his-' + i + '" placeholder="histórico (ex.: Honorários advocatícios)" style="width:100%"></div>' +
+          '<label style="font-size:11px;display:flex;gap:4px;align-items:center;margin-top:4px"><input type="checkbox" id="sp-all-' + i + '"> vale para todas as empresas</label>' +
+          '<button class="ghost" data-act="sp" data-i="' + i + '" data-doc="' + esc(g.doc) + '" style="margin-top:4px">Definir conta</button>' : '<span class="mut">sem CNPJ do prestador</span>') + '</td></tr>';
+      }).join("");
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">NFS-e tomadas sem conta (' + tk.pending + ')</h3><div class="scroll"><table><thead><tr><th>Fornecedor</th><th class="num">Notas</th><th class="num">Total</th><th class="only-confirmar">Conta</th></tr></thead><tbody>' + sup + '</tbody></table></div>';
+    }
     if (r.trial) {
       var sel = '<select id="ctb-mes">' + r.months.map(function (m) { return '<option value="' + m + '"' + (m === r.month ? ' selected' : '') + '>' + m.slice(5, 7) + '/' + m.slice(0, 4) + '</option>'; }).join("") + '</select>';
       var sign = function (v) { var n = Number(v); return n === 0 ? '0,00' : brl(Math.abs(n).toFixed(2)) + (n > 0 ? ' D' : ' C'); };
@@ -517,6 +536,19 @@ function loadContabil(id, mes) {
         }).catch(function (e) { toast(e.message); });
       };
       fr.readAsDataURL(f);
+    });
+    var ta = box.querySelector("[data-act=tk-aprovar]");
+    if (ta) ta.addEventListener("click", function () {
+      ta.disabled = true;
+      post("/api/contabil/tomadas/aprovar", "aprovar", {}).then(function (x) { toast("Tabela aprovada. " + x.posted + " lançamento(s) feitos."); return loadContabil(id); }).catch(function (e) { toast(e.message); ta.disabled = false; });
+    });
+    box.querySelectorAll("[data-act=sp]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var i = b.getAttribute("data-i"), acc = $("sp-acc-" + i).value;
+        if (!acc) { toast("Escolha a conta."); return; }
+        post("/api/empresa/" + id + "/fornecedor", "confirmar", { doc: b.getAttribute("data-doc"), conta: acc, historico: $("sp-his-" + i).value, escopo: $("sp-all-" + i).checked ? "ESCRITORIO" : "EMPRESA" })
+          .then(function (x) { toast("Conta definida. " + x.posted + " lançamento(s) feitos."); return loadContabil(id, r.month); }).catch(function (e) { toast(e.message); });
+      });
     });
     box.querySelectorAll("[data-act=classif]").forEach(function (b) {
       b.addEventListener("click", function () {

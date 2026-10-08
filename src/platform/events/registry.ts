@@ -309,6 +309,9 @@ export const EventContracts = {
       method: z.enum(["PROCURACAO", "GOVBR", "CERTIFICADO", "SENHA_PORTAL"]).optional(),
     }),
   },
+  ACCOUNTING_RULES_APPROVED: {
+    1: z.object({ rule_set: z.string(), approved_by: z.string() }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

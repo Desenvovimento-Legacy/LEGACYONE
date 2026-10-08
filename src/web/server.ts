@@ -15,7 +15,8 @@ import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
-import { classifyMovement, pendingMovements } from "../modules/ledger/auto-posting.js";
+import { approveTakenServicesRule, classifyMovement, classifySupplier, pendingMovements, pendingTaken, takenRuleStatus } from "../modules/ledger/auto-posting.js";
+import { SERVICE_ACCOUNT_BY_ITEM, SERVICE_ACCOUNT_BY_SUBITEM } from "../modules/ledger/service-accounts.js";
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
@@ -539,7 +540,22 @@ export function createWebServer(deps: WebDeps) {
           };
         });
         const pending = data.hasChart ? (await pendingMovements(deps.appPool, deps.tenantId, id)).slice(0, 100) : [];
-        json(res, 200, { ...data, pending });
+        const taken = data.hasChart ? await pendingTaken(deps.appPool, deps.tenantId, id) : [];
+        const bySupplier = new Map<string, { doc: string | null; supplier: string | null; notes: number; total: number; reason: string; codes: string[] }>();
+        for (const t of taken) {
+          const k = t.supplierDoc ?? t.supplier ?? "—";
+          const g = bySupplier.get(k) ?? { doc: t.supplierDoc, supplier: t.supplier, notes: 0, total: 0, reason: t.reason, codes: [] };
+          g.notes++;
+          g.total += Number(t.value);
+          if (t.nationalCode && !g.codes.includes(t.nationalCode)) g.codes.push(t.nationalCode);
+          bySupplier.set(k, g);
+        }
+        const takenRule = await withTenant(deps.appPool, deps.tenantId, (tx) => takenRuleStatus(tx));
+        json(res, 200, {
+          ...data, pending,
+          taken: { approved: takenRule, pending: taken.length, suppliers: [...bySupplier.values()].sort((a, b) => b.total - a.total).slice(0, 60),
+            proposal: { bySubitem: SERVICE_ACCOUNT_BY_SUBITEM, byItem: SERVICE_ACCOUNT_BY_ITEM } },
+        });
         return;
       }
       // POST /api/empresa/:id/procuracao — procuração estadual (SEFAZ) ou municipal (Prefeitura), com o termo anexado.
@@ -561,6 +577,32 @@ export function createWebServer(deps: WebDeps) {
           json(res, 200, r);
         } catch (err) {
           if (err instanceof PowerError) json(res, 400, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // POST /api/contabil/tomadas/aprovar — aprova a tabela tipo de serviço → conta das NFS-e tomadas.
+      if (req.method === "POST" && url.pathname === "/api/contabil/tomadas/aprovar") {
+        if (guard("aprovar")) return;
+        try {
+          json(res, 200, await approveTakenServicesRule(deps.appPool, deps.tenantId, actor));
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // POST /api/empresa/:id/fornecedor — conta das notas de um fornecedor (decisão humana, vira regra).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "fornecedor") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req)) as { doc?: string; conta?: string; historico?: string; escopo?: string };
+        try {
+          json(res, 200, await classifySupplier(deps.appPool, deps.tenantId, {
+            entityId: parts[2]!, supplierDoc: (body.doc ?? "").toUpperCase().replace(/[^0-9A-Z]/g, ""), account: body.conta ?? "",
+            history: body.historico ?? "", scope: body.escopo === "ESCRITORIO" ? "ESCRITORIO" : "EMPRESA",
+          }, actor));
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 409, { erro: err.message });
           else throw err;
         }
         return;
