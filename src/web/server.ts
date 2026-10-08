@@ -23,7 +23,12 @@ import { bankOverview, importBankStatement, StatementError } from "../modules/fi
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
-import { formatCnpj } from "../shared/br/documents.js";
+import { formatCnpj, isValidCnpj, normalizeCnpj } from "../shared/br/documents.js";
+import { BrasilApiCnpjSource } from "../integrations/cnpj-public/brasilapi.js";
+import { CnpjaOpenSource } from "../integrations/cnpj-public/cnpja.js";
+import { FallbackCnpjSource } from "../integrations/cnpj-public/fallback.js";
+import type { CnpjPublicDataSource } from "../integrations/cnpj-public/types.js";
+import { onboardByCnpj } from "../modules/onboarding/onboarding.js";
 import { createPool } from "../shared/db/pool.js";
 import { withTenant } from "../shared/db/tenant-tx.js";
 import { isMain } from "../shared/is-main.js";
@@ -104,6 +109,8 @@ export interface WebDeps {
   /** Busca de notas (NF-e, CT-e, NFS-e) para todas as empresas; horários fixos ou pedido de pessoa. */
   searchNotes?: (actor: Actor) => Promise<{ nfe: number; cte: number; nfse: number; waiting: number }>;
   noteSlots?: string[];
+  /** Consulta pública de CNPJ (inclusão de empresa). Nulo = BrasilAPI com CNPJá de reserva. */
+  publicData?: CnpjPublicDataSource;
   /** Endereço público do túnel, ex.: https://iaris.exemplo.com.br. Nulo = só nesta máquina. */
   publicOrigin?: string | null;
   now?: () => Date;
@@ -751,6 +758,31 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
 
+      // POST /api/empresas — incluir empresa pelo CNPJ (abre o Case CLIENT_ONBOARDING).
+      // Consulta pública do CNPJ sempre; SERPRO (cobrado) só se a pessoa marcar.
+      if (req.method === "POST" && url.pathname === "/api/empresas") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req, 4096)) as { cnpj?: string; serpro?: boolean };
+        const cnpj = normalizeCnpj(String(body.cnpj ?? ""));
+        if (!isValidCnpj(cnpj)) return json(res, 400, { erro: "CNPJ inválido" });
+        if (body.serpro && !deps.integra) return json(res, 409, { erro: "Integra Contador não configurado: desmarque a consulta ao SERPRO" });
+        const publicData = deps.publicData ?? new FallbackCnpjSource([new BrasilApiCnpjSource(undefined, 2), new CnpjaOpenSource()], () => undefined);
+        try {
+          const r = await onboardByCnpj(
+            { appPool: deps.appPool, publicData, integra: body.serpro ? deps.integra : null, metering: deps.metering },
+            deps.tenantId,
+            { cnpj, requester: actor.id, origin: "tela" },
+          );
+          await deps.orchestrate?.();
+          json(res, 200, {
+            entityId: r.entityId, caseId: r.caseId, status: r.caseStatus, created: r.entityCreated,
+            name: r.profile?.legalName ?? null, pending: r.pending.map((p) => ({ type: p.type, source: p.responsible_source, info: p.required_information })),
+          });
+        } catch (err) {
+          json(res, 502, { erro: `Inclusão não concluída: ${(err as Error).message}. O processo continua aberto; tente de novo para retomar.` });
+        }
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/empresas") {
         json(res, 200, { entities: await withTenant(deps.appPool, deps.tenantId, (tx) => entitiesList(tx)) });
         return;

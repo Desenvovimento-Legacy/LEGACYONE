@@ -4,7 +4,9 @@ import { FakeIntegraContador } from "../src/integrations/integra-contador/fake.j
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
 import { createWebServer } from "../src/web/server.js";
-import { CNPJ_MATRIZ } from "./fixtures/cnpj.js";
+import { brasilApiResponse, CNPJ_MATRIZ, CNPJ_PRESUMIDO } from "./fixtures/cnpj.js";
+import { normalizeBrasilApi } from "../src/integrations/cnpj-public/brasilapi.js";
+import type { CnpjPublicDataSource } from "../src/integrations/cnpj-public/types.js";
 import { AUTH_KEY, session } from "./auth-helpers.js";
 import { appPool, newEntity, newTenant } from "./helpers.js";
 
@@ -15,7 +17,7 @@ afterEach(async () => {
   close = null;
 });
 
-async function start(dailyLimit = 20) {
+async function start(dailyLimit = 20, publicData?: CnpjPublicDataSource) {
   const t = await newTenant();
   const { entityId } = await newEntity(t, CNPJ_MATRIZ);
   await withTenant(appPool, t, (tx) =>
@@ -40,6 +42,7 @@ async function start(dailyLimit = 20) {
     metering: { provider: "serpro", dailyLimit },
     port: 0,
     authKey: AUTH_KEY,
+    publicData,
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -97,5 +100,33 @@ describe("tela local: abrir não consulta; só o botão Buscar consulta", () => 
     });
     expect(r.status).toBe(429);
     expect(integra.calls).toEqual([]);
+  });
+});
+
+describe("incluir empresa pela tela", () => {
+  it("inclui pelo CNPJ com a base pública, sem SERPRO se não marcado, e manda serviços/início para a Fila", async () => {
+    let lookups = 0;
+    const source: CnpjPublicDataSource = {
+      name: "brasilapi-cnpj",
+      async lookup(cnpj) {
+        lookups++;
+        const raw = brasilApiResponse({ cnpj, razao_social: "NOVA EMPRESA TESTE LTDA" });
+        return { data: normalizeBrasilApi(raw), raw, source: "brasilapi-cnpj", fetchedAt: new Date("2026-10-08T12:00:00Z") };
+      },
+    };
+    const { base, integra, fetch } = await start(20, source);
+    const url = `${base}/api/empresas`;
+    const h = { "X-IARIS-Acao": "confirmar", "content-type": "application/json" };
+    expect((await fetch(url, { method: "POST", body: JSON.stringify({ cnpj: CNPJ_PRESUMIDO }) })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: h, body: JSON.stringify({ cnpj: "12.345.678/0001-00" }) })).status).toBe(400);
+    const r = await fetch(url, { method: "POST", headers: h, body: JSON.stringify({ cnpj: CNPJ_PRESUMIDO, serpro: false }) });
+    const body = await r.json();
+    expect(r.status, JSON.stringify(body)).toBe(200);
+    expect(body).toMatchObject({ created: true, name: "NOVA EMPRESA TESTE LTDA" });
+    expect(body.pending.map((p: { type: string }) => p.type)).toContain("CONTRACTED_SERVICES");
+    expect(integra.calls).toEqual([]);
+    expect(lookups).toBe(1);
+    const list = await (await fetch(`${base}/api/empresas`)).json();
+    expect(list.entities.map((e: { legal_name: string }) => e.legal_name)).toContain("NOVA EMPRESA TESTE LTDA");
   });
 });

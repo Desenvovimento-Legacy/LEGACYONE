@@ -381,7 +381,12 @@ function viewEmpresas() {
     var rows = r.entities.map(function (e) {
       return '<tr class="row" data-goto="#/empresa/' + e.id + '"><td><b>' + esc(e.legal_name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td>' + esc((e.regime || "—").replace("_", " ").toLowerCase()) + '</td><td>' + (e.start ? d(e.start) : '<span class="wr st">a definir</span>') + '</td><td class="num">' + e.open_items + '</td></tr>';
     }).join("");
-    $("view").innerHTML = '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
+    $("view").innerHTML = '<section class="card only-confirmar"><h2>Incluir empresa</h2>' +
+      '<div class="form-row"><label>CNPJ<input id="inc-cnpj" placeholder="00.000.000/0000-00" style="width:190px"></label>' +
+      '<label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="inc-serpro"> Conferir procuração e regime no SERPRO agora (consulta cobrada)</label>' +
+      '<button data-act="incluir">Incluir</button></div>' +
+      '<p class="mut" style="margin:8px 0 0;font-size:12px">A IARIS busca o cadastro na base pública do CNPJ (estabelecimentos, CNAEs, sócios, endereço) e abre a implantação. Em seguida, na Fila humana, você informa os serviços contratados e o mês de início da responsabilidade; daí ela monta os mapas de acesso e de obrigações e a lista de documentos.</p></section>' +
+      '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
       '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Os .pfx ficam em C:\\\\IARIS\\\\cofre\\\\clientes (pode ser em subpasta, com o CNPJ no nome do arquivo) e a senha no segredos.env (CERT_CNPJ_PASSWORD). A IARIS confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
       '<button data-act="certs">Conferir certificados no cofre</button><div id="certs" style="margin-top:12px"></div></section>';
   });
@@ -1155,6 +1160,18 @@ document.addEventListener("click", function (ev) {
       var ui = window._users[Number(b.dataset.i)];
       if (!window.confirm("Gerar um convite novo para " + ui.name + "? O link anterior deixa de valer.")) return;
       invite({ name: ui.name, email: ui.email, role: ui.role || "LEITURA" });
+    }
+    if (b.dataset.act === "incluir") {
+      var cn = $("inc-cnpj").value.trim();
+      if (!cn) { toast("Informe o CNPJ."); return; }
+      var srp = $("inc-serpro").checked;
+      if (srp && !window.confirm("A conferência no SERPRO é consulta cobrada (conta no limite diário). Confirmar?")) return;
+      b.disabled = true; b.textContent = "Incluindo…";
+      post("/api/empresas", "confirmar", { cnpj: cn, serpro: srp }).then(function (r) {
+        var nPend = r.pending.length;
+        toast((r.name || "Empresa") + (r.created ? " incluída." : " já estava cadastrada.") + (nPend ? " " + nPend + " pendência(s); informe serviços e início na Fila humana." : ""));
+        location.hash = nPend ? "#/fila" : "#/empresa/" + r.entityId;
+      }).catch(function (err) { toast(err.message); b.disabled = false; b.textContent = "Incluir"; });
     }
     if (b.dataset.act === "certs") {
       b.disabled = true;
