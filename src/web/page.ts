@@ -239,6 +239,9 @@ function queueItemHtml(q) {
   if (q.kind === "ciencia") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="warn" data-act="ciencia" data-id="' + q.id + '">Aprovar ciência</button><a class="nav" style="display:inline-flex" href="#/documentos/' + q.id + '">Ver as notas</a></div></div>';
   }
+  if (q.kind === "withholding") {
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver retenções da empresa</a></div></div>';
+  }
   if (q.kind === "guide") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver guias da empresa</a></div></div>';
   }
@@ -410,6 +413,7 @@ function viewEmpresa(id) {
         '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="ret"><h2>Retenções nas NFS-e tomadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
@@ -419,7 +423,58 @@ function viewEmpresa(id) {
     loadConferencia(id);
     loadSimples(id);
     loadGuias(id);
+    loadRetencoes(id);
   });
+}
+
+var WS = {
+  PAGO: '<span class="st ok">recolhido</span>',
+  PAGO_EM_ATRASO: '<span class="st wr">recolhido após o vencimento</span>',
+  PAGO_DIVERGENTE: '<span class="st bad">recolhido valor diferente</span>',
+  PAGO_SEM_NOTA: '<span class="mut">recolhido · sem NFS-e com retenção</span>',
+  A_VENCER: '<span class="st">a vencer</span>',
+  ABAIXO_DO_MINIMO: '<span class="mut">abaixo de R$ 10,00 · acumula</span>',
+  PRAZO_A_APROVAR: '<a class="st wr" href="#/regras">prazo a aprovar</a>',
+  PAGAMENTO_NAO_IDENTIFICADO: '<span class="st bad">recolhimento ainda não identificado</span>'
+};
+var SNP = { "1": "não optante", "2": "MEI", "3": "Simples" };
+function loadRetencoes(id) {
+  return getJson("/api/empresa/" + id + "/retencoes").then(function (r) {
+    var box = $("ret"); if (!box) return;
+    if (!r.taken.length && !r.rows.length) { box.innerHTML = '<h2>Retenções nas NFS-e tomadas</h2><div class="empty">Nenhuma NFS-e tomada lida ainda.</div>'; return; }
+    var fed = r.rows.map(function (w) {
+      var pay = w.payment ? (w.payment.collectedOn ? d(w.payment.collectedOn) : "") + '<div class="mut" style="font-size:11px">código ' + esc(w.payment.codes.join(", ")) + '</div>' : '<span class="mut">—</span>';
+      var dif = w.difference && Number(w.difference) !== 0 ? '<div class="bad" style="font-size:11px">diferença ' + brl(w.difference) + '</div>' : '';
+      return '<tr><td>' + mm(w.competence) + (w.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td>' + (w.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL") + '</td><td class="num">' + brl(w.withheld) + '<div class="mut" style="font-size:11px">' + w.notes + ' nota(s)</div></td><td class="num">' + (w.paid !== null ? brl(w.paid) : '<span class="mut">—</span>') + dif + '</td><td>' + (w.due ? d(w.due) : '<span class="mut">—</span>') + (w.dueReason ? '<div class="mut" style="font-size:11px">' + esc(w.dueReason) + '</div>' : '') + '</td><td>' + pay + '</td><td>' + (WS[w.status] || esc(w.status)) + '</td></tr>';
+    }).join("");
+    var tk = r.taken.slice(0, 13).map(function (m) {
+      var iss = Number(m.iss) ? brl(m.iss) + '<div class="mut" style="font-size:11px">' + m.issByCity.map(function (c) { return esc(c.city); }).join(", ") + '</div>' : '<span class="mut">—</span>';
+      var flags = (m.divergent ? '<div class="wr" style="font-size:11px">' + m.divergent + ' nota(s) com total retido diferente da soma</div>' : '') + (m.fromSimplesProvider ? '<div class="wr" style="font-size:11px">' + m.fromSimplesProvider + ' de prestador do Simples com IR/CSRF retido</div>' : '');
+      var link = m.withRetention || m.divergent ? '<a href="#" data-ret="' + m.competence.slice(0, 7) + '">ver notas</a>' : '';
+      return '<tr><td>' + mm(m.competence) + '</td><td class="num">' + m.notes + '</td><td class="num">' + brl(m.services) + '</td><td class="num">' + (Number(m.irrf) ? brl(m.irrf) : '—') + '</td><td class="num">' + (Number(m.csrf) ? brl(m.csrf) : '—') + '</td><td class="num">' + (Number(m.cp) ? brl(m.cp) : '—') + '</td><td class="num">' + iss + '</td><td>' + flags + link + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>Retenções nas NFS-e tomadas</h2>' +
+      '<h3 style="font-size:13px;margin:6px 0">IRRF e PIS/COFINS/CSLL retidos × DARF pago</h3>' +
+      '<div class="scroll"><table><thead><tr><th>Competência</th><th>Tributo</th><th class="num">Retido nas notas</th><th class="num">Recolhido</th><th>Vencimento</th><th>Pagamento</th><th>Situação</th></tr></thead><tbody>' + (fed || '<tr><td colspan="7" class="empty">Nenhuma retenção federal nas notas tomadas.</td></tr>') + '</tbody></table></div>' +
+      '<h3 style="font-size:13px;margin:12px 0 6px">Notas tomadas por mês</h3>' +
+      '<div class="scroll"><table><thead><tr><th>Mês</th><th class="num">Notas</th><th class="num">Serviços</th><th class="num">IRRF</th><th class="num">PIS/COFINS/CSLL</th><th class="num">INSS</th><th class="num">ISS retido</th><th></th></tr></thead><tbody>' + tk + '</tbody></table></div>' +
+      '<div id="ret-notas"></div>' +
+      '<div class="empty">Competência pelo mês de emissão da nota (o recolhimento segue a data do pagamento ao prestador; com o extrato, a IARIS passa a usar a data do pagamento). Só NFS-e do Emissor Nacional. ISS retido: guia municipal ainda sem fonte. Pagamentos até ' + (r.dataUntil ? d(r.dataUntil) : "—") + '.</div>';
+    box.querySelectorAll("[data-ret]").forEach(function (a) {
+      a.addEventListener("click", function (ev) { ev.preventDefault(); loadRetNotas(id, a.getAttribute("data-ret")); });
+    });
+  }).catch(function (err) { toast(err.message); });
+}
+function loadRetNotas(id, comp) {
+  return getJson("/api/empresa/" + id + "/retencoes?competencia=" + comp).then(function (r) {
+    var rows = r.notes.map(function (n) {
+      var ck = n.check === "OK" ? '' : '<div class="' + (n.check === "DIVERGENTE" ? "bad" : "wr") + '" style="font-size:11px">' + (n.check === "DIVERGENTE" ? "total diferente da soma" : "nota sem total retido") + '</div>';
+      var obs = (n.notes || []).map(function (x) { return '<div class="mut" style="font-size:11px">' + esc(x) + '</div>'; }).join("");
+      return '<tr><td class="mono">' + esc(n.number || "—") + '<div class="mut" style="font-size:11px">' + (n.issuedAt ? d(n.issuedAt.slice(0, 10)) : "") + '</div></td><td>' + esc(n.provider || n.providerDoc || "—") + '<div class="mut" style="font-size:11px">' + esc(SNP[n.providerSimples] || "") + '</div></td><td class="num">' + brl(n.service) + '</td><td class="num">' + brl(n.irrf) + '</td><td class="num">' + brl(n.csrf) + '</td><td class="num">' + brl(n.cp) + '</td><td class="num">' + brl(n.iss) + '</td><td class="num">' + (n.totalRead !== null ? brl(n.totalRead) : '—') + ck + obs + '</td></tr>';
+    }).join("");
+    var box = $("ret-notas"); if (!box) return;
+    box.innerHTML = '<h3 style="font-size:13px;margin:12px 0 6px">Notas com retenção · ' + comp.slice(5, 7) + '/' + comp.slice(0, 4) + '</h3><div class="scroll"><table><thead><tr><th>Nota</th><th>Prestador</th><th class="num">Serviço</th><th class="num">IRRF</th><th class="num">PIS/COFINS/CSLL</th><th class="num">INSS</th><th class="num">ISS retido</th><th class="num">Total na nota</th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma.</td></tr>') + '</tbody></table></div>';
+  }).catch(function (err) { toast(err.message); });
 }
 
 var GS = {

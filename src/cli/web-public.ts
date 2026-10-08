@@ -9,7 +9,9 @@ import { isMain } from "../shared/is-main.js";
  * login com senha e autenticador; a tela segue escutando só em 127.0.0.1.
  *
  * O endereço muda a cada vez que este comando é iniciado: convites gerados
- * antes deixam de abrir. Uso: pnpm web:publico
+ * antes deixam de abrir. Se só o servidor da tela fechar (atualização do
+ * sistema), ele é reaberto sozinho e o endereço continua o mesmo.
+ * Uso: pnpm web:publico
  */
 
 const CANDIDATES = [
@@ -25,7 +27,9 @@ function cloudflaredPath(): string {
 if (isMain(import.meta.url)) {
   const port = process.env.IARIS_WEB_PORT ?? "3100";
   const children: ChildProcess[] = [];
+  let stopping = false;
   const stop = () => {
+    stopping = true;
     for (const c of children) c.kill();
     process.exit(0);
   };
@@ -48,19 +52,36 @@ if (isMain(import.meta.url)) {
     console.log(`\nEndereço público: ${origin}`);
     console.log("Mande convites pela tela Usuários e acessos: o link já sai com este endereço.");
     console.log("Ao fechar esta janela, o endereço deixa de funcionar.\n");
-    const web = spawn(process.execPath, ["--import", "tsx", "--env-file-if-exists=.env", "src/web/server.ts"], {
-      stdio: "inherit",
-      env: { ...process.env, IARIS_PUBLIC_ORIGIN: origin },
-    });
-    children.push(web);
-    web.on("exit", (code) => {
-      tunnel.kill();
-      process.exit(code ?? 0);
-    });
+    // Servidor da tela: se fechar, reabre com o código atual mantendo o túnel (e o endereço).
+    // Três quedas seguidas em menos de 20 s cada: para tudo, para não ficar em laço.
+    let quickFails = 0;
+    const startWeb = () => {
+      const startedAt = Date.now();
+      const web = spawn(process.execPath, ["--import", "tsx", "--env-file-if-exists=.env", "src/web/server.ts"], {
+        stdio: "inherit",
+        env: { ...process.env, IARIS_PUBLIC_ORIGIN: origin },
+      });
+      children.push(web);
+      web.on("exit", (code) => {
+        children.splice(children.indexOf(web), 1);
+        if (stopping) return;
+        quickFails = Date.now() - startedAt < 20_000 ? quickFails + 1 : 0;
+        if (quickFails >= 3) {
+          console.error(`✗ O servidor da tela fechou 3 vezes seguidas (código ${code}). Fechando o túnel.`);
+          tunnel.kill();
+          process.exit(code ?? 1);
+        }
+        console.log(`Servidor da tela fechou (código ${code}); reabrindo com o mesmo endereço…`);
+        setTimeout(startWeb, 2000);
+      });
+    };
+    startWeb();
   };
   tunnel.stdout?.on("data", onOutput);
   tunnel.stderr?.on("data", onOutput);
   tunnel.on("exit", (code) => {
+    if (stopping) return;
+    stopping = true;
     if (!started) console.error(`✗ Não consegui abrir o túnel (cloudflared saiu com código ${code}). Confira a internet e se o cloudflared está instalado.`);
     else console.error("✗ O túnel caiu: o endereço público parou. Rode pnpm web:publico de novo.");
     for (const c of children) c.kill();

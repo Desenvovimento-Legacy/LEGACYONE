@@ -134,7 +134,7 @@ describe("tela: Central e Fila humana", () => {
     // Regras propostas: aprovar completa o mapa de obrigações da empresa.
     expect((await fetch(`${base}/api/regras/aprovar`, { method: "POST" })).status).toBe(403);
     const rules = await (await fetch(`${base}/api/regras/aprovar`, { method: "POST", headers: { "X-IARIS-Acao": "aprovar" } })).json();
-    expect(rules.approved).toBe(6);
+    expect(rules.approved).toBe(7);
     expect(rules.obligationsAdded).toBeGreaterThan(0);
     const det = await (await fetch(`${base}/api/empresa/${c2.human[0].entityId ?? approveItem.entityId}`)).json();
     expect(det.obligations.map((o: { code: string }) => o.code)).toEqual(expect.arrayContaining(["PGDAS_D", "DEFIS"]));

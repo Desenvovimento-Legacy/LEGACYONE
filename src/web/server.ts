@@ -8,6 +8,7 @@ import { competenceDetail, pgdasDeadline } from "../modules/federal/report.js";
 import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "../modules/federal/declared-revenue.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
+import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
@@ -467,6 +468,18 @@ export function createWebServer(deps: WebDeps) {
         json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => guidesOverview(tx, parts[2]!, today)));
         return;
       }
+      // GET /api/empresa/:id/retencoes[?competencia=AAAA-MM] — retenções das NFS-e tomadas × DARF (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "retencoes") {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        const comp = url.searchParams.get("competencia");
+        if (comp !== null) {
+          if (!/^\d{4}-\d{2}$/.test(comp)) return json(res, 400, { erro: "Competência inválida (AAAA-MM)" });
+          json(res, 200, { notes: await withTenant(deps.appPool, deps.tenantId, (tx) => takenNotes(tx, parts[2]!, `${comp}-01`)) });
+          return;
+        }
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => withholdingsOverview(tx, parts[2]!, today)));
+        return;
+      }
       // GET /api/empresa/:id/simples — cálculos do motor do Simples (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "simples") {
         json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => simplesOverview(tx, parts[2]!)) });
@@ -793,6 +806,11 @@ if (isMain(import.meta.url)) {
       for (const { id } of ids.rows) {
         const r = await refreshGuides(app, tenant.id, id, today);
         if (r.changed) console.log(`[guias] ${id.slice(0, 8)}: ${r.changed} guia(s) mudaram de situação`);
+        // Agente Fiscal: lê tributos de NFS-e ainda não lidas e refaz a situação das retenções (prazo passa).
+        const t = await readEntityNfseTaxes(app, tenant.id, id);
+        if (t.read) console.log(`[fiscal] ${id.slice(0, 8)}: tributos de ${t.read} NFS-e lidos (${t.divergent} a conferir)`);
+        const w = await refreshWithholdings(app, tenant.id, id, today);
+        if (w.changed) console.log(`[fiscal] ${id.slice(0, 8)}: ${w.changed} retenção(ões) mudaram de situação`);
       }
     } catch (err) {
       console.error(`[guias] falha: ${(err as Error).message}`);

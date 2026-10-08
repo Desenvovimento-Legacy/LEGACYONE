@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { guidesNeedingAttention } from "../modules/tax/guides.js";
+import { withholdingsNeedingAttention } from "../modules/fiscal/withholdings.js";
 import { EVENT_LABEL, LINKS } from "../modules/orchestration/links.js";
 import { MAX_ATTEMPTS } from "../platform/orchestrator/orchestrator.js";
 import { agentName, DEPARTMENTS, PIPELINE_STAGES, PROCESSES, SHARED_AGENTS, type AgentInfo } from "../platform/agents/catalog.js";
@@ -124,7 +125,22 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       const N: Record<string, string> = { NFE: "NF-e", NFCE: "NFC-e", CTE: "CT-e", NFSE: "NFS-e", EVENTO_NFE: "evento(s) de NF-e", EVENTO_CTE: "evento(s) de CT-e", OUTRO: "outro(s)" };
       return `XML recebidos por ${p.source === "PASTA" ? "pasta" : "upload"}: ${Object.entries(t).map(([k, v]) => `${v} ${N[k] ?? k}`).join(", ")}`;
     }
-        case "NFE_MANIFESTATION_APPROVED":
+    case "NFSE_TAXES_READ": {
+      const brl = (v: unknown) => Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      return `Tributos de ${p.documents} NFS-e lidos${Number(p.federal_withheld_taken) ? ` · ${brl(p.federal_withheld_taken)} de IRRF e PIS/COFINS/CSLL retidos nas tomadas` : ""}${p.divergent ? ` · ${p.divergent} a conferir` : ""}`;
+    }
+    case "WITHHOLDING_STATUS_CHANGED": {
+      const pa = `${String(p.competence).slice(5, 7)}/${String(p.competence).slice(0, 4)}`;
+      const WS: Record<string, string> = {
+        PRAZO_A_APROVAR: "prazo a aprovar", A_VENCER: "a vencer", ABAIXO_DO_MINIMO: "abaixo de R$ 10,00 (acumula)",
+        PAGAMENTO_NAO_IDENTIFICADO: "recolhimento ainda não identificado", PAGO: "recolhido", PAGO_EM_ATRASO: "recolhido após o vencimento",
+        PAGO_DIVERGENTE: "recolhido valor diferente do retido", PAGO_SEM_NOTA: "recolhido sem NFS-e com retenção",
+      };
+      return `${p.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL"} retido ${pa}: ${WS[String(p.to)] ?? String(p.to)}`;
+    }
+    case "OBLIGATION_RULES_APPROVED":
+      return `Regras de obrigações aprovadas: ${(p.rules as string[]).join(", ")}`;
+    case "NFE_MANIFESTATION_APPROVED":
       return `Ciência da operação aprovada para ${(p.access_keys as string[]).length} NF-e`;
     default:
       return type;
@@ -319,6 +335,26 @@ export async function humanQueue(tx: PoolClient) {
       since: g.created_at.toISOString(),
     };
   });
+  const brlFmt = (v: string | null) => Number(v ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const withholdings = (await withholdingsNeedingAttention(tx)).map((w) => {
+    const pa = `${w.competence.slice(5, 7)}/${w.competence.slice(0, 4)}`;
+    const name = w.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL";
+    return {
+      kind: "withholding",
+      id: `${w.entity_id}:${w.competence}:${w.tax}`,
+      type: w.status === "PAGO_DIVERGENTE" ? "RETENCAO_DIVERGENTE" : "RETENCAO_PAGAMENTO",
+      entityId: w.entity_id,
+      entity: w.entity,
+      caseId: null,
+      title: w.status === "PAGO_DIVERGENTE"
+        ? `${name} retido ${pa}: recolhido ${brlFmt(w.paid)}, retido nas notas tomadas ${brlFmt(w.withheld)}`
+        : `${name} retido ${pa} (${brlFmt(w.withheld)}): recolhimento ainda não identificado (vencimento ${w.due_on ? fmtDate(w.due_on) : "—"})`,
+      impact: w.status === "PAGO_DIVERGENTE"
+        ? "Pode haver nota fora do Emissor Nacional ou retenção de outra competência no mesmo DARF. Confira as notas da competência."
+        : "Retido nas NFS-e tomadas e ainda não visto nos pagamentos federais (até a última consulta). Confirme com o cliente ou atualize os pagamentos.",
+      since: w.created_at.toISOString(),
+    };
+  });
   // Vínculo que falhou MAX_ATTEMPTS vezes no mesmo evento espera uma pessoa.
   const failed = await tx.query<{ link_id: string; agent: string; event_type: string; entity_id: string | null; entity: string | null; error: string; at: Date }>(
     `SELECT DISTINCT ON (r.link_id, r.event_id) r.link_id, r.agent, r.event_type, r.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, r.error, r.finished_at AS at
@@ -348,6 +384,7 @@ export async function humanQueue(tx: PoolClient) {
     ...ciencia,
     ...links,
     ...guides,
+    ...withholdings,
     ...pend.rows.map((p) => ({
       kind: p.case_id && divergences.has(p.case_id) ? "divergence" : p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       divergence: p.case_id ? (divergences.get(p.case_id) ?? null) : null,

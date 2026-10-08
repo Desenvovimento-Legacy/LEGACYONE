@@ -2,6 +2,9 @@ import type { Link } from "../../platform/orchestrator/orchestrator.js";
 import type { NfseSyncDeps } from "../documents/nfse-sync.js";
 import { syncEntityNfse } from "../documents/nfse-sync.js";
 import { refreshRevenueExceptions } from "../federal/revenue-exceptions.js";
+import { readEntityNfseTaxes, refreshWithholdings } from "../fiscal/withholdings.js";
+import { buildObligationMap, entityFacts } from "../onboarding/plan.js";
+import { withTenant } from "../../shared/db/tenant-tx.js";
 import { refreshGuides } from "../tax/guides.js";
 import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
 
@@ -66,6 +69,44 @@ export const LINKS: Link<LinkDeps>[] = [
     run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await refreshGuides(pool, tenantId, entityId!, today(deps))) }),
   },
   {
+    id: "notas-tributos",
+    on: ["NFSE_BATCH_RECEIVED"],
+    agent: "fiscal",
+    does: "Lê os tributos e as retenções de cada NFS-e nova",
+    run: async ({ pool, tenantId, entityId }) => {
+      const r = await readEntityNfseTaxes(pool, tenantId, entityId!);
+      return { documents: r.read, divergent: r.divergent };
+    },
+  },
+  {
+    id: "retencoes-recolhimento",
+    on: ["NFSE_TAXES_READ", "FEDERAL_PAYMENTS_SYNCED", "CONTRACTED_SERVICES_DEFINED"],
+    agent: "fiscal",
+    does: "Confere o IRRF e o PIS/COFINS/CSLL retidos nas notas tomadas com o DARF pago",
+    run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await refreshWithholdings(pool, tenantId, entityId!, today(deps))) }),
+  },
+  {
+    id: "retencoes-obrigacoes",
+    on: ["NFSE_TAXES_READ"],
+    agent: "obligations",
+    does: "Inclui o recolhimento das retenções no mapa de obrigações quando a empresa passa a reter",
+    run: async ({ pool, tenantId, entityId }) =>
+      withTenant(pool, tenantId, async (tx) => ({ ...(await buildObligationMap(tx, await entityFacts(tx, entityId!))) })),
+  },
+  {
+    id: "regras-obrigacoes",
+    on: ["OBLIGATION_RULES_APPROVED"],
+    agent: "fiscal",
+    does: "Refaz a situação das retenções com o prazo aprovado",
+    perEntity: false,
+    run: async ({ pool, tenantId, deps }) => {
+      const ents = await withTenant(pool, tenantId, (tx) => tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM nfse_tax WHERE role = 'TOMADA'"));
+      let changed = 0;
+      for (const e of ents.rows) changed += (await refreshWithholdings(pool, tenantId, e.id, today(deps))).changed;
+      return { changed };
+    },
+  },
+  {
     id: "certificado-notas",
     on: ["DIGITAL_CERTIFICATE_REGISTERED"],
     agent: "docs",
@@ -87,4 +128,6 @@ export const EVENT_LABEL: Record<string, string> = {
   SIMPLES_RULES_APPROVED: "Tabelas do Simples aprovadas",
   CONTRACTED_SERVICES_DEFINED: "Serviços e início da responsabilidade definidos",
   DIGITAL_CERTIFICATE_REGISTERED: "Certificado A1 registrado no cofre",
+  NFSE_TAXES_READ: "Tributos das NFS-e lidos",
+  OBLIGATION_RULES_APPROVED: "Regras de obrigações aprovadas",
 };

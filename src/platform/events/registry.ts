@@ -226,6 +226,34 @@ export const EventContracts = {
       source: z.enum(["UPLOAD", "PASTA"]),
     }),
   },
+  NFSE_TAXES_READ: {
+    1: z.object({
+      entity_id: z.uuid(),
+      documents: z.number().int(),
+      divergent: z.number().int(),
+      competences: z.array(z.iso.date()),
+      federal_withheld_taken: z.string(),
+      parser: z.string(),
+    }),
+  },
+  WITHHOLDING_STATUS_CHANGED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      tax: z.enum(["IRRF", "CSRF"]),
+      from: z.string().nullable(),
+      to: z.string(),
+      withheld: z.string(),
+      paid: z.string().nullable(),
+      due: z.iso.date().nullable(),
+    }),
+  },
+  OBLIGATION_RULES_APPROVED: {
+    1: z.object({
+      rules: z.array(z.string()).min(1),
+      approved_by: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

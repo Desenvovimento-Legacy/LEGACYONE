@@ -34,6 +34,8 @@ export interface EntityFacts {
   employees: boolean;
   /** Alguma atividade (CNAE) típica de serviço sujeito ao ISS. */
   serviceActivity: boolean;
+  /** Reteve IRRF ou PIS/COFINS/CSLL em NFS-e tomada nos últimos 12 meses. */
+  withholdingTaken: boolean;
   hasClientCertificate: boolean;
 }
 
@@ -65,6 +67,11 @@ export async function entityFacts(tx: PoolClient, entityId: string, on = today()
     [entityId, on],
   );
   const codes = new Set(pay.rows.map((r) => r.code));
+  const wt = await tx.query<{ yes: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM nfse_tax t WHERE t.entity_id = $1 AND t.role = 'TOMADA' AND (t.irrf > 0 OR t.csrf > 0)
+                       AND t.competence >= date_trunc('month', $2::date - interval '12 months')) AS yes`,
+    [entityId, on],
+  );
   const cnaes = await tx.query<{ cnae: string }>(
     `SELECT a.cnae FROM activity_history a JOIN establishment s ON s.id = a.establishment_id
       WHERE s.entity_id = $1 AND a.valid_to IS NULL`,
@@ -79,6 +86,7 @@ export async function entityFacts(tx: PoolClient, entityId: string, on = today()
     remuneration: codes.has("1082") || codes.has("1099"),
     employees: codes.has("1082"),
     serviceActivity: cnaes.rows.some((r) => isServiceCnae(r.cnae)),
+    withholdingTaken: Boolean(wt.rows[0]?.yes),
     hasClientCertificate: Boolean(e.rows[0]?.cert),
   };
 }
@@ -102,6 +110,7 @@ export function ruleApplies(rule: Pick<RuleRow, "conditions">, f: EntityFacts): 
     remuneration: f.remuneration,
     employees: f.employees,
     service_activity: f.serviceActivity,
+    withholding_taken: f.withholdingTaken,
   };
   for (const r of c.requires ?? []) if (!req[r]) return null;
   return {
@@ -267,7 +276,7 @@ export async function buildImplementationPlan(tx: PoolClient, entityId: string, 
       obligations_added: result.obligationsAdded,
       rules_pending_approval: result.rulesPendingApproval,
       migration_case_id: result.migrationCaseId,
-      facts: { regime: f.regime, services: f.services, remuneration: f.remuneration, employees: f.employees, service_activity: f.serviceActivity },
+      facts: { regime: f.regime, services: f.services, remuneration: f.remuneration, employees: f.employees, service_activity: f.serviceActivity, withholding_taken: f.withholdingTaken },
     },
   });
   await audit(tx, {
@@ -309,6 +318,16 @@ export async function approveObligationRules(tx: PoolClient, actor: Actor): Prom
   );
   let added = 0;
   for (const e of ents.rows) added += (await buildObligationMap(tx, await entityFacts(tx, e.id))).added;
+  if (pending.rows.length) {
+    const rules = pending.rows.map((r) => `${r.code}@${r.version}`).sort();
+    await appendEvent(tx, {
+      type: "OBLIGATION_RULES_APPROVED",
+      schemaVersion: 1,
+      producer: { kind: "user", name: actor.id, version: "1" },
+      idempotencyKey: `regras:${createHash("sha256").update(pending.rows.map((r) => r.id).sort().join(",")).digest("hex").slice(0, 32)}`,
+      payload: { rules, approved_by: actor.id },
+    });
+  }
   return { approved: pending.rows.length, obligationsAdded: added };
 }
 

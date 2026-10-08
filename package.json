@@ -25,6 +25,7 @@
     "federal:reparse": "tsx --env-file-if-exists=.env src/cli/pgdas-reparse.ts",
     "simples:simular": "tsx --env-file-if-exists=.env src/cli/simples-simulate.ts",
     "web:publico": "tsx src/cli/web-public.ts",
+    "fiscal:retencoes": "tsx --env-file-if-exists=.env src/cli/fiscal-retencoes.ts",
     "auth:init": "tsx --env-file-if-exists=.env src/cli/users.ts init",
     "user:invite": "tsx --env-file-if-exists=.env src/cli/users.ts invite",
     "user:revoke": "tsx --env-file-if-exists=.env src/cli/users.ts revoke",
