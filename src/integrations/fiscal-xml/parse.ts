@@ -4,10 +4,14 @@ import { money } from "../sefaz/nfe-parse.js";
 
 /**
  * Identificação determinística de XML fiscal (sem IA): NF-e (mod. 55), NFC-e
- * (mod. 65), CT-e (mod. 57/67), NFS-e do padrão nacional e eventos de NF-e e
+ * (mod. 65), CT-e (mod. 57), CT-e OS (mod. 67: transporte de pessoas, valores e
+ * excesso de bagagem), NFS-e do padrão nacional e eventos de NF-e e
  * CT-e. Lê só o que está no XML; não confere assinatura (a evidência é o
  * próprio arquivo guardado com hash).
  */
+
+/** Versão do leitor: muda quando passa a reconhecer documento novo. */
+export const FISCAL_XML_PARSER = "fiscal-xml-2";
 
 export type FiscalDocType = "NFE" | "NFCE" | "CTE" | "NFSE" | "EVENTO_NFE" | "EVENTO_CTE" | "OUTRO";
 export type FiscalStatus = "AUTORIZADO" | "CANCELADO" | "DENEGADO" | "SEM_PROTOCOLO";
@@ -136,6 +140,31 @@ export function parseFiscalXml(xml: string): FiscalDoc | null {
       total: money(obj(inf.vPrest).vTPrest),
       status: protStatus(str(prot.cStat)),
       parties: uniq([docOf(emit), docOf(rem), docOf(dest), docOf(exped), docOf(receb), docOf(toma4)]),
+    };
+  }
+
+  // ---------------------------------------------------------------- CT-e OS (modelo 67)
+  const osNode = root.cteOSProc ? obj(obj(root.cteOSProc).CTeOS) : root.CTeOS ? obj(root.CTeOS) : null;
+  if (osNode) {
+    const inf = obj(osNode.infCte);
+    const ide = obj(inf.ide);
+    const emit = obj(inf.emit);
+    const toma = obj(inf.toma);
+    const prot = obj(obj(obj(root.cteOSProc).protCTe).infProt);
+    const aut = inf.autXML === undefined ? [] : Array.isArray(inf.autXML) ? inf.autXML : [inf.autXML];
+    return {
+      ...empty("CTE"),
+      accessKey: key(inf["@_Id"], "CTe") ?? key(prot.chCTe, ""),
+      number: str(ide.nCT),
+      issuerDoc: docOf(emit),
+      issuerName: str(emit.xNome),
+      recipientDoc: docOf(toma),
+      recipientName: str(toma.xNome),
+      takerDoc: docOf(toma),
+      issuedAt: str(ide.dhEmi),
+      total: money(obj(inf.vPrest).vTPrest),
+      status: protStatus(str(prot.cStat)),
+      parties: uniq([docOf(emit), docOf(toma), ...aut.map((a) => docOf(a))]),
     };
   }
 

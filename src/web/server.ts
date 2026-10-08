@@ -20,7 +20,7 @@ import { isMain } from "../shared/is-main.js";
 import { openSecretsFile, type SecretStore } from "../shared/secrets/secrets-file.js";
 import { clientCertificatesDir, clientPasswordKey, loadClientCertificate, syncClientCertificates } from "../platform/identity/client-certificates.js";
 import { CteDistribution, SefazDistribution } from "../integrations/sefaz/dist-dfe.js";
-import { fiscalXmlList, ingestFiles, scanInbox } from "../modules/documents/xml-intake.js";
+import { fiscalXmlList, ingestFiles, rereadUnrecognized, scanInbox } from "../modules/documents/xml-intake.js";
 import { dirname, join } from "node:path";
 import { setStartingNsu, syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
 import { approveCiencia, dfeStatus, documentsList } from "../modules/documents/documents.js";
@@ -812,6 +812,9 @@ if (isMain(import.meta.url)) {
         const w = await refreshWithholdings(app, tenant.id, id, today);
         if (w.changed) console.log(`[fiscal] ${id.slice(0, 8)}: ${w.changed} retenção(ões) mudaram de situação`);
       }
+      // Agente Documentos: relê XML antes não reconhecidos quando o leitor ganha versão nova.
+      const rr = await rereadUnrecognized(app, tenant.id, { kind: "AGENT", id: "docs" });
+      if (rr.recognized) console.log(`[docs] ${rr.recognized} XML antes não reconhecido(s) agora lido(s)`);
     } catch (err) {
       console.error(`[guias] falha: ${(err as Error).message}`);
     }

@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { parseFiscalXml, roleOf } from "../src/integrations/fiscal-xml/parse.js";
 import { cteDistNsuEnvelope, parseDistResponse, type DfeDistribution, type DistResult } from "../src/integrations/sefaz/dist-dfe.js";
 import { syncEntityDfe } from "../src/modules/documents/dfe-sync.js";
-import { fiscalXmlList, ingestFiles, scanInbox } from "../src/modules/documents/xml-intake.js";
+import { fiscalXmlList, ingestFiles, rereadUnrecognized, scanInbox } from "../src/modules/documents/xml-intake.js";
+import { createHash } from "node:crypto";
 import type { Actor } from "../src/shared/actor.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
@@ -24,6 +25,8 @@ const nfce = (n: string, v: string) =>
 const nfeCompra = `<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe><infNFe Id="NFe${K_NFE}"><ide><mod>55</mod><nNF>9999</nNF><dhEmi>2026-09-10T09:00:00-03:00</dhEmi></ide><emit><CNPJ>98765432000110</CNPJ><xNome>FORNECEDOR SA</xNome></emit><dest><CNPJ>${CNPJ_MATRIZ}</CNPJ><xNome>LANCHONETE TESTE</xNome></dest><total><ICMSTot><vNF>1200.00</vNF></ICMSTot></total></infNFe></NFe><protNFe><infProt><cStat>100</cStat></infProt></protNFe></nfeProc>`;
 const cancel = `<procEventoNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00"><evento><infEvento><CNPJ>${CNPJ_MATRIZ}</CNPJ><chNFe>${K_NFCE.slice(0, 34)}0000000001</chNFe><dhEvento>2026-09-15T12:30:00-03:00</dhEvento><tpEvento>110111</tpEvento></infEvento></evento><retEvento><infEvento><cStat>135</cStat></infEvento></retEvento></procEventoNFe>`;
 const cte = `<cteProc xmlns="http://www.portalfiscal.inf.br/cte" versao="4.00"><CTe><infCte Id="CTe${K_CTE}" versao="4.00"><ide><mod>57</mod><nCT>456</nCT><dhEmi>2026-09-12T08:00:00-03:00</dhEmi><toma3><toma>3</toma></toma3></ide><emit><CNPJ>11222333000181</CNPJ><xNome>TRANSPORTADORA TESTE</xNome></emit><rem><CNPJ>98765432000110</CNPJ></rem><dest><CNPJ>${CNPJ_MATRIZ}</CNPJ><xNome>LANCHONETE TESTE</xNome></dest><vPrest><vTPrest>85.40</vTPrest></vPrest></infCte></CTe><protCTe><infProt><cStat>100</cStat></infProt></protCTe></cteProc>`;
+const K_OS = "31260711222333000181670010000395121000000110";
+const cteOS = `<cteOSProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/cte"><CTeOS versao="4.00"><infCte Id="CTe${K_OS}" versao="4.00"><ide><mod>67</mod><nCT>39512</nCT><dhEmi>2026-07-13T08:28:28-03:00</dhEmi></ide><emit><CNPJ>11222333000181</CNPJ><xNome>FRETAMENTO TESTE</xNome></emit><toma><CNPJ>${CNPJ_MATRIZ}</CNPJ><xNome>LANCHONETE TESTE</xNome></toma><vPrest><vTPrest>151.20</vTPrest></vPrest></infCte></CTeOS><protCTe versao="4.00"><infProt><chCTe>${K_OS}</chCTe><cStat>100</cStat></infProt></protCTe></cteOSProc>`;
 const alheio = nfeCompra.replaceAll(CNPJ_MATRIZ, "11444777000161");
 
 describe("XML fiscal: leitura determinística", () => {
@@ -36,6 +39,9 @@ describe("XML fiscal: leitura determinística", () => {
     expect(c).toMatchObject({ docType: "CTE", accessKey: K_CTE, total: "85.40", takerDoc: CNPJ_MATRIZ });
     expect(roleOf(c, CNPJ_MATRIZ)).toBe("TOMADOR");
     expect(parseFiscalXml(cancel)).toMatchObject({ docType: "EVENTO_NFE", eventType: "110111", status: "CANCELADO" });
+    const os = parseFiscalXml(cteOS)!;
+    expect(os).toMatchObject({ docType: "CTE", accessKey: K_OS, number: "39512", total: "151.20", takerDoc: CNPJ_MATRIZ, status: "AUTORIZADO" });
+    expect(roleOf(os, CNPJ_MATRIZ)).toBe("TOMADOR");
     expect(parseFiscalXml("<nada/>")).toBeNull();
     expect(parseFiscalXml("não é xml <<")).toBeNull();
   });
@@ -120,6 +126,30 @@ describe("CT-e: distribuição nacional", () => {
       // O cursor do CT-e é separado do da NF-e.
       const q = await tx.query("SELECT channel, count(*)::int AS n FROM dfe_query GROUP BY channel");
       expect(q.rows).toEqual([{ channel: "CTE", n: 1 }]);
+    });
+  });
+});
+
+describe("releitura de XML não reconhecido", () => {
+  it("CT-e OS gravado como OUTRO ganha leitura nova sem mudar o original", async () => {
+    const t = await newTenant();
+    const { entityId } = await newEntity(t, CNPJ_MATRIZ);
+    const fx = newId();
+    await withTenant(appPool, t, (tx) =>
+      tx.query(
+        `INSERT INTO fiscal_xml (id, tenant_id, entity_id, source, doc_type, role, xml, sha256, received_by)
+         VALUES ($1, current_tenant(), $2, 'CTE_DIST', 'OUTRO', 'OUTRO', $3, $4, 'docs')`,
+        [fx, entityId, cteOS, createHash("sha256").update(cteOS).digest()],
+      ),
+    );
+    const agent: Actor = { kind: "AGENT", id: "docs" };
+    expect(await rereadUnrecognized(appPool, t, agent)).toEqual({ checked: 1, recognized: 1 });
+    expect(await rereadUnrecognized(appPool, t, agent)).toEqual({ checked: 0, recognized: 0 });
+    const list = await fiscalXmlList(appPool, t, entityId);
+    expect(list.summary).toMatchObject([{ doc_type: "CTE", role: "TOMADOR", n: 1, total: "151.20" }]);
+    await withTenant(appPool, t, async (tx) => {
+      const orig = await tx.query("SELECT doc_type FROM fiscal_xml WHERE id = $1", [fx]);
+      expect(orig.rows[0].doc_type).toBe("OUTRO");
     });
   });
 });

@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, existsSync 
 import { basename, extname, join } from "node:path";
 import { unzipSync } from "fflate";
 import type { Pool } from "pg";
-import { parseFiscalXml, roleOf, type FiscalDoc } from "../../integrations/fiscal-xml/parse.js";
+import { FISCAL_XML_PARSER, parseFiscalXml, roleOf, type FiscalDoc } from "../../integrations/fiscal-xml/parse.js";
 import { audit } from "../../platform/audit/audit.js";
 import { appendEvent } from "../../platform/events/outbox.js";
 import type { Actor } from "../../shared/actor.js";
@@ -185,21 +185,80 @@ export async function scanInbox(pool: Pool, tenantId: string, dir: string, actor
   return report;
 }
 
+/**
+ * Releitura dos XML que a versão anterior do leitor não reconheceu (OUTRO).
+ * O original fica como está; a leitura nova vai para fiscal_xml_reading.
+ */
+export async function rereadUnrecognized(pool: Pool, tenantId: string, actor: Actor): Promise<{ checked: number; recognized: number }> {
+  return withTenant(pool, tenantId, async (tx) => {
+    const { rows } = await tx.query<{ id: string; entity_id: string; cnpj: string; xml: string }>(
+      `SELECT x.id, x.entity_id, e.cnpj, x.xml FROM fiscal_xml x JOIN entity e ON e.id = x.entity_id
+        WHERE x.doc_type = 'OUTRO' AND NOT EXISTS (SELECT 1 FROM fiscal_xml_reading r WHERE r.fiscal_xml_id = x.id AND r.parser = $1)`,
+      [FISCAL_XML_PARSER],
+    );
+    let recognized = 0;
+    const byEntity = new Map<string, Record<string, number>>();
+    for (const x of rows) {
+      const doc = parseFiscalXml(x.xml);
+      const docType = doc?.docType ?? "OUTRO";
+      await tx.query(
+        `INSERT INTO fiscal_xml_reading (id, tenant_id, entity_id, fiscal_xml_id, parser, doc_type, role, access_key, number, issuer_doc, issuer_name,
+                                         recipient_doc, recipient_name, issued_at, total, status, event_type)
+         VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT (tenant_id, fiscal_xml_id, parser) DO NOTHING`,
+        [newId(), x.entity_id, x.id, FISCAL_XML_PARSER, docType, doc ? roleOf(doc, x.cnpj) : "OUTRO", doc?.accessKey ?? null, doc?.number ?? null,
+          doc?.issuerDoc ?? null, doc?.issuerName ?? null, doc?.recipientDoc ?? null, doc?.recipientName ?? null, doc?.issuedAt ?? null,
+          doc?.total ?? null, doc?.status ?? null, doc?.eventType ?? null],
+      );
+      if (docType !== "OUTRO") {
+        recognized++;
+        const per = byEntity.get(x.entity_id) ?? {};
+        per[docType] = (per[docType] ?? 0) + 1;
+        byEntity.set(x.entity_id, per);
+      }
+    }
+    for (const [entityId, types] of byEntity) {
+      await audit(tx, {
+        actor,
+        action: "documents.xml_reread",
+        resourceType: "fiscal_xml_reading",
+        resourceId: entityId,
+        entityId,
+        data: { parser: FISCAL_XML_PARSER, types },
+      });
+    }
+    return { checked: rows.length, recognized };
+  });
+}
+
+/** fiscal_xml com a leitura mais recente (releitura, quando houver). */
+const EFFECTIVE = `
+  SELECT x.id, x.entity_id, x.source, x.received_at,
+         coalesce(r.doc_type, x.doc_type) AS doc_type, coalesce(r.role, x.role) AS role,
+         coalesce(r.access_key, x.access_key) AS access_key, coalesce(r.number, x.number) AS number,
+         coalesce(r.issuer_name, x.issuer_name) AS issuer_name, coalesce(r.recipient_name, x.recipient_name) AS recipient_name,
+         coalesce(r.issued_at, x.issued_at) AS issued_at, coalesce(r.total, x.total) AS total,
+         coalesce(r.status, x.status) AS status, coalesce(r.event_type, x.event_type) AS event_type
+    FROM fiscal_xml x
+    LEFT JOIN LATERAL (SELECT * FROM fiscal_xml_reading r WHERE r.fiscal_xml_id = x.id ORDER BY r.created_at DESC LIMIT 1) r ON true`;
+
 /** Documentos recebidos por upload, pasta ou distribuição de CT-e. */
 export async function fiscalXmlList(pool: Pool, tenantId: string, entityId: string | null) {
   return withTenant(pool, tenantId, async (tx) => {
     const summary = await tx.query(
-      `SELECT x.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, x.doc_type, x.role, count(*)::int AS n,
+      `WITH x AS (${EFFECTIVE})
+       SELECT x.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, x.doc_type, x.role, count(*)::int AS n,
               sum(x.total) FILTER (WHERE x.status = 'AUTORIZADO')::text AS total, min(x.issued_at) AS first_at, max(x.issued_at) AS last_at
-         FROM fiscal_xml x JOIN entity e ON e.id = x.entity_id
+         FROM x JOIN entity e ON e.id = x.entity_id
         WHERE ($1::uuid IS NULL OR x.entity_id = $1)
         GROUP BY 1, 2, 3, 4 ORDER BY 2, 3, 4`,
       [entityId],
     );
     const recent = await tx.query(
-      `SELECT x.received_at, coalesce(e.trade_name, e.legal_name) AS entity, x.source, x.doc_type, x.role, x.number, x.issuer_name, x.recipient_name,
+      `WITH x AS (${EFFECTIVE})
+       SELECT x.received_at, coalesce(e.trade_name, e.legal_name) AS entity, x.source, x.doc_type, x.role, x.number, x.issuer_name, x.recipient_name,
               x.issued_at, x.total::text, x.status, x.event_type, x.access_key
-         FROM fiscal_xml x JOIN entity e ON e.id = x.entity_id
+         FROM x JOIN entity e ON e.id = x.entity_id
         WHERE ($1::uuid IS NULL OR x.entity_id = $1)
         ORDER BY x.received_at DESC, x.issued_at DESC NULLS LAST LIMIT 100`,
       [entityId],
