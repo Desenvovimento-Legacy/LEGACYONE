@@ -112,6 +112,29 @@ describe("contabilização automática: fiscal e extrato → razão", () => {
     await withTenant(appPool, t, (tx) => declare(tx, "11222333202609002", "1500.00"));
     expect(await runAutoPosting(appPool, t, entityId)).toMatchObject({ posted: 1, reversed: 1 });
 
+    // Sem PDF da declaração: provisão pelo cálculo que conferiu com o DAS pago; quando a declaração chega, troca.
+    await withTenant(appPool, t, (tx) =>
+      tx.query(
+        `INSERT INTO simples_calculation (id, tenant_id, entity_id, competence, mode, status, engine_version, inputs, total, reference_kind, reference_total, difference, fingerprint)
+         VALUES ($1, current_tenant(), $2, '2026-10-01', 'CONFERENCIA', 'CONFERE', 'teste', '{}', 200.00, 'DAS_PAGO', 200.00, 0, 'f1')`,
+        [newId(), entityId],
+      ),
+    );
+    expect(await runAutoPosting(appPool, t, entityId)).toMatchObject({ posted: 1, reversed: 0 });
+    await withTenant(appPool, t, async (tx) => {
+      const pdf = newId();
+      await tx.query("INSERT INTO pgdas_declaration_pdf (id, tenant_id, entity_id, competence, kind, pdf, sha256) VALUES ($1, current_tenant(), $2, '2026-10-01', 'DECLARACAO', 'x', $3)",
+        [pdf, entityId, createHash("sha256").update("out").digest()]);
+      await tx.query(
+        `INSERT INTO pgdas_declared_tax (id, tenant_id, entity_id, competence, declaration_number, pdf_id, seq, activity, annex, local_withheld,
+                                         revenue, irpj, csll, cofins, pis, cpp, icms, ipi, iss, total, parser)
+         VALUES ($1, current_tenant(), $2, '2026-10-01', '11222333202610001', $3, 1, 'Serviços - Anexo III', 'III', false, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 200.00, 'pgdas-pdf-2')`,
+        [newId(), entityId, pdf],
+      );
+    });
+    expect(await runAutoPosting(appPool, t, entityId)).toMatchObject({ posted: 1, reversed: 1 });
+    expect(await runAutoPosting(appPool, t, entityId)).toMatchObject({ posted: 0, reversed: 0 });
+
     const tb = await withTenant(appPool, t, (tx) => trialBalance(tx, entityId, "2026-09-01", "2026-09-30"));
     expect(tb.totals.balanced).toBe(true);
     const by = Object.fromEntries(tb.rows.map((r) => [r.code, r.closing]));
@@ -128,7 +151,7 @@ describe("contabilização automática: fiscal e extrato → razão", () => {
       const m = await tx.query("SELECT method, count(*)::int AS n FROM bank_match GROUP BY 1 ORDER BY 1");
       expect(m.rows).toEqual([{ method: "NFSE", n: 2 }, { method: "PAGAMENTO_FEDERAL", n: 2 }, { method: "PESSOA", n: 1 }, { method: "REGRA", n: 1 }]);
       const ev = await tx.query("SELECT count(*)::int AS n FROM outbox WHERE type = 'ACCOUNTING_BATCH_POSTED'");
-      expect(ev.rows[0].n).toBe(3);
+      expect(ev.rows[0].n).toBe(5);
     });
   });
 });

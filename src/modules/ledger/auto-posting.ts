@@ -118,31 +118,60 @@ async function nfseRevenue(ctx: Ctx, s: Stats) {
 }
 
 async function simplesProvision(ctx: Ctx, s: Stats) {
-  const { rows } = await ctx.tx.query<{ competence: string; number: string | null; total: string }>(
+  // Base da provisão por competência: o débito da declaração lida (preferido) ou,
+  // sem o PDF, o cálculo do motor que conferiu ao centavo com o DAS pago.
+  const declared = await ctx.tx.query<{ competence: string; number: string | null; total: string }>(
     `WITH last AS (
        SELECT DISTINCT ON (competence) competence, pdf_id, declaration_number FROM pgdas_declared_tax
         WHERE entity_id = $1 ORDER BY competence, declaration_number DESC NULLS LAST, created_at DESC)
      SELECT l.competence::text, l.declaration_number AS number, sum(t.total)::text AS total
        FROM last l JOIN pgdas_declared_tax t ON t.pdf_id = l.pdf_id AND t.competence = l.competence
       WHERE t.parser = (SELECT max(x.parser) FROM pgdas_declared_tax x WHERE x.pdf_id = t.pdf_id) AND l.competence >= $2
-      GROUP BY 1, 2 ORDER BY 1`,
+      GROUP BY 1, 2`,
     [ctx.entityId, ctx.start],
   );
-  for (const r of rows) {
-    if (!Dec.of(r.total).gt("0")) continue;
-    const key = `simples:${r.competence.slice(0, 7)}:${r.number ?? "sem-numero"}`;
-    // Declaração nova (retificadora) da mesma competência: estorna a provisão anterior.
-    const prev = await ctx.tx.query<{ id: string }>(
-      `SELECT e.id FROM journal_entry e WHERE e.entity_id = $1 AND e.idempotency_key LIKE $2 AND e.idempotency_key <> $3
-          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)`,
-      [ctx.entityId, `simples:${r.competence.slice(0, 7)}:%`, key],
-    );
-    for (const p of prev.rows) if ((await reverseEntry(ctx.tx, p.id, `substituída pela declaração ${r.number}`, ctx.actor)).created) s.reversed++;
-    await post(ctx, s, {
-      entityId: ctx.entityId, date: lastDay(r.competence), origin: "TRIBUTOS", originRef: `pgdas:${r.number}`, idempotencyKey: key,
+  const checked = await ctx.tx.query<{ competence: string; id: string; total: string; reference_kind: string }>(
+    `SELECT competence::text, id, total::text, reference_kind FROM (
+       SELECT DISTINCT ON (competence) * FROM simples_calculation WHERE entity_id = $1 ORDER BY competence, created_at DESC) c
+      WHERE c.status = 'CONFERE' AND c.competence >= $2 AND c.total IS NOT NULL`,
+    [ctx.entityId, ctx.start],
+  );
+  type Base = { competence: string; key: string; total: string; ref: string; history: string; evidence: { kind: string; id: string } };
+  const bases = new Map<string, Base>();
+  for (const c of checked.rows) {
+    const pa = `${c.competence.slice(5, 7)}/${c.competence.slice(0, 4)}`;
+    bases.set(c.competence, {
+      competence: c.competence, key: `simples:${c.competence.slice(0, 7)}:calculo:${c.id}`, total: c.total, ref: `simples_calculation:${c.id}`,
+      history: `Simples Nacional ${pa} (cálculo da IARIS conferido com o ${c.reference_kind === "DAS_PAGO" ? "DAS pago" : "declarado"})`,
+      evidence: { kind: "simples_calculation", id: c.id },
+    });
+  }
+  for (const r of declared.rows) {
+    bases.set(r.competence, {
+      competence: r.competence, key: `simples:${r.competence.slice(0, 7)}:${r.number ?? "sem-numero"}`, total: r.total, ref: `pgdas:${r.number}`,
       history: `Simples Nacional ${r.competence.slice(5, 7)}/${r.competence.slice(0, 4)} declarado no PGDAS-D ${r.number ?? ""}`.trim(),
-      evidence: [{ kind: "pgdas_declaration", id: r.number ?? r.competence }], confidence: "1",
-      lines: [{ account: "3.2.1.01", debit: r.total }, { account: "2.1.2.01", credit: r.total }],
+      evidence: { kind: "pgdas_declaration", id: r.number ?? r.competence },
+    });
+  }
+  for (const b of [...bases.values()].sort((x, y) => x.competence.localeCompare(y.competence))) {
+    if (!Dec.of(b.total).gt("0")) continue;
+    const done = await ctx.tx.query<{ total: string }>(
+      `SELECT sum(l.credit)::text AS total FROM journal_entry e JOIN journal_line l ON l.entry_id = e.id
+        WHERE e.idempotency_key = $1 AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)`,
+      [b.key],
+    );
+    // Base nova (retificadora ou PDF que chegou depois): estorna a provisão anterior da competência.
+    const prev = await ctx.tx.query<{ id: string; key: string }>(
+      `SELECT e.id, e.idempotency_key AS key FROM journal_entry e WHERE e.entity_id = $1 AND e.idempotency_key LIKE $2 AND e.idempotency_key <> $3
+          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)`,
+      [ctx.entityId, `simples:${b.competence.slice(0, 7)}:%`, b.key],
+    );
+    for (const p of prev.rows) if ((await reverseEntry(ctx.tx, p.id, `substituída: ${b.history}`, ctx.actor)).created) s.reversed++;
+    if (done.rows[0]?.total) continue;
+    await post(ctx, s, {
+      entityId: ctx.entityId, date: lastDay(b.competence), origin: "TRIBUTOS", originRef: b.ref, idempotencyKey: b.key,
+      history: b.history, evidence: [b.evidence], confidence: "1",
+      lines: [{ account: "3.2.1.01", debit: b.total }, { account: "2.1.2.01", credit: b.total }],
     });
   }
 }
