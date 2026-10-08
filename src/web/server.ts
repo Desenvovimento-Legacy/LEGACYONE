@@ -11,6 +11,9 @@ import { decideRevenueException, refreshRevenueExceptions } from "../modules/fed
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
 import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
+import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
+import { classifyMovement, pendingMovements } from "../modules/ledger/auto-posting.js";
+import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
@@ -479,6 +482,81 @@ export function createWebServer(deps: WebDeps) {
           return;
         }
         json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => withholdingsOverview(tx, parts[2]!, today)));
+        return;
+      }
+      // GET /api/empresa/:id/contabil[?mes=AAAA-MM] — plano, contas bancárias, balancete e pendentes (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "contabil") {
+        const id = parts[2]!;
+        const mes = url.searchParams.get("mes");
+        if (mes !== null && !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { erro: "Mês inválido (AAAA-MM)" });
+        const data = await withTenant(deps.appPool, deps.tenantId, async (tx) => {
+          const chart = await tx.query<{ code: string; name: string; analytic: boolean; valid_from: string }>(
+            "SELECT code, name, analytic, valid_from::text FROM chart_account WHERE entity_id = $1 AND valid_to IS NULL ORDER BY code",
+            [id],
+          );
+          const last = await tx.query<{ m: string | null }>("SELECT to_char(max(entry_date), 'YYYY-MM') AS m FROM journal_entry WHERE entity_id = $1", [id]);
+          const month = mes ?? last.rows[0]?.m ?? null;
+          const end = month ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) : null;
+          const trial = month && end ? await trialBalance(tx, id, `${month}-01`, end) : null;
+          const months = await tx.query<{ m: string }>("SELECT DISTINCT to_char(entry_date, 'YYYY-MM') AS m FROM journal_entry WHERE entity_id = $1 ORDER BY 1 DESC", [id]);
+          return {
+            hasChart: chart.rows.length > 0,
+            chartFrom: chart.rows.map((c) => c.valid_from).sort()[0] ?? null,
+            accounts: chart.rows.filter((c) => c.analytic).map((c) => ({ code: c.code, name: c.name })),
+            bank: (await bankOverview(tx, id)).accounts,
+            month,
+            months: months.rows.map((r) => r.m),
+            trial,
+          };
+        });
+        const pending = data.hasChart ? (await pendingMovements(deps.appPool, deps.tenantId, id)).slice(0, 100) : [];
+        json(res, 200, { ...data, pending });
+        return;
+      }
+      // POST /api/empresa/:id/plano — aplica o plano de contas padrão (decisão do responsável técnico).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "plano") {
+        if (guard("aprovar")) return;
+        const body = (await readJson(req)) as { inicio?: string };
+        if (!body.inicio || !/^\d{4}-(0[1-9]|1[0-2])$/.test(body.inicio)) return json(res, 400, { erro: "Informe o mês de início (AAAA-MM)" });
+        try {
+          const r = await applyStandardChart(deps.appPool, deps.tenantId, parts[2]!, `${body.inicio}-01`, actor);
+          const chain = await deps.orchestrate?.();
+          json(res, 200, { ...r, chain });
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // POST /api/empresa/:id/extrato — extrato OFX enviado pela tela.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "extrato") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req, 15 * 1024 * 1024)) as { name?: string; data?: string };
+        if (typeof body.name !== "string" || typeof body.data !== "string") return json(res, 400, { erro: "Arquivo não recebido" });
+        try {
+          const r = await importBankStatement(deps.appPool, deps.tenantId, parts[2]!, { name: body.name.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(body.data, "base64") }, actor);
+          const chain = await deps.orchestrate?.();
+          json(res, 200, { ...r, chain });
+        } catch (err) {
+          if (err instanceof StatementError || err instanceof LedgerError) json(res, 422, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // POST /api/movimento/:id/classificar — decisão humana sobre um movimento do extrato (e regra para os próximos).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "movimento" && parts[3] === "classificar") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req)) as { conta?: string; historico?: string; regra?: { padrao?: string; escopo?: string } | null };
+        if (!body.conta || !body.historico?.trim()) return json(res, 400, { erro: "Informe a conta e o histórico" });
+        const rule = body.regra && body.regra.padrao && body.regra.padrao.trim().length >= 3
+          ? { pattern: body.regra.padrao.trim(), scope: body.regra.escopo === "ESCRITORIO" ? ("ESCRITORIO" as const) : ("EMPRESA" as const) }
+          : null;
+        try {
+          json(res, 200, await classifyMovement(deps.appPool, deps.tenantId, { transactionId: parts[2]!, account: body.conta, history: body.historico.trim(), rule }, actor));
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
       // GET /api/empresa/:id/simples — cálculos do motor do Simples (só banco).

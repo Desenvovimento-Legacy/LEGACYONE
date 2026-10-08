@@ -33,7 +33,7 @@ describe("orquestrador: vínculos entre agentes por evento", () => {
     expect(r1.errors).toBe(0);
     await withTenant(appPool, t, async (tx) => {
       const reac = await tx.query<{ link_id: string; status: string }>("SELECT link_id, status FROM agent_reaction ORDER BY link_id");
-      expect(reac.rows.map((r) => r.link_id)).toEqual(["declaracao-conferencia", "declaracao-simples", "receita-guias"]);
+      expect(reac.rows.map((r) => r.link_id)).toEqual(["contabil-automatico", "declaracao-conferencia", "declaracao-simples", "receita-guias"]);
       const errs = await tx.query("SELECT link_id, error FROM agent_reaction WHERE status = 'ERRO'");
       expect(errs.rows).toEqual([]);
       const decl = await tx.query<{ event_id: string; correlation_id: string }>("SELECT event_id, correlation_id FROM outbox WHERE type = 'PGDAS_DECLARATION_READ'");

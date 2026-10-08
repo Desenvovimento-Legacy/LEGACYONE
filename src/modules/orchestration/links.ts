@@ -6,6 +6,7 @@ import { readEntityNfseTaxes, refreshWithholdings } from "../fiscal/withholdings
 import { buildObligationMap, entityFacts } from "../onboarding/plan.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { refreshGuides } from "../tax/guides.js";
+import { runAutoPosting } from "../ledger/auto-posting.js";
 import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
 
 /**
@@ -107,6 +108,16 @@ export const LINKS: Link<LinkDeps>[] = [
     },
   },
   {
+    id: "contabil-automatico",
+    on: ["CHART_OF_ACCOUNTS_DEFINED", "BANK_STATEMENT_RECEIVED", "NFSE_BATCH_RECEIVED", "PGDAS_DECLARATION_READ", "FEDERAL_PAYMENTS_SYNCED", "NFSE_TAXES_READ"],
+    agent: "ledger",
+    does: "Contabiliza notas, Simples declarado e extrato; o que não tem hipótese única fica para classificação",
+    run: async ({ pool, tenantId, entityId }) => {
+      const r = await runAutoPosting(pool, tenantId, entityId!);
+      return r.skipped ? { skipped: r.skipped } : { entries: r.posted, reversed: r.reversed, pending: r.pendingBank };
+    },
+  },
+  {
     id: "certificado-notas",
     on: ["DIGITAL_CERTIFICATE_REGISTERED"],
     agent: "docs",
@@ -130,4 +141,6 @@ export const EVENT_LABEL: Record<string, string> = {
   DIGITAL_CERTIFICATE_REGISTERED: "Certificado A1 registrado no cofre",
   NFSE_TAXES_READ: "Tributos das NFS-e lidos",
   OBLIGATION_RULES_APPROVED: "Regras de obrigações aprovadas",
+  CHART_OF_ACCOUNTS_DEFINED: "Plano de contas definido",
+  BANK_STATEMENT_RECEIVED: "Extrato bancário recebido",
 };

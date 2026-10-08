@@ -283,6 +283,20 @@ export const EventContracts = {
       balance: z.string().nullable(),
     }),
   },
+  ACCOUNTING_BATCH_POSTED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      entries: z.number().int(),
+      reversed: z.number().int(),
+      fiscal: z.number().int(),
+      bank: z.number().int(),
+      total: z.string(),
+      from: z.iso.date().nullable(),
+      to: z.iso.date().nullable(),
+      pending_bank: z.number().int(),
+      rules: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

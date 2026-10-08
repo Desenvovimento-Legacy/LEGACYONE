@@ -131,7 +131,8 @@ export async function addAccount(
 
 export interface PostResult { id: string; created: boolean }
 
-export async function postEntry(tx: PoolClient, input: EntryInput, actor: Actor): Promise<PostResult> {
+/** opts.event = false: quem chama emite um evento de lote (ex.: contabilização automática). */
+export async function postEntry(tx: PoolClient, input: EntryInput, actor: Actor, opts: { event?: boolean } = {}): Promise<PostResult> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new LedgerError("Data do lançamento inválida");
   if (input.lines.length < 2) throw new LedgerError("Lançamento precisa de débito e crédito");
   let d = Dec.ZERO;
@@ -173,7 +174,7 @@ export async function postEntry(tx: PoolClient, input: EntryInput, actor: Actor)
       [newId(), input.entityId, id, ++seq, l.accountId, l.debit ?? "0", l.credit ?? "0", l.history ?? null, l.costCenter ?? null, JSON.stringify(l.dimensions ?? {})],
     );
   }
-  await appendEvent(tx, {
+  if (opts.event !== false) await appendEvent(tx, {
     type: "ACCOUNTING_POSTING_CREATED",
     schemaVersion: 1,
     producer: PRODUCER,

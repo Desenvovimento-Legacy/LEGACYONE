@@ -138,6 +138,16 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       };
       return `${p.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL"} retido ${pa}: ${WS[String(p.to)] ?? String(p.to)}`;
     }
+    case "CHART_OF_ACCOUNTS_DEFINED":
+      return `Plano de contas definido: ${p.accounts} contas desde ${fmtDate(String(p.valid_from))}`;
+    case "BANK_STATEMENT_RECEIVED":
+      return `Extrato ${p.account}: ${p.transactions} movimento(s) novo(s)${p.duplicated ? `, ${p.duplicated} já existiam` : ""}`;
+    case "ACCOUNTING_POSTING_CREATED":
+      return `Lançamento ${Number(p.total).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} (${(p.accounts as string[]).join(" / ")})`;
+    case "ACCOUNTING_POSTING_REVERSED":
+      return `Lançamento estornado: ${String(p.reason)}`;
+    case "ACCOUNTING_BATCH_POSTED":
+      return `Contabilizados ${p.entries} lançamento(s) (${p.fiscal} do fiscal, ${p.bank} do extrato)${p.reversed ? `, ${p.reversed} estorno(s)` : ""}${p.pending_bank ? ` · ${p.pending_bank} movimento(s) para classificar` : ""}`;
     case "OBLIGATION_RULES_APPROVED":
       return `Regras de obrigações aprovadas: ${(p.rules as string[]).join(", ")}`;
     case "NFE_MANIFESTATION_APPROVED":
@@ -355,6 +365,27 @@ export async function humanQueue(tx: PoolClient) {
       since: w.created_at.toISOString(),
     };
   });
+  // Movimentos do extrato que o motor não contabilizou (sem hipótese única).
+  const unposted = await tx.query<{ entity_id: string; entity: string; n: number; total: string; oldest: Date }>(
+    `SELECT t.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, count(*)::int AS n, sum(abs(t.amount))::text AS total, min(t.created_at) AS oldest
+       FROM bank_transaction t JOIN entity e ON e.id = t.entity_id JOIN bank_account b ON b.id = t.bank_account_id
+      WHERE b.ledger_account_id IS NOT NULL
+        AND t.posted_on >= (SELECT min(c.valid_from) FROM chart_account c WHERE c.entity_id = t.entity_id AND c.source <> 'BANCO')
+        AND NOT EXISTS (SELECT 1 FROM bank_match m JOIN journal_entry j ON j.id = m.entry_id
+                         WHERE m.transaction_id = t.id AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = j.id))
+      GROUP BY 1, 2`,
+  );
+  const ledgerItems = unposted.rows.map((u) => ({
+    kind: "ledger",
+    id: u.entity_id,
+    type: "MOVIMENTO_A_CLASSIFICAR",
+    entityId: u.entity_id,
+    entity: u.entity,
+    caseId: null,
+    title: `${u.n} movimento(s) do extrato aguardando classificação (${Number(u.total).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })})`,
+    impact: "Sem DARF, nota ou regra que explique o movimento. Ao classificar, você pode criar a regra e os próximos parecidos entram sozinhos.",
+    since: u.oldest.toISOString(),
+  }));
   // Vínculo que falhou MAX_ATTEMPTS vezes no mesmo evento espera uma pessoa.
   const failed = await tx.query<{ link_id: string; agent: string; event_type: string; entity_id: string | null; entity: string | null; error: string; at: Date }>(
     `SELECT DISTINCT ON (r.link_id, r.event_id) r.link_id, r.agent, r.event_type, r.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, r.error, r.finished_at AS at
@@ -385,6 +416,7 @@ export async function humanQueue(tx: PoolClient) {
     ...links,
     ...guides,
     ...withholdings,
+    ...ledgerItems,
     ...pend.rows.map((p) => ({
       kind: p.case_id && divergences.has(p.case_id) ? "divergence" : p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       divergence: p.case_id ? (divergences.get(p.case_id) ?? null) : null,

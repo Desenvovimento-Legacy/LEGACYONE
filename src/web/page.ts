@@ -27,7 +27,8 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   body:not(.p-buscar) button[data-buscar], body:not(.p-buscar) button[data-act=decl], body:not(.p-buscar) button[data-act=dfe], body:not(.p-buscar) button[data-act=nfse],
   body:not(.p-confirmar) button[data-act=services], body:not(.p-confirmar) button[data-act=nsu], body:not(.p-confirmar) button[data-act=certs],
   body:not(.p-aprovar) button[data-act=approve], body:not(.p-aprovar) button[data-act=rules], body:not(.p-aprovar) button[data-act=srules],
-  body:not(.p-aprovar) button[data-act=ciencia], body:not(.p-aprovar) button[data-act=exc] { display: none; }
+  body:not(.p-aprovar) button[data-act=ciencia], body:not(.p-aprovar) button[data-act=exc], body:not(.p-aprovar) .only-aprovar,
+  body:not(.p-confirmar) .only-confirmar { display: none; }
   .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 8px; background: var(--panel2); }
   .drop.on { border-color: var(--teal); background: var(--teal-bg); }
   body:not(.p-confirmar) .drop { display: none; }
@@ -239,6 +240,9 @@ function queueItemHtml(q) {
   if (q.kind === "ciencia") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="warn" data-act="ciencia" data-id="' + q.id + '">Aprovar ciência</button><a class="nav" style="display:inline-flex" href="#/documentos/' + q.id + '">Ver as notas</a></div></div>';
   }
+  if (q.kind === "ledger") {
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Classificar movimentos</a></div></div>';
+  }
   if (q.kind === "withholding") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver retenções da empresa</a></div></div>';
   }
@@ -414,6 +418,7 @@ function viewEmpresa(id) {
         '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ret"><h2>Retenções nas NFS-e tomadas</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="ctb"><h2>Contabilidade</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
@@ -424,7 +429,86 @@ function viewEmpresa(id) {
     loadSimples(id);
     loadGuias(id);
     loadRetencoes(id);
+    loadContabil(id);
   });
+}
+
+function loadContabil(id, mes) {
+  return getJson("/api/empresa/" + id + "/contabil" + (mes ? "?mes=" + mes : "")).then(function (r) {
+    var box = $("ctb"); if (!box) return;
+    var h = '<h2>Contabilidade</h2>';
+    if (!r.hasChart) {
+      h += '<div class="empty">A empresa ainda não tem plano de contas. Sem ele, a IARIS não lança nada.</div>' +
+        '<div class="form-row only-aprovar" style="margin-top:8px"><label>Início da contabilidade<input type="month" id="ctb-ini" value="' + lastClosedMonth() + '"></label>' +
+        '<button class="warn" data-act="plano">Aplicar plano de contas padrão Legacy</button></div>' +
+        '<div class="empty">O plano padrão tem ' + 'as contas usuais do Simples (serviços e comércio). Pode ser trocado pelo plano do escritório depois, sem apagar nada.</div>';
+      box.innerHTML = h;
+      var bp = box.querySelector("[data-act=plano]");
+      if (bp) bp.addEventListener("click", function () {
+        var v = $("ctb-ini").value; if (!v) { toast("Informe o mês de início."); return; }
+        post("/api/empresa/" + id + "/plano", "aprovar", { inicio: v }).then(function () { toast("Plano aplicado. Contabilizando notas, Simples e extratos…"); return loadContabil(id); }).catch(function (e) { toast(e.message); });
+      });
+      return;
+    }
+    var banks = r.bank.map(function (b) {
+      return '<tr><td>' + esc(b.label) + '</td><td class="mono">' + esc(b.ledger_code || "—") + '</td><td class="num">' + b.transactions + '</td><td>' + (b.first_on ? d(b.first_on) + ' a ' + d(b.last_on) : '—') + '</td><td class="num">' + (b.balance !== null ? brl(b.balance) + '<div class="mut" style="font-size:11px">' + (b.balance_date ? d(b.balance_date) : "") + '</div>' : '—') + '</td></tr>';
+    }).join("");
+    h += '<div class="form-row only-confirmar" style="margin:4px 0 10px"><label>Extrato bancário (OFX)<input type="file" id="ctb-ofx" accept=".ofx,.OFX"></label><button class="ghost" data-act="ofx">Enviar extrato</button></div>';
+    h += '<div class="scroll"><table><thead><tr><th>Conta bancária</th><th>Conta contábil</th><th class="num">Movimentos</th><th>Período</th><th class="num">Saldo no extrato</th></tr></thead><tbody>' + (banks || '<tr><td colspan="5" class="empty">Nenhum extrato recebido.</td></tr>') + '</tbody></table></div>';
+    if (r.pending.length) {
+      var opts = r.accounts.map(function (a) { return '<option value="' + esc(a.code) + '">' + esc(a.code + " " + a.name) + '</option>'; }).join("");
+      var pend = r.pending.map(function (p, i) {
+        var hyp = p.hypotheses && p.hypotheses.length ? '<div class="mut" style="font-size:11px">Hipóteses: ' + esc(p.hypotheses.join("; ")) + '</div>' : '';
+        var pat = esc(((p.memo || p.payee || "").split(/\\s+/).slice(0, 3).join(" ")));
+        return '<tr><td>' + d(p.posted_on) + '</td><td>' + esc([p.memo, p.payee].filter(Boolean).join(" · ") || "—") + '<div class="mut" style="font-size:11px">' + esc(p.reason) + '</div>' + hyp + '</td><td class="num ' + (Number(p.amount) < 0 ? "bad" : "ok") + '">' + brl(p.amount) + '</td>' +
+          '<td class="only-confirmar"><select id="cl-acc-' + i + '"><option value="">conta…</option>' + opts + '</select>' +
+          '<div style="margin-top:4px"><input id="cl-his-' + i + '" placeholder="histórico" style="width:100%"></div>' +
+          '<label style="font-size:11px;display:flex;gap:4px;align-items:center;margin-top:4px"><input type="checkbox" id="cl-rule-' + i + '"> sempre que o histórico tiver <input id="cl-pat-' + i + '" value="' + pat + '" style="width:140px"></label>' +
+          '<label style="font-size:11px;display:flex;gap:4px;align-items:center"><input type="checkbox" id="cl-all-' + i + '"> vale para todas as empresas</label>' +
+          '<button class="ghost" data-act="classif" data-i="' + i + '" data-id="' + p.id + '" style="margin-top:4px">Lançar</button></td></tr>';
+      }).join("");
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">Movimentos para classificar (' + r.pending.length + ')</h3><div class="scroll"><table><thead><tr><th>Data</th><th>Histórico do banco</th><th class="num">Valor</th><th class="only-confirmar">Classificação</th></tr></thead><tbody>' + pend + '</tbody></table></div>';
+    }
+    if (r.trial) {
+      var sel = '<select id="ctb-mes">' + r.months.map(function (m) { return '<option value="' + m + '"' + (m === r.month ? ' selected' : '') + '>' + m.slice(5, 7) + '/' + m.slice(0, 4) + '</option>'; }).join("") + '</select>';
+      var sign = function (v) { var n = Number(v); return n === 0 ? '0,00' : brl(Math.abs(n).toFixed(2)) + (n > 0 ? ' D' : ' C'); };
+      var tb = r.trial.rows.map(function (x) {
+        var pad = (x.level - 1) * 12;
+        return '<tr' + (x.analytic ? '' : ' style="font-weight:600"') + '><td class="mono" style="padding-left:' + (8 + pad) + 'px">' + esc(x.code) + '</td><td>' + esc(x.name) + '</td><td class="num">' + sign(x.opening) + '</td><td class="num">' + brl(x.debit) + '</td><td class="num">' + brl(x.credit) + '</td><td class="num">' + sign(x.closing) + '</td></tr>';
+      }).join("");
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">Balancete ' + sel + '</h3><div class="scroll"><table><thead><tr><th>Conta</th><th>Nome</th><th class="num">Saldo anterior</th><th class="num">Débitos</th><th class="num">Créditos</th><th class="num">Saldo atual</th></tr></thead><tbody>' + tb + '</tbody></table></div>' +
+        '<div class="empty">Débitos ' + brl(r.trial.totals.debit) + ' · Créditos ' + brl(r.trial.totals.credit) + (r.trial.totals.balanced ? ' · <span class="ok">débitos = créditos ✓</span>' : ' · <span class="bad">não fecha</span>') + '. Contabilidade a partir de ' + d(r.chartFrom) + '. Saldos anteriores ao início vêm do escritório anterior (a implantar).</div>';
+    } else {
+      h += '<div class="empty">Nenhum lançamento ainda.</div>';
+    }
+    box.innerHTML = h;
+    var ms = $("ctb-mes"); if (ms) ms.addEventListener("change", function () { loadContabil(id, ms.value); });
+    var bo = box.querySelector("[data-act=ofx]");
+    if (bo) bo.addEventListener("click", function () {
+      var f = $("ctb-ofx").files[0]; if (!f) { toast("Escolha o arquivo OFX."); return; }
+      if (f.size > 10 * 1024 * 1024) { toast("Extrato acima de 10 MB."); return; }
+      var fr = new FileReader();
+      fr.onload = function () {
+        post("/api/empresa/" + id + "/extrato", "confirmar", { name: f.name, data: String(fr.result).split(",")[1] || "" }).then(function (x) {
+          toast(x.status === "REPETIDO" ? "Esse extrato já tinha sido enviado." : x.account + ": " + x.transactions + " movimento(s) novo(s)" + (x.duplicated ? ", " + x.duplicated + " já existiam" : "") + ".");
+          return loadContabil(id);
+        }).catch(function (e) { toast(e.message); });
+      };
+      fr.readAsDataURL(f);
+    });
+    box.querySelectorAll("[data-act=classif]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var i = b.getAttribute("data-i");
+        var acc = $("cl-acc-" + i).value, his = $("cl-his-" + i).value.trim();
+        if (!acc || !his) { toast("Escolha a conta e escreva o histórico."); return; }
+        var rule = $("cl-rule-" + i).checked ? { padrao: $("cl-pat-" + i).value, escopo: $("cl-all-" + i).checked ? "ESCRITORIO" : "EMPRESA" } : null;
+        post("/api/movimento/" + b.getAttribute("data-id") + "/classificar", "confirmar", { conta: acc, historico: his, regra: rule }).then(function (x) {
+          toast("Lançado." + (x.alsoPosted ? " A regra lançou mais " + x.alsoPosted + " movimento(s) parecido(s)." : ""));
+          return loadContabil(id, r.month);
+        }).catch(function (e) { toast(e.message); });
+      });
+    });
+  }).catch(function (err) { toast(err.message); });
 }
 
 var WS = {
