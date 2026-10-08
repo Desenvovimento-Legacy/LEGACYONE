@@ -114,7 +114,7 @@ export const DEPARTMENTS: DepartmentInfo[] = [
     summary: "Cadastro, identidade digital, atos societários e regularização.",
     agents: [
       { id: "onboarding", name: "Implantação", status: "OPERANDO", summary: "Do CNPJ ao cliente pronto para operar.", capabilities: [cap("Cadastro pelo CNPJ", true), cap("Regime e histórico", true), cap("Serviços contratados", true), cap("Checklist e migração", true), cap("Mapa de obrigações", true)] },
-      { id: "digital-identity", name: "Identidade digital", status: "OPERANDO", summary: "Procurações e certificados de cada empresa.", capabilities: [cap("Procuração e-CAC", true), cap("Certificados A1 no cofre", true), cap("Validade dos certificados", true), cap("Procurações estaduais e municipais")] },
+      { id: "digital-identity", name: "Identidade digital", status: "OPERANDO", summary: "Procurações e certificados de cada empresa.", capabilities: [cap("Procuração e-CAC", true), cap("Certificados A1 no cofre", true), cap("Validade dos certificados", true), cap("Procurações estaduais e municipais", true)] },
       { id: "corporate", name: "Societário", status: "PLANEJADO", summary: "Atos da empresa na Junta e na Receita.", capabilities: [cap("Abertura"), cap("Alteração contratual"), cap("Filiais"), cap("Baixa")] },
       { id: "contracts", name: "Contratos e assinatura", status: "PLANEJADO", summary: "Documentos a partir de modelos aprovados.", capabilities: [cap("Modelos aprovados"), cap("Assinatura eletrônica"), cap("Arquivo e evidência")] },
       { id: "regularization", name: "Regularização", status: "PLANEJADO", summary: "Pendências com os órgãos.", capabilities: [cap("Certidões"), cap("Parcelamentos"), cap("PER/DCOMP"), cap("Intimações")] },

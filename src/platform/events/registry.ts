@@ -297,6 +297,17 @@ export const EventContracts = {
       rules: z.string(),
     }),
   },
+  POWER_OF_ATTORNEY_REGISTERED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      system: z.enum(["SEFAZ", "PREFEITURA"]),
+      jurisdiction: z.string(),
+      name: z.string(),
+      valid_from: z.iso.date(),
+      valid_to: z.iso.date().nullable(),
+      verification: z.enum(["DOCUMENTO", "DECLARACAO"]),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

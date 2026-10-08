@@ -7,6 +7,7 @@ import { buildObligationMap, entityFacts } from "../onboarding/plan.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { refreshGuides } from "../tax/guides.js";
 import { runAutoPosting } from "../ledger/auto-posting.js";
+import { refreshPowerRequirements } from "../onboarding/powers.js";
 import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
 
 /**
@@ -118,6 +119,13 @@ export const LINKS: Link<LinkDeps>[] = [
     },
   },
   {
+    id: "procuracoes-locais",
+    on: ["CONTRACTED_SERVICES_DEFINED", "ENTITY_PROFILE_CREATED", "PGDAS_DECLARATION_READ", "NFSE_TAXES_READ", "POWER_OF_ATTORNEY_REGISTERED"],
+    agent: "digital-identity",
+    does: "Vê quais procurações estaduais e municipais a empresa precisa e pede ao cliente as que faltam",
+    run: async ({ pool, tenantId, entityId }) => ({ ...(await refreshPowerRequirements(pool, tenantId, entityId!)) }),
+  },
+  {
     id: "certificado-notas",
     on: ["DIGITAL_CERTIFICATE_REGISTERED"],
     agent: "docs",
@@ -143,4 +151,6 @@ export const EVENT_LABEL: Record<string, string> = {
   OBLIGATION_RULES_APPROVED: "Regras de obrigações aprovadas",
   CHART_OF_ACCOUNTS_DEFINED: "Plano de contas definido",
   BANK_STATEMENT_RECEIVED: "Extrato bancário recebido",
+  ENTITY_PROFILE_CREATED: "Perfil da empresa montado",
+  POWER_OF_ATTORNEY_REGISTERED: "Procuração estadual ou municipal registrada",
 };

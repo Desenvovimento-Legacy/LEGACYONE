@@ -12,6 +12,7 @@ import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
 import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
+import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
 import { classifyMovement, pendingMovements } from "../modules/ledger/auto-posting.js";
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
@@ -536,6 +537,27 @@ export function createWebServer(deps: WebDeps) {
         json(res, 200, { ...data, pending });
         return;
       }
+      // POST /api/empresa/:id/procuracao — procuração estadual (SEFAZ) ou municipal (Prefeitura), com o termo anexado.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "procuracao") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req, 8 * 1024 * 1024)) as { orgao?: string; inicio?: string; fim?: string | null; protocolo?: string; poderes?: string; arquivo?: { name?: string; data?: string } | null };
+        if (body.orgao !== "SEFAZ" && body.orgao !== "PREFEITURA") return json(res, 400, { erro: "Órgão inválido" });
+        const file = body.arquivo && typeof body.arquivo.name === "string" && typeof body.arquivo.data === "string"
+          ? { name: body.arquivo.name.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(body.arquivo.data, "base64") }
+          : null;
+        try {
+          const r = await registerPower(deps.appPool, deps.tenantId, {
+            entityId: parts[2]!, system: body.orgao, validFrom: body.inicio ?? "", validTo: body.fim || null,
+            protocol: body.protocolo?.trim().slice(0, 100) || null, scopes: (body.poderes ?? "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20), file,
+          }, actor);
+          await deps.orchestrate?.();
+          json(res, 200, r);
+        } catch (err) {
+          if (err instanceof PowerError) json(res, 400, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
       // POST /api/empresa/:id/plano — aplica o plano de contas padrão (decisão do responsável técnico).
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "plano") {
         if (guard("aprovar")) return;
@@ -914,6 +936,8 @@ if (isMain(import.meta.url)) {
         const w = await refreshWithholdings(app, tenant.id, id, today);
         if (w.changed) console.log(`[fiscal] ${id.slice(0, 8)}: ${w.changed} retenção(ões) mudaram de situação`);
       }
+      // Identidade digital: procurações estaduais e municipais que faltam ou venceram viram pedido ao cliente.
+      for (const { id } of ids.rows) await refreshPowerRequirements(app, tenant.id, id);
       // Agente Documentos: relê XML antes não reconhecidos quando o leitor ganha versão nova.
       const rr = await rereadUnrecognized(app, tenant.id, { kind: "AGENT", id: "docs" });
       if (rr.recognized) console.log(`[docs] ${rr.recognized} XML antes não reconhecido(s) agora lido(s)`);

@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { guidesNeedingAttention } from "../modules/tax/guides.js";
 import { withholdingsNeedingAttention } from "../modules/fiscal/withholdings.js";
+import { powersExpiringSoon } from "../modules/onboarding/powers.js";
 import { EVENT_LABEL, LINKS } from "../modules/orchestration/links.js";
 import { MAX_ATTEMPTS } from "../platform/orchestrator/orchestrator.js";
 import { agentName, DEPARTMENTS, PIPELINE_STAGES, PROCESSES, SHARED_AGENTS, type AgentInfo } from "../platform/agents/catalog.js";
@@ -138,6 +139,8 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
       };
       return `${p.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL"} retido ${pa}: ${WS[String(p.to)] ?? String(p.to)}`;
     }
+    case "POWER_OF_ATTORNEY_REGISTERED":
+      return `Procuração na ${p.name} registrada${p.valid_to ? `, válida até ${fmtDate(String(p.valid_to))}` : ""} (${p.verification === "DOCUMENTO" ? "termo anexado" : "declarada"})`;
     case "CHART_OF_ACCOUNTS_DEFINED":
       return `Plano de contas definido: ${p.accounts} contas desde ${fmtDate(String(p.valid_from))}`;
     case "BANK_STATEMENT_RECEIVED":
@@ -386,6 +389,17 @@ export async function humanQueue(tx: PoolClient) {
     impact: "Sem DARF, nota ou regra que explique o movimento. Ao classificar, você pode criar a regra e os próximos parecidos entram sozinhos.",
     since: u.oldest.toISOString(),
   }));
+  const powers = (await powersExpiringSoon(tx)).map((p) => ({
+    kind: "power",
+    id: `${p.entity_id}:${p.name}`,
+    type: "PROCURACAO_A_VENCER",
+    entityId: p.entity_id,
+    entity: p.entity,
+    caseId: null,
+    title: `Procuração na ${p.name} vence em ${fmtDate(p.valid_to)}`,
+    impact: "Peça a renovação ao cliente antes do vencimento. Depois de vencida, vira pedido ao cliente automaticamente.",
+    since: p.created_at.toISOString(),
+  }));
   // Vínculo que falhou MAX_ATTEMPTS vezes no mesmo evento espera uma pessoa.
   const failed = await tx.query<{ link_id: string; agent: string; event_type: string; entity_id: string | null; entity: string | null; error: string; at: Date }>(
     `SELECT DISTINCT ON (r.link_id, r.event_id) r.link_id, r.agent, r.event_type, r.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, r.error, r.finished_at AS at
@@ -417,6 +431,7 @@ export async function humanQueue(tx: PoolClient) {
     ...guides,
     ...withholdings,
     ...ledgerItems,
+    ...powers,
     ...pend.rows.map((p) => ({
       kind: p.case_id && divergences.has(p.case_id) ? "divergence" : p.type === "CONTRACTED_SERVICES" ? "services" : p.type === "OBLIGATION_RULES_APPROVAL" ? "rules" : "pending",
       divergence: p.case_id ? (divergences.get(p.case_id) ?? null) : null,
