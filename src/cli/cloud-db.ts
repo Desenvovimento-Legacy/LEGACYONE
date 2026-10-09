@@ -13,6 +13,7 @@ import { defaultSecretsPath, openSecretsFile, upsertSecrets } from "../shared/se
  *   pnpm cloud:db copy          copia os dados do Postgres local (docker) para a nuvem
  *                               e confere contagem por tabela e a cadeia da auditoria.
  *   pnpm cloud:db check         testa os três logins na nuvem.
+ *   pnpm cloud:db backup        cópia de segurança da nuvem para C:\\IARIS\\backup\\nuvem.
  *
  * Nenhuma senha ou URL com senha é impressa: só ✓/✗.
  */
@@ -184,8 +185,47 @@ async function copy() {
   }
 }
 
+/**
+ * Cópia de segurança do banco em nuvem para o PC (o plano gratuito não tem
+ * backup automático). Usa o pg_dump da mesma versão do servidor (imagem
+ * postgres oficial) e mantém as últimas KEEP cópias.
+ */
+const BACKUP_DIR = process.env.IARIS_BACKUP_DIR ?? "C:\\IARIS\\backup\\nuvem";
+const KEEP = 30;
+
+async function backup() {
+  const { store } = vault();
+  const admin = store.require("CLOUD_ADMIN_DATABASE_URL");
+  const c = new pg.Client({ connectionString: admin });
+  await c.connect();
+  const major = (await c.query<{ v: string }>("SHOW server_version_num")).rows[0]!.v.slice(0, 2);
+  await c.end();
+
+  const { mkdirSync, readdirSync, statSync, unlinkSync, createWriteStream } = await import("node:fs");
+  const { join } = await import("node:path");
+  mkdirSync(BACKUP_DIR, { recursive: true });
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+  const file = join(BACKUP_DIR, `iaris-${stamp}.dump`);
+  const env = { ...process.env, CLOUDURL: admin.replace("&uselibpqcompat=true", "") };
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn("docker", ["run", "--rm", "-e", "CLOUDURL", `postgres:${major}-alpine`, "sh", "-c", 'pg_dump -Fc -n public --no-owner --no-privileges "$CLOUDURL"'], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const out = createWriteStream(file);
+    let err = "";
+    p.stdout.pipe(out);
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", reject);
+    p.on("close", (code) => out.close(() => (code === 0 ? resolve() : reject(new Error(err.trim() || `pg_dump saiu com código ${code}`)))));
+  });
+  const size = statSync(file).size;
+  if (size < 1024) throw new Error("cópia vazia; verifique a conexão");
+  const old = readdirSync(BACKUP_DIR).filter((f) => /^iaris-\d+\.dump$/.test(f)).sort().reverse().slice(KEEP);
+  for (const f of old) unlinkSync(join(BACKUP_DIR, f));
+  console.log(`✓ cópia do banco em nuvem: ${file} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+}
+
 const [cmd, arg] = process.argv.slice(2);
 if (cmd === "setup") await setup(arg ?? "");
 else if (cmd === "copy") await copy();
 else if (cmd === "check") await check();
-else console.log("uso: pnpm cloud:db setup <ref> | copy | check");
+else if (cmd === "backup") await backup();
+else console.log("uso: pnpm cloud:db setup <ref> | copy | check | backup");

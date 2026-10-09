@@ -48,7 +48,12 @@ pnpm db:migrate     # aplica migrações (ADMIN_DATABASE_URL)
 pnpm db:dev-roles   # cria logins de dev/teste
 pnpm typecheck
 pnpm test           # exige Postgres com as variáveis do .env
+pnpm cloud:db check|backup   # banco em nuvem (Supabase São Paulo)
 ```
+
+Produção (PC do escritório) usa o banco em nuvem: `IARIS_DB_TARGET=cloud` no `.env`
+faz as URLs virem do cofre (`CLOUD_*`). Migração no PC: `pnpm db:migrate` (já vai
+para a nuvem). Testes continuam no Postgres local.
 
 **Toda alteração vai para o GitHub** (`origin/main`, Desenvovimento-Legacy/LEGACYONE):
 com typecheck e testes passando, commit e push na mesma hora — nunca deixar
