@@ -90,6 +90,8 @@ export function federalItemAccount(code: string | null, description: string | nu
 interface Ctx {
   tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>;
   revenueRule: boolean; bankStdRule: boolean; noNoteRule: boolean; cfg: ChartConfig; acc: (r: Role) => string;
+  /** 1ª passada do extrato: baixas parciais esperam, para os valores exatos casarem antes. */
+  deferPartial?: boolean;
 }
 
 /** Parceiro (cliente ou fornecedor) gravado na linha: base de razão auxiliar e contas em aberto. */
@@ -401,7 +403,9 @@ async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): 
         JOIN journal_entry e ON e.idempotency_key = ${t.key} || d.id::text
        WHERE d.entity_id = $1 AND d.role = '${t.r}' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
-         AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = '${t.full}' AND b.reference = d.id::text)
+         AND NOT EXISTS (SELECT 1 FROM bank_match b JOIN journal_entry be ON be.id = b.entry_id
+                          WHERE b.method = '${t.full}' AND b.reference = d.id::text
+                            AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = be.id))
     ) n
     WHERE total - paid > 0
     ORDER BY issued_at, number`;
@@ -613,7 +617,22 @@ function mentionsOwn(memo: string, own: OwnIdentity): boolean {
   return Boolean(own.name && ` ${t.replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ")} `.includes(` ${own.name} `));
 }
 
+/**
+ * Duas passadas: na 1ª só quitações exatas (nota, agrupamento, DARF, regras); as baixas parciais
+ * esperam a 2ª, para não consumir saldo de uma nota que outro movimento quita pelo valor exato.
+ */
 async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
+  const before = { pending: pending.length, count: s.pending, locked: s.locked };
+  ctx.deferPartial = true;
+  await bankPass(ctx, s, pending);
+  ctx.deferPartial = false;
+  pending.length = before.pending;
+  s.pending = before.count;
+  s.locked = before.locked;
+  await bankPass(ctx, s, pending);
+}
+
+async function bankPass(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
   const { rows } = await ctx.tx.query<Movement>(
     `SELECT t.id, t.posted_on::text, t.amount::text, t.memo, t.payee, c.code AS account_code, b.label, b.id AS bank_account_id, b.bank_code
        FROM bank_transaction t JOIN bank_account b ON b.id = t.bank_account_id JOIN chart_account c ON c.id = b.ledger_account_id
@@ -684,6 +703,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       if (f) notes.push(f);
       const tp = await matchNotes(ctx, m, "TOMADA");
       if (tp && "notes" in tp) {
+        if (tp.parts && ctx.deferPartial) continue;
         const ns = tp.notes;
         const ps = settle(tp);
         const partial = ps.some(isPartial);
@@ -703,6 +723,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
     } else {
       const n = await matchNotes(ctx, m, "PRESTADA");
       if (n && "notes" in n) {
+        if (n.parts && ctx.deferPartial) continue;
         const ns = n.notes;
         const ps = settle(n);
         const partial = ps.some(isPartial);

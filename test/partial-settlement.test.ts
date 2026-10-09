@@ -28,7 +28,7 @@ const ofx = (rows: [string, string, string, string][]) =>
   `</BANKTRANLIST>\r\n</STMTRS>\r\n</STMTTRNRS>\r\n</BANKMSGSRSV1>\r\n</OFX>\r\n`;
 
 describe("recebimento e pagamento parcial de NFS-e", () => {
-  it("baixa parcelas das notas mais antigas, a última parcela quita pelo saldo e valor acima do saldo fica pendente", async () => {
+  it("valores exatos casam antes, parcelas baixam as notas mais antigas, a última quita pelo saldo e valor acima do saldo fica pendente", async () => {
     const t = await newTenant();
     const { entityId } = await newEntity(t, CNPJ_MATRIZ);
     let nsu = 0;
@@ -52,9 +52,9 @@ describe("recebimento e pagamento parcial de NFS-e", () => {
     await approveTakenServicesRule(appPool, t, LUAN);
 
     await importBankStatement(appPool, t, entityId, { name: "b.ofx", bytes: Buffer.from(ofx([
-      ["1", "20260710", "600,00", `PIX RECEBIDO ${CLIENTE}`], // parcela da nota 10
-      ["2", "20260715", "1400,00", `PIX RECEBIDO ${CLIENTE}`], // quita os 400 da 10 e 1.000 da 11
-      ["3", "20260720", "1000,00", `PIX RECEBIDO ${CLIENTE}`], // valor exato do saldo da 11: quitação
+      ["1", "20260710", "600,00", `PIX RECEBIDO ${CLIENTE}`], // parcela: a nota 10 é quitada pelo valor exato (mov. 3), então vai para a 11
+      ["2", "20260715", "1400,00", `PIX RECEBIDO ${CLIENTE}`], // saldo exato da 11 depois da parcela: quitação
+      ["3", "20260720", "1000,00", `PIX RECEBIDO ${CLIENTE}`], // valor exato da nota 10 (casa antes das parcelas)
       ["4", "20260712", "-300,00", `SISPAG FORNECEDOR ${DELTA}`], // parcela da nota tomada D1
       ["5", "20260713", "-900,00", `SISPAG FORNECEDOR ${DELTA}`], // acima do saldo de 700: pendência
     ]), "latin1") }, LUAN);
@@ -64,18 +64,17 @@ describe("recebimento e pagamento parcial de NFS-e", () => {
       const m = await tx.query<{ method: string; amount: string }>(
         "SELECT method, amount::text FROM bank_match ORDER BY method, bank_match.amount");
       expect(m.rows).toEqual([
-        { method: "NFSE", amount: "400.00" },
         { method: "NFSE", amount: "1000.00" },
+        { method: "NFSE", amount: "1400.00" },
         { method: "NFSE_PARCIAL", amount: "600.00" },
-        { method: "NFSE_PARCIAL", amount: "1000.00" },
         { method: "NFSE_TOMADA_PARCIAL", amount: "300.00" },
       ]);
       const h = await tx.query<{ history: string }>("SELECT history FROM journal_entry WHERE origin = 'BANCO' ORDER BY entry_date, history");
       expect(h.rows.map((r) => r.history.replace(/ — .*$/, ""))).toEqual([
-        "Recebimento parcial de SAFE ON SERVICOS LTDA (NFS-e nº 10 parcial)",
+        "Recebimento parcial de SAFE ON SERVICOS LTDA (NFS-e nº 11 parcial)",
         "Pagamento parcial a DELTA SERVICOS LTDA (NFS-e nº D1 parcial)",
-        "Recebimento parcial de SAFE ON SERVICOS LTDA (NFS-e nº 10, 11 parcial)",
         "Recebimento da NFS-e nº 11 (SAFE ON SERVICOS LTDA)",
+        "Recebimento da NFS-e nº 10 (SAFE ON SERVICOS LTDA)",
       ]);
       const cli = await openItems(tx, entityId, "1.1.2.01", "2026-07-31");
       expect(cli.total).toBe("0.00");
