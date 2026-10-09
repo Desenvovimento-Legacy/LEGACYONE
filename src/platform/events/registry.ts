@@ -326,6 +326,9 @@ export const EventContracts = {
   ACCOUNTING_PERIOD_REOPENED: {
     1: z.object({ entity_id: z.uuid(), competence: z.iso.date(), reason: z.string(), by: z.string() }),
   },
+  CHART_TEMPLATE_IMPORTED: {
+    1: z.object({ template_id: z.uuid(), name: z.string(), accounts: z.number().int(), unresolved: z.number().int() }),
+  },
   PARTNERS_REGISTERED: {
     1: z.object({ entity_id: z.uuid(), suppliers: z.number().int(), customers: z.number().int(), source: z.enum(["NFSE", "PESSOA"]) }),
   },

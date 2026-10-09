@@ -8,6 +8,7 @@ import { newId } from "../../shared/ids.js";
 import { normalize } from "../../shared/text.js";
 import { openItems } from "./reports.js";
 import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
+import { chartConfig, roleAccount } from "./chart-config.js";
 
 /**
  * Cadastro de parceiros (fornecedores e clientes) de cada empresa.
@@ -220,8 +221,9 @@ export async function partnerRegistry(tx: PoolClient, entityId: string, month: s
   );
   const ruleBy = new Map(rules.rows.map((r) => [r.supplier_doc, r.account_code]));
   const tableOk = Boolean((await tx.query("SELECT 1 FROM accounting_rule_approval WHERE rule_set = $1", [TAKEN_SERVICES_RULE])).rowCount);
-  const openSup = new Map((await openItems(tx, entityId, "2.1.1.01", end)).items.map((i) => [i.partnerDoc, i.balance]));
-  const openCli = new Map((await openItems(tx, entityId, "1.1.2.01", end)).items.map((i) => [i.partnerDoc, i.balance]));
+  const cfg = await chartConfig(tx, entityId);
+  const openSup = new Map((await openItems(tx, entityId, roleAccount(cfg, "FORNECEDORES"), end)).items.map((i) => [i.partnerDoc, i.balance]));
+  const openCli = new Map((await openItems(tx, entityId, roleAccount(cfg, "CLIENTES"), end)).items.map((i) => [i.partnerDoc, i.balance]));
 
   const prev3 = window.slice(2, 5);
   const list: PartnerView[] = rows.map((p) => {
@@ -240,8 +242,8 @@ export async function partnerRegistry(tx: PoolClient, entityId: string, month: s
     if (p.role === "FORNECEDOR") {
       const r = ruleBy.get(p.doc);
       if (r) account = { code: r, source: "FORNECEDOR" };
-      else if (tableOk && codes.length === 1 && serviceAccount(codes[0]!)) account = { code: serviceAccount(codes[0]!)!, source: "TABELA" };
-    } else account = { code: "3.1.1.01", source: "TABELA" };
+      else if (tableOk && codes.length === 1 && serviceAccount(codes[0]!, cfg)) account = { code: serviceAccount(codes[0]!, cfg)!, source: "TABELA" };
+    } else account = { code: roleAccount(cfg, "RECEITA_SERVICOS"), source: "TABELA" };
     const open = (p.role === "FORNECEDOR" ? openSup : openCli).get(p.doc) ?? "0.00";
     return { id: p.id, doc: p.doc, role: p.role, name: p.name, firstSeen: p.first_seen, officeClient: p.office_client, codes, months, recurring, status, expected, account, open, aliases: p.aliases };
   });

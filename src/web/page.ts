@@ -538,7 +538,7 @@ function showCtb(id, r, tab, raz) {
     return;
   }
   if (tab === "forn" || tab === "cli") {
-    var conta = tab === "forn" ? "2.1.1.01" : "1.1.2.01";
+    var conta = tab === "forn" ? r.roles.fornecedores : r.roles.clientes;
     out.innerHTML = '<div class="empty">Carregando…</div>';
     getJson("/api/empresa/" + id + "/contabil/abertos?conta=" + conta + "&ate=" + end).then(function (x) {
       var rows = x.items.map(function (i) {
@@ -624,7 +624,7 @@ function renderPartners(id, r, out, x) {
         (p.officeClient ? '<div style="font-size:11px" class="ok">cliente do escritório: ' + esc(p.officeClient) + '</div>' : '') + '</td>' +
         '<td class="mono" style="font-size:11px">' + esc(p.codes.join(", ") || "—") + '</td>' + cells +
         '<td>' + PST[p.status] + (p.expected ? '<div class="mut" style="font-size:11px">média ' + brl(p.expected) + '</div>' : '') + '</td><td>' + acc + '</td>' +
-        '<td class="num">' + (Number(p.open) ? '<a href="#" data-raz="' + (role === "FORNECEDOR" ? "2.1.1.01" : "1.1.2.01") + '" data-parc="' + esc(p.doc) + '" data-pnome="' + esc(p.name || "") + '">' + dc(p.open) + '</a>' : '<span class="mut">—</span>') + '</td><td>' + al + '</td></tr>';
+        '<td class="num">' + (Number(p.open) ? '<a href="#" data-raz="' + (role === "FORNECEDOR" ? r.roles.fornecedores : r.roles.clientes) + '" data-parc="' + esc(p.doc) + '" data-pnome="' + esc(p.name || "") + '">' + dc(p.open) + '</a>' : '<span class="mut">—</span>') + '</td><td>' + al + '</td></tr>';
     }).join("");
     return '<div class="scroll"><table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
   };
@@ -661,8 +661,8 @@ function loadContabil(id, mes) {
     if (!r.hasChart) {
       h += '<div class="empty">A empresa ainda não tem plano de contas. Sem ele, a IARIS não lança nada.</div>' +
         '<div class="form-row only-aprovar" style="margin-top:8px"><label>Início da contabilidade<input type="month" id="ctb-ini" value="' + lastClosedMonth() + '"></label>' +
-        '<button class="warn" data-act="plano">Aplicar plano de contas padrão Legacy</button></div>' +
-        '<div class="empty">O plano padrão tem ' + 'as contas usuais do Simples (serviços e comércio). Pode ser trocado pelo plano do escritório depois, sem apagar nada.</div>';
+        '<button class="warn" data-act="plano">Aplicar o plano de contas padrão do escritório</button></div>' +
+        '<div class="empty">A empresa recebe uma cópia do plano padrão do escritório (o último modelo importado). Conta nova da empresa entra só nela.</div>';
       box.innerHTML = h;
       var bp = box.querySelector("[data-act=plano]");
       if (bp) bp.addEventListener("click", function () {
@@ -698,8 +698,7 @@ function loadContabil(id, mes) {
     }
     var tk = r.taken || { pending: 0, suppliers: [] };
     if (!tk.approved) {
-      var pr = Object.keys(tk.proposal.byItem).map(function (k) { var x = tk.proposal.byItem[k]; return '<tr><td class="mono">' + k + '</td><td>' + esc(x.label) + '</td><td class="mono">' + esc(x.account) + '</td></tr>'; }).join("") +
-        Object.keys(tk.proposal.bySubitem).map(function (k) { return '<tr><td class="mono">' + k.slice(0, 2) + '.' + k.slice(2) + '</td><td class="mut">subitem</td><td class="mono">' + esc(tk.proposal.bySubitem[k]) + '</td></tr>'; }).join("");
+      var pr = tk.proposal.map(function (x) { return '<tr><td class="mono">' + esc(x.code) + '</td><td>' + esc(x.label) + '</td><td>' + (x.account ? '<span class="mono">' + esc(x.account) + '</span> ' + esc(x.accountName || "") : '<span class="mut">sem conta no plano: fica para definir pelo fornecedor</span>') + '</td></tr>'; }).join("");
       h += '<h3 style="font-size:13px;margin:12px 0 6px">NFS-e tomadas: tabela de contas por tipo de serviço (proposta)</h3>' +
         '<div class="empty">' + tk.pending + ' nota(s) tomada(s) esperando. Cada nota vira: D despesa (pela tabela ou pela conta do fornecedor) / C Fornecedores (líquido) e C retenções a recolher. Tipo de serviço fora da tabela fica para você definir pelo fornecedor.</div>' +
         '<details><summary class="mut" style="cursor:pointer;font-size:12px">Ver a tabela</summary><table><thead><tr><th>Item LC 116</th><th>Serviço</th><th>Conta</th></tr></thead><tbody>' + pr + '</tbody></table></details>' +

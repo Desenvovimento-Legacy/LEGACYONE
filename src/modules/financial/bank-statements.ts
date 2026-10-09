@@ -6,6 +6,7 @@ import { appendEvent, type Producer } from "../../platform/events/outbox.js";
 import type { Actor } from "../../shared/actor.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
+import { chartConfig, roleAccount } from "../ledger/chart-config.js";
 import { addAccount, hasChart } from "../ledger/ledger.js";
 
 /**
@@ -55,7 +56,8 @@ async function ensureBankAccount(tx: PoolClient, entityId: string, bank: string,
   } else if (await hasChart(tx, entityId)) {
     const from = await tx.query<{ d: string }>("SELECT min(valid_from)::text AS d FROM chart_account WHERE entity_id = $1", [entityId]);
     const start = [from.rows[0]!.d, `${validFrom.slice(0, 7)}-01`].sort()[0]!;
-    const a = await addAccount(tx, { entityId, parent: "1.1.1.02", name: acc.label, validFrom: start, source: "BANCO" }, actor);
+    const parent = roleAccount(await chartConfig(tx, entityId), "BANCOS");
+    const a = await addAccount(tx, { entityId, parent, name: acc.label, validFrom: start, source: "BANCO" }, actor);
     await tx.query("UPDATE bank_account SET ledger_account_id = $1 WHERE id = $2", [a.id, acc.id]);
     ledgerCode = a.code;
   }

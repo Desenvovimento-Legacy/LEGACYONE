@@ -59,20 +59,45 @@ export async function applyStandardChart(pool: Pool, tenantId: string, entityId:
   if (!/^\d{4}-\d{2}-01$/.test(validFrom)) throw new LedgerError("Início do plano: primeiro dia do mês (AAAA-MM-01)");
   return withTenant(pool, tenantId, async (tx) => {
     if (await hasChart(tx, entityId)) return { created: 0, already: true };
-    for (const r of STANDARD_CHART) {
+    // Plano padrão do escritório (modelo importado); sem modelo, o plano embutido.
+    const tpl = await tx.query<{ id: string; name: string; config: unknown }>("SELECT id, name, config FROM chart_template ORDER BY imported_at DESC LIMIT 1");
+    const t = tpl.rows[0];
+    let chart: string;
+    let count: number;
+    if (t) {
+      const accs = await tx.query<{ code: string; short_code: string | null; name: string; nature: Nature; analytic: boolean; parent_code: string | null }>(
+        "SELECT code, short_code, name, nature, analytic, parent_code FROM chart_template_account WHERE template_id = $1 ORDER BY code", [t.id]);
+      for (const r of accs.rows) {
+        await tx.query(
+          `INSERT INTO chart_account (id, tenant_id, entity_id, code, short_code, name, nature, analytic, parent_code, valid_from, source, created_by)
+           VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, 'PADRAO_ESCRITORIO', $10)`,
+          [newId(), entityId, r.code, r.short_code, r.name, r.nature, r.analytic, r.parent_code, validFrom, actor.id],
+        );
+      }
       await tx.query(
-        `INSERT INTO chart_account (id, tenant_id, entity_id, code, name, nature, analytic, parent_code, valid_from, source, created_by)
-         VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, 'PADRAO_LEGACY', $9)`,
-        [newId(), entityId, r.code, r.name, r.nature, r.analytic, parentOf(r.code), validFrom, actor.id],
+        "INSERT INTO chart_layout (id, tenant_id, entity_id, template_id, config, valid_from, created_by) VALUES ($1, current_tenant(), $2, $3, $4, $5, $6)",
+        [newId(), entityId, t.id, JSON.stringify(t.config), validFrom, actor.id],
       );
+      chart = `ESCRITORIO:${t.name}`;
+      count = accs.rows.length;
+    } else {
+      for (const r of STANDARD_CHART) {
+        await tx.query(
+          `INSERT INTO chart_account (id, tenant_id, entity_id, code, name, nature, analytic, parent_code, valid_from, source, created_by)
+           VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, 'PADRAO_LEGACY', $9)`,
+          [newId(), entityId, r.code, r.name, r.nature, r.analytic, parentOf(r.code), validFrom, actor.id],
+        );
+      }
+      chart = STANDARD_CHART_ID;
+      count = STANDARD_CHART.length;
     }
     await appendEvent(tx, {
       type: "CHART_OF_ACCOUNTS_DEFINED",
       schemaVersion: 1,
       producer: PRODUCER,
-      idempotencyKey: `plano:${entityId}:${STANDARD_CHART_ID}`,
+      idempotencyKey: `plano:${entityId}:${t?.id ?? STANDARD_CHART_ID}`,
       entityId,
-      payload: { entity_id: entityId, chart: STANDARD_CHART_ID, accounts: STANDARD_CHART.length, valid_from: validFrom },
+      payload: { entity_id: entityId, chart: chart.slice(0, 120), accounts: count, valid_from: validFrom },
     });
     await audit(tx, {
       actor,
@@ -80,9 +105,9 @@ export async function applyStandardChart(pool: Pool, tenantId: string, entityId:
       resourceType: "chart_account",
       resourceId: entityId,
       entityId,
-      data: { chart: STANDARD_CHART_ID, accounts: STANDARD_CHART.length, valid_from: validFrom },
+      data: { chart, template_id: t?.id ?? null, accounts: count, valid_from: validFrom },
     });
-    return { created: STANDARD_CHART.length, already: false };
+    return { created: count, already: false };
   });
 }
 
@@ -100,8 +125,18 @@ async function accountsOn(tx: PoolClient, entityId: string, date: string): Promi
 /** Próximo código livre debaixo de uma sintética (ex.: 1.1.1.02 → 1.1.1.02.03). */
 export async function nextChildCode(tx: PoolClient, entityId: string, parent: string): Promise<string> {
   const r = await tx.query<{ code: string }>("SELECT code FROM chart_account WHERE entity_id = $1 AND parent_code = $2", [entityId, parent]);
-  const n = r.rows.map((x) => Number(x.code.slice(parent.length + 1))).filter(Number.isFinite);
-  return `${parent}.${String((n.length ? Math.max(...n) : 0) + 1).padStart(2, "0")}`;
+  const tails = r.rows.map((x) => x.code.slice(parent.length + 1));
+  const n = tails.map(Number).filter(Number.isFinite);
+  // mesma largura das irmãs (ex.: 1.1.1.02.000009 no plano do Domínio); sem irmãs: 6 dígitos se o plano usa 5 níveis
+  let width = tails.length ? Math.max(...tails.map((t) => t.length)) : 2;
+  if (!tails.length) {
+    const w = await tx.query<{ w: number | null }>(
+      `SELECT max(length(split_part(code, '.', $2::int + 1)))::int AS w FROM chart_account WHERE entity_id = $1 AND array_length(string_to_array(code, '.'), 1) = $2::int + 1`,
+      [entityId, parent.split(".").length],
+    );
+    width = w.rows[0]?.w ?? 2;
+  }
+  return `${parent}.${String((n.length ? Math.max(...n) : 0) + 1).padStart(width, "0")}`;
 }
 
 export async function addAccount(

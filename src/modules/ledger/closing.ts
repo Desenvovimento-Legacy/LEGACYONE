@@ -7,6 +7,7 @@ import type { Actor } from "../../shared/actor.js";
 import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { pendingMovements } from "./auto-posting.js";
+import { chartConfig } from "./chart-config.js";
 import { LedgerError, lockedCompetences, setPeriodLock, trialBalance } from "./ledger.js";
 
 /**
@@ -68,6 +69,7 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
   const pendingBank = (await pendingMovements(pool, tenantId, entityId)).filter((p) => p.posted_on >= from && p.posted_on <= to);
   return withTenant(pool, tenantId, async (tx) => {
     const start = await chartStart(tx, entityId);
+    const cfg = await chartConfig(tx, entityId);
     const lock = await tx.query<{ status: string; created_at: Date; actor_id: string }>(
       "SELECT status, created_at, actor_id FROM ledger_period_lock WHERE entity_id = $1 AND competence = $2 ORDER BY created_at DESC LIMIT 1",
       [entityId, from],
@@ -124,7 +126,8 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
       [entityId, from, to],
     );
     if (simples.rowCount) {
-      const revenue = tb.rows.filter((r) => r.analytic && r.code.startsWith("3.1.")).reduce((s, r) => s.add(r.credit).sub(r.debit), Dec.ZERO);
+      const rbPrefixes = cfg.dre.find((g) => g.key === "rb")?.include ?? [];
+      const revenue = tb.rows.filter((r) => r.analytic && rbPrefixes.some((p) => r.code.startsWith(`${p}.`))).reduce((s, r) => s.add(r.credit).sub(r.debit), Dec.ZERO);
       const prov = await tx.query(
         `SELECT 1 FROM journal_entry e WHERE e.entity_id = $1 AND e.idempotency_key LIKE $2
             AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)`,
@@ -172,7 +175,9 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
     }
 
     // 9. Saldos contra a natureza (alerta, não bloqueia)
-    const contra = (code: string, name: string) => name.startsWith("(-)") || code.startsWith("3.2.") || code === "2.3.1.02" || code === "2.3.1.03";
+    const dedPrefixes = cfg.dre.find((g) => g.key === "ded")?.include ?? [];
+    const contra = (code: string, name: string) =>
+      name.startsWith("(-)") || code.startsWith("5") || dedPrefixes.some((p) => code.startsWith(`${p}.`)) || code === "2.3.1.02" || code === "2.3.1.03";
     const inverted = tb.rows.filter((r) => {
       if (!r.analytic || contra(r.code, r.name)) return false;
       const bal = Dec.of(r.closing);
@@ -184,7 +189,7 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
       detail: inverted.length ? `${inverted.length} conta(s) com saldo invertido (ex.: banco credor, fornecedor devedor)` : "Nenhum saldo invertido",
       items: inverted.slice(0, 15).map((r) => `${r.code} ${r.name}: ${brl(Dec.of(r.closing).cmp("0") < 0 ? Dec.of(r.closing).mul("-1") : r.closing)} ${Dec.of(r.closing).cmp("0") < 0 ? "C" : "D"}`) });
 
-    const result = tb.rows.filter((r) => r.analytic && (r.code.startsWith("3.") || r.code.startsWith("4.")))
+    const result = tb.rows.filter((r) => r.analytic && (r.code.startsWith("3.") || r.code.startsWith("4.") || r.code.startsWith("5.")))
       .reduce((s, r) => s.add(r.credit).sub(r.debit), Dec.ZERO);
     const canClose = !locked && checks.every((c) => !c.blocking || c.status === "OK" || c.status === "NAO_SE_APLICA");
     return { ...base, checks, canClose, totals: { debit: tb.totals.debit, credit: tb.totals.credit, result: result.toFixed(2) } };

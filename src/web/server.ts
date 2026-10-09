@@ -22,7 +22,9 @@ import {
   ruleStatus, runAutoPosting, takenRuleStatus,
 } from "../modules/ledger/auto-posting.js";
 import { closeMonth, closingStatus, reopenMonth } from "../modules/ledger/closing.js";
-import { SERVICE_ACCOUNT_BY_ITEM, SERVICE_ACCOUNT_BY_SUBITEM } from "../modules/ledger/service-accounts.js";
+import { serviceProposal } from "../modules/ledger/service-accounts.js";
+import { chartConfig } from "../modules/ledger/chart-config.js";
+import { activeTemplate, importChartTemplate } from "../modules/ledger/chart-template.js";
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
@@ -668,14 +670,18 @@ export function createWebServer(deps: WebDeps) {
           bySupplier.set(k, g);
         }
         const takenRule = await withTenant(deps.appPool, deps.tenantId, (tx) => takenRuleStatus(tx));
+        const cfg = await withTenant(deps.appPool, deps.tenantId, (tx) => chartConfig(tx, id));
+        const names = new Map(data.accounts.map((a) => [a.code, a.name]));
         const revenueRule = await withTenant(deps.appPool, deps.tenantId, async (tx) => ({
           approved: await ruleStatus(tx, REVENUE_RETENTIONS_RULE), ...(data.hasChart ? await revenueRetentionsPending(tx, id) : { notes: 0, total: "0", withheld: "0" }),
         }));
         json(res, 200, {
           ...data, pending,
           revenueRule,
+          roles: { clientes: cfg.roles.CLIENTES ?? null, fornecedores: cfg.roles.FORNECEDORES ?? null },
+          chartTemplate: cfg.template,
           taken: { approved: takenRule, pending: taken.length, suppliers: [...bySupplier.values()].sort((a, b) => b.total - a.total).slice(0, 60),
-            proposal: { bySubitem: SERVICE_ACCOUNT_BY_SUBITEM, byItem: SERVICE_ACCOUNT_BY_ITEM } },
+            proposal: serviceProposal(cfg).map((p) => ({ ...p, accountName: p.account ? names.get(p.account) ?? null : null })) },
         });
         return;
       }
@@ -721,6 +727,24 @@ export function createWebServer(deps: WebDeps) {
           }
         } catch (err) {
           if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // GET /api/plano-padrao — modelo de plano de contas do escritório (o vigente).
+      if (req.method === "GET" && url.pathname === "/api/plano-padrao") {
+        json(res, 200, { template: await withTenant(deps.appPool, deps.tenantId, (tx) => activeTemplate(tx)) });
+        return;
+      }
+      // POST /api/plano-padrao {nome, arquivo{name,data}} — importa o relatório de plano de contas (CSV do Domínio).
+      if (req.method === "POST" && url.pathname === "/api/plano-padrao") {
+        if (guard("aprovar")) return;
+        const body = (await readJson(req, 4 * 1024 * 1024)) as { nome?: string; arquivo?: { name?: string; data?: string } };
+        if (!body.arquivo?.data || !body.arquivo.name) return json(res, 400, { erro: "Envie o arquivo do plano (CSV)" });
+        try {
+          json(res, 200, await importChartTemplate(deps.appPool, deps.tenantId, { name: (body.nome ?? "").trim() || body.arquivo.name, fileName: body.arquivo.name, bytes: Buffer.from(body.arquivo.data, "base64") }, actor));
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 400, { erro: err.message });
           else throw err;
         }
         return;

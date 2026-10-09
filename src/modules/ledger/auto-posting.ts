@@ -10,6 +10,7 @@ import { normalize } from "../../shared/text.js";
 import { identifyPartner, learnAlias, loadPartnerIndex, syncPartners, type IdentifiedPartner, type PartnerIndex } from "./partners.js";
 import { ensureStandardAccounts, LedgerError, lockedCompetences, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
 import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
+import { BUILTIN_CONFIG, chartConfig, roleAccount, type ChartConfig, type Role } from "./chart-config.js";
 
 /**
  * Motor de contabilização automática (determinístico, sem IA).
@@ -52,19 +53,25 @@ export { normalize };
 const brl = (v: string) => Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
 
 /** Conta do tributo pelo item do DARF (código; senão descrição). Nulo = não sei: fica para pessoa. */
-export function federalItemAccount(code: string | null, description: string | null): string | null {
+export function federalItemRole(code: string | null, description: string | null): Role | null {
   const c = (code ?? "").replace(/\D/g, "").slice(0, 4);
   const d = normalize(description);
-  if (c === "3333" || (/SIMPLES NACIONAL/.test(d) && !/CONCOMITANTE|SIMPLES CONC/.test(d))) return "2.1.2.01";
-  if (["1708", "8045", "3280"].includes(c) || /IRRF.*PESSOA JURIDICA/.test(d)) return "2.1.2.02";
-  if (["5952", "5979", "5960", "5987"].includes(c) || /RETENCAO.*(PIS|COFINS|CSLL)|CSRF/.test(d)) return "2.1.2.03";
-  if (c === "0561" || /IRRF.*TRABALHO ASSALARIADO/.test(d)) return "2.1.3.05";
-  if (c === "0588" || /IRRF.*SEM VINCULO/.test(d)) return "2.1.2.02";
-  if (/CONTRIBUICAO PREVIDENCIARIA|CONTRIB(UICAO)? EMPRESA|^CP |\bRAT\b|TERCEIROS/.test(d) || ["1082", "1099", "1138", "1646", "1170", "1176", "1191", "1196", "1200"].includes(c)) return "2.1.3.03";
+  if (c === "3333" || (/SIMPLES NACIONAL/.test(d) && !/CONCOMITANTE|SIMPLES CONC/.test(d))) return "SIMPLES_RECOLHER";
+  if (["1708", "8045", "3280"].includes(c) || /IRRF.*PESSOA JURIDICA/.test(d)) return "IRRF_RET_RECOLHER";
+  if (["5952", "5979", "5960", "5987"].includes(c) || /RETENCAO.*(PIS|COFINS|CSLL)|CSRF/.test(d)) return "CSRF_RET_RECOLHER";
+  if (c === "0561" || /IRRF.*TRABALHO ASSALARIADO/.test(d)) return "IRRF_FOLHA_RECOLHER";
+  if (c === "0588" || /IRRF.*SEM VINCULO/.test(d)) return "IRRF_RET_RECOLHER";
+  if (/CONTRIBUICAO PREVIDENCIARIA|CONTRIB(UICAO)? EMPRESA|^CP |\bRAT\b|TERCEIROS/.test(d) || ["1082", "1099", "1138", "1646", "1170", "1176", "1191", "1196", "1200"].includes(c)) return "INSS_RECOLHER";
   return null;
 }
 
-interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>; revenueRule: boolean }
+/** Conta do item do DARF no plano (embutido por padrão). Nulo = não sei: fica para pessoa. */
+export function federalItemAccount(code: string | null, description: string | null, cfg: ChartConfig = BUILTIN_CONFIG): string | null {
+  const r = federalItemRole(code, description);
+  return r ? cfg.roles[r] ?? null : null;
+}
+
+interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>; revenueRule: boolean; cfg: ChartConfig; acc: (r: Role) => string }
 
 /** Parceiro (cliente ou fornecedor) gravado na linha: base de razão auxiliar e contas em aberto. */
 const partner = (doc: string | null, name: string | null): Record<string, string> => {
@@ -78,7 +85,8 @@ const newStats = (): Stats => ({ posted: 0, reversed: 0, pending: 0, locked: 0, 
 const compOf = (date: string) => `${date.slice(0, 7)}-01`;
 
 async function makeCtx(tx: PoolClient, entityId: string, start: string, actor: Actor): Promise<Ctx> {
-  return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE) };
+  const cfg = await chartConfig(tx, entityId);
+  return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
 }
 
 async function ruleApproved(tx: PoolClient, ruleSet: string): Promise<boolean> {
@@ -148,7 +156,7 @@ async function nfseRevenue(ctx: Ctx, s: Stats) {
       if (e.rows[0]) await reverse(ctx, s, e.rows[0].id, "NFS-e cancelada");
       continue;
     }
-    const lines: EntryLine[] = [{ account: "1.1.2.01", debit: n.value, dimensions: partner(n.taker_doc, n.taker) }, { account: "3.1.1.01", credit: n.value }];
+    const lines: EntryLine[] = [{ account: ctx.acc("CLIENTES"), debit: n.value, dimensions: partner(n.taker_doc, n.taker) }, { account: ctx.acc("RECEITA_SERVICOS"), credit: n.value }];
     if (n.withheld !== null && Dec.of(n.withheld).gt("0")) {
       // Retenção sofrida (tomador reteve): só com a regra aprovada e com a leitura da nota conferida.
       if (!ctx.revenueRule || n.read_check === "DIVERGENTE") {
@@ -159,12 +167,12 @@ async function nfseRevenue(ctx: Ctx, s: Stats) {
       const net = Dec.of(n.value).sub(n.withheld);
       if (!net.gt("0")) { s.pending++; continue; }
       const dim = partner(n.taker_doc, n.taker);
-      lines.splice(0, 1, { account: "1.1.2.01", debit: net.toFixed(2), dimensions: dim });
+      lines.splice(0, 1, { account: ctx.acc("CLIENTES"), debit: net.toFixed(2), dimensions: dim });
       const add = (account: string, v: string, history: string) => { if (Dec.of(v).gt("0")) lines.splice(lines.length - 1, 0, { account, debit: Dec.of(v).toFixed(2), history, dimensions: dim }); };
-      add("1.1.3.01", n.irrf, "IRRF retido pelo tomador");
-      add("1.1.3.02", n.csrf, "PIS/COFINS/CSLL retidos pelo tomador");
-      add("1.1.3.03", n.cp, "INSS retido pelo tomador");
-      add("3.2.1.03", n.iss, "ISS retido pelo tomador");
+      add(ctx.acc("IRRF_RECUPERAR"), n.irrf, "IRRF retido pelo tomador");
+      add(ctx.acc("CSRF_RECUPERAR"), n.csrf, "PIS/COFINS/CSLL retidos pelo tomador");
+      add(ctx.acc("INSS_RECUPERAR"), n.cp, "INSS retido pelo tomador");
+      add(ctx.acc("ISS_RETIDO_DEDUCAO"), n.iss, "ISS retido pelo tomador");
     }
     await post(ctx, s, {
       entityId: ctx.entityId, date: n.issued, origin: "FISCAL", originRef: `nfse_document:${n.id}`, idempotencyKey: key,
@@ -230,7 +238,7 @@ async function simplesProvision(ctx: Ctx, s: Stats) {
     await post(ctx, s, {
       entityId: ctx.entityId, date: lastDay(b.competence), origin: "TRIBUTOS", originRef: b.ref, idempotencyKey: b.key,
       history: b.history, evidence: [b.evidence], confidence: "1",
-      lines: [{ account: "3.2.1.01", debit: b.total }, { account: "2.1.2.01", credit: b.total }],
+      lines: [{ account: ctx.acc("SIMPLES_DEDUCAO"), debit: b.total }, { account: ctx.acc("SIMPLES_RECOLHER"), credit: b.total }],
     });
   }
 }
@@ -302,7 +310,7 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
         )
       : null;
     const byRule = rule?.rows[0] ?? null;
-    const proposed = approved ? serviceAccount(n.code) : null;
+    const proposed = approved ? serviceAccount(n.code, ctx.cfg) : null;
     const account = byRule?.account_code ?? proposed;
     if (!account) {
       miss(approved ? `Tipo de serviço ${n.code ?? "não informado"} sem conta definida` : "Tabela de contas das NFS-e tomadas aguardando aprovação");
@@ -313,11 +321,11 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
     const net = Dec.of(n.value).sub(totalRet);
     if (!net.gt("0")) { miss("Retenções maiores que o valor da nota"); continue; }
     const dim = partner(n.doc, n.supplier);
-    const lines: EntryLine[] = [{ account, debit: Dec.of(n.value).toFixed(2), dimensions: dim }, { account: "2.1.1.01", credit: net.toFixed(2), dimensions: dim }];
-    if (Dec.of(ret.irrf).gt("0")) lines.push({ account: "2.1.2.02", credit: Dec.of(ret.irrf).toFixed(2), history: "IRRF retido", dimensions: dim });
-    if (Dec.of(ret.csrf).gt("0")) lines.push({ account: "2.1.2.03", credit: Dec.of(ret.csrf).toFixed(2), history: "PIS/COFINS/CSLL retidos", dimensions: dim });
-    if (Dec.of(ret.iss).gt("0")) lines.push({ account: "2.1.2.04", credit: Dec.of(ret.iss).toFixed(2), history: "ISS retido", dimensions: dim });
-    if (Dec.of(ret.cp).gt("0")) lines.push({ account: "2.1.2.05", credit: Dec.of(ret.cp).toFixed(2), history: "INSS retido", dimensions: dim });
+    const lines: EntryLine[] = [{ account, debit: Dec.of(n.value).toFixed(2), dimensions: dim }, { account: ctx.acc("FORNECEDORES"), credit: net.toFixed(2), dimensions: dim }];
+    if (Dec.of(ret.irrf).gt("0")) lines.push({ account: ctx.acc("IRRF_RET_RECOLHER"), credit: Dec.of(ret.irrf).toFixed(2), history: "IRRF retido", dimensions: dim });
+    if (Dec.of(ret.csrf).gt("0")) lines.push({ account: ctx.acc("CSRF_RET_RECOLHER"), credit: Dec.of(ret.csrf).toFixed(2), history: "PIS/COFINS/CSLL retidos", dimensions: dim });
+    if (Dec.of(ret.iss).gt("0")) lines.push({ account: ctx.acc("ISS_RET_RECOLHER"), credit: Dec.of(ret.iss).toFixed(2), history: "ISS retido", dimensions: dim });
+    if (Dec.of(ret.cp).gt("0")) lines.push({ account: ctx.acc("INSS_RET_RECOLHER"), credit: Dec.of(ret.cp).toFixed(2), history: "INSS retido", dimensions: dim });
     try {
       await post(ctx, s, {
         entityId: ctx.entityId, date: n.issued, origin: "FISCAL", originRef: `nfse_document:${n.id}`, idempotencyKey: key,
@@ -339,7 +347,7 @@ type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: bo
 async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): Promise<OpenNote[]> {
   const sql = role === "TOMADA"
     ? `SELECT d.id, d.number, d.provider_name AS name, d.provider_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
-              (SELECT sum(l.credit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = '2.1.1.01')::text AS net
+              (SELECT sum(l.credit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = $4)::text AS net
          FROM nfse_document d
          JOIN journal_entry e ON e.idempotency_key = 'nfse-tomada:' || d.id::text
         WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
@@ -347,13 +355,13 @@ async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): 
           AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE_TOMADA' AND b.reference = d.id::text)
         ORDER BY d.issued_at, d.number`
     : `SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS name, d.taker_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
-              (SELECT sum(l.debit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = '1.1.2.01')::text AS net
+              (SELECT sum(l.debit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = $4)::text AS net
          FROM nfse_document d JOIN journal_entry e ON e.idempotency_key = 'nfse:' || d.id::text
         WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
           AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
           AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE' AND b.reference = d.id::text)
         ORDER BY d.issued_at, d.number`;
-  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), until]);
+  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), until, ctx.acc(role === "TOMADA" ? "FORNECEDORES" : "CLIENTES")]);
   return rows;
 }
 
@@ -418,16 +426,19 @@ async function federalPaymentLines(ctx: Ctx, m: Movement): Promise<{ lines: Entr
   const pick = same.length === 1 ? same[0]! : cand.rows.length === 1 ? cand.rows[0]! : null;
   if (!pick) return { why: `${cand.rows.length} pagamentos federais com o mesmo valor perto dessa data`, hypotheses: cand.rows.map((c) => `DARF ${c.document_number} pago em ${c.collected_on}`) };
   const lines: EntryLine[] = [];
-  let extra = Dec.ZERO;
+  let fine = Dec.ZERO;
+  let interest = Dec.ZERO;
   const items = pick.breakdown?.length ? pick.breakdown : [{ revenueCode: pick.revenue_code, principal: value, revenueDescription: "" }];
   for (const it of items) {
-    const acc = federalItemAccount(it.revenueCode ?? pick.revenue_code, it.revenueDescription ?? null);
+    const acc = federalItemAccount(it.revenueCode ?? pick.revenue_code, it.revenueDescription ?? null, ctx.cfg);
     if (!acc) return { why: `Item do DARF sem conta definida: ${it.revenueCode ?? ""} ${it.revenueDescription ?? ""}`.trim(), hypotheses: [`DARF ${pick.document_number}`] };
     const principal = Dec.of(it.principal ?? "0");
     if (principal.gt("0")) lines.push({ account: acc, debit: principal.toFixed(2), history: `${it.revenueCode ?? ""} ${it.revenueDescription ?? ""} ${it.competence ? `(${it.competence.slice(5, 7)}/${it.competence.slice(0, 4)})` : ""}`.trim() });
-    extra = extra.add(it.fine ?? "0").add(it.interest ?? "0");
+    fine = fine.add(it.fine ?? "0");
+    interest = interest.add(it.interest ?? "0");
   }
-  if (extra.gt("0")) lines.push({ account: "4.4.1.02", debit: extra.toFixed(2), history: "Multa e juros de mora" });
+  if (fine.gt("0")) lines.push({ account: ctx.acc("MULTA_MORA"), debit: fine.toFixed(2), history: "Multa de mora" });
+  if (interest.gt("0")) lines.push({ account: ctx.acc("JUROS_MORA"), debit: interest.toFixed(2), history: "Juros de mora" });
   const sum = lines.reduce((a, l) => a.add(l.debit!), Dec.ZERO);
   if (sum.cmp(value) !== 0) return { why: `Itens do DARF (${brl(sum.toFixed(2))}) não somam o valor pago (${brl(value)})`, hypotheses: [`DARF ${pick.document_number}`] };
   lines.push({ account: m.account_code, credit: value });
@@ -493,7 +504,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
             ? `Pagamento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "fornecedor"}) — ${memo}`
             : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`,
           evidence: [...base.evidence, ...ns.map((n) => ({ kind: "nfse_document", id: n.id }))],
-          lines: [...ns.map((n): EntryLine => ({ account: "2.1.1.01", debit: Dec.of(n.net).toFixed(2), history: `NFS-e nº ${n.number ?? "—"}`, dimensions: partner(n.doc, n.name) })), { account: m.account_code, credit: value }] });
+          lines: [...ns.map((n): EntryLine => ({ account: ctx.acc("FORNECEDORES"), debit: Dec.of(n.net).toFixed(2), history: `NFS-e nº ${n.number ?? "—"}`, dimensions: partner(n.doc, n.name) })), { account: m.account_code, credit: value }] });
         if (r) for (const n of ns) await link(m.id, r.id, "NFSE_TOMADA", n.id);
         if (ns[0]!.doc && (!tp.who || tp.who.via === "NOME") && !tp.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "FORNECEDOR", memo, m.id, m.posted_on, ctx.actor);
         continue;
@@ -508,7 +519,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
             ? `Recebimento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "tomador"}) — ${memo}`
             : `Recebimento de ${ns.length} NFS-e de ${ns[0]!.name ?? "tomador"} (nº ${ns.map((x) => x.number ?? "—").join(", ")}) — ${memo}`,
           evidence: [...base.evidence, ...ns.map((x) => ({ kind: "nfse_document", id: x.id }))],
-          lines: [{ account: m.account_code, debit: value }, ...ns.map((x): EntryLine => ({ account: "1.1.2.01", credit: Dec.of(x.net).toFixed(2), history: `NFS-e nº ${x.number ?? "—"}`, dimensions: partner(x.doc, x.name) }))] });
+          lines: [{ account: m.account_code, debit: value }, ...ns.map((x): EntryLine => ({ account: ctx.acc("CLIENTES"), credit: Dec.of(x.net).toFixed(2), history: `NFS-e nº ${x.number ?? "—"}`, dimensions: partner(x.doc, x.name) }))] });
         if (r) for (const x of ns) await link(m.id, r.id, "NFSE", x.id);
         if (ns[0]!.doc && (!n.who || n.who.via === "NOME") && !n.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "CLIENTE", memo, m.id, m.posted_on, ctx.actor);
         continue;

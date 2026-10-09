@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { Dec } from "../../shared/decimal.js";
+import { chartConfig, type DreGroup } from "./chart-config.js";
 
 /**
  * Relatórios do One Ledger (só leitura): razão por conta, contas em aberto por
@@ -126,29 +127,36 @@ async function movement(tx: PoolClient, entityId: string, from: string, to: stri
     rows.filter((r) => r.code === prefix || r.code.startsWith(`${prefix}.`)).reduce((s, r) => s.add(r.c).sub(r.d), Dec.ZERO);
 }
 
-function dreLines(net: (p: string) => Dec): DreLine[] {
-  const rb = net("3.1");
-  const ded = net("3.2");
-  const rl = rb.add(ded);
-  const cost = net("4.1");
-  const lb = rl.add(cost);
-  const pes = net("4.2");
-  const adm = net("4.3");
-  const trib = net("4.5");
-  const fin = net("3.3").add(net("4.4"));
-  const res = lb.add(pes).add(adm).add(trib).add(fin);
+function dreLines(net: (p: string) => Dec, groups: DreGroup[]): DreLine[] {
   const f = (v: Dec) => v.toFixed(2);
+  const val = (g: DreGroup) => g.include.reduce((s, p) => s.add(net(p)), Dec.ZERO).sub((g.exclude ?? []).reduce((s, p) => s.add(net(p)), Dec.ZERO));
+  const get = (k: string) => groups.find((g) => g.key === k);
+  const line = (g: DreGroup | undefined, v: Dec): DreLine[] => (g ? [{ key: g.key, label: g.label, value: f(v), level: g.key === "rb" ? 0 : 1 }] : []);
+  const rb = get("rb") ? val(get("rb")!) : Dec.ZERO;
+  const ded = get("ded") ? val(get("ded")!) : Dec.ZERO;
+  const rl = rb.add(ded);
+  const cost = get("cost") ? val(get("cost")!) : Dec.ZERO;
+  const lb = rl.add(cost);
+  const rest = groups.filter((g) => !["rb", "ded", "cost"].includes(g.key));
+  let res = lb;
+  const restLines: DreLine[] = [];
+  for (const g of rest) {
+    const v = val(g);
+    res = res.add(v);
+    restLines.push(...line(g, v));
+  }
+  // conta de resultado fora dos grupos: aparece em linha própria, para o resultado bater com o razão
+  const total = net("3").add(net("4")).add(net("5"));
+  const other = total.sub(res);
+  if (!other.isZero()) restLines.push({ key: "outros", label: "(+/−) Outras contas de resultado", value: f(other), level: 1 });
   return [
-    { key: "rb", label: "Receita bruta", value: f(rb), level: 0 },
-    { key: "ded", label: "(−) Deduções (Simples Nacional, devoluções)", value: f(ded), level: 1 },
+    ...line(get("rb"), rb),
+    ...line(get("ded"), ded),
     { key: "rl", label: "Receita líquida", value: f(rl), level: 0, strong: true },
-    { key: "cost", label: "(−) Custos", value: f(cost), level: 1 },
+    ...line(get("cost"), cost),
     { key: "lb", label: "Lucro bruto", value: f(lb), level: 0, strong: true },
-    { key: "pes", label: "(−) Despesas com pessoal", value: f(pes), level: 1 },
-    { key: "adm", label: "(−) Despesas administrativas", value: f(adm), level: 1 },
-    { key: "trib", label: "(−) Despesas tributárias", value: f(trib), level: 1 },
-    { key: "fin", label: "(+/−) Resultado financeiro", value: f(fin), level: 1 },
-    { key: "res", label: "Resultado do período", value: f(res), level: 0, strong: true },
+    ...restLines,
+    { key: "res", label: "Resultado do período", value: f(total), level: 0, strong: true },
   ];
 }
 
@@ -159,10 +167,11 @@ export async function incomeStatement(tx: PoolClient, entityId: string, month: s
   const yearFrom = `${month.slice(0, 4)}-01-01`;
   const start = await tx.query<{ d: string | null }>("SELECT min(valid_from)::text AS d FROM chart_account WHERE entity_id = $1 AND source <> 'BANCO'", [entityId]);
   const ytdFrom = [yearFrom, start.rows[0]?.d ?? yearFrom].sort().pop()!;
+  const cfg = await chartConfig(tx, entityId);
   return {
     month, from, to, ytdFrom,
-    monthLines: dreLines(await movement(tx, entityId, from, to)),
-    ytdLines: dreLines(await movement(tx, entityId, ytdFrom, to)),
+    monthLines: dreLines(await movement(tx, entityId, from, to), cfg.dre),
+    ytdLines: dreLines(await movement(tx, entityId, ytdFrom, to), cfg.dre),
   };
 }
 
@@ -186,7 +195,7 @@ export async function balanceSheet(tx: PoolClient, entityId: string, date: strin
     [entityId, date],
   );
   const bal = (code: string) => Dec.of(rows.find((r) => r.code === code)?.bal ?? "0");
-  const result = Dec.ZERO.sub(bal("3")).sub(bal("4")); // crédito positivo
+  const result = Dec.ZERO.sub(bal("3")).sub(bal("4")).sub(bal("5")); // crédito positivo
   const f = (v: Dec) => v.toFixed(2);
   const section = (root: string, sign: 1 | -1) =>
     rows

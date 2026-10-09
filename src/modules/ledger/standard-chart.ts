@@ -9,7 +9,7 @@
 
 export const STANDARD_CHART_ID = "PADRAO_LEGACY_V1";
 
-export type Nature = "ATIVO" | "PASSIVO" | "PATRIMONIO_LIQUIDO" | "RECEITA" | "CUSTO" | "DESPESA";
+export type Nature = "ATIVO" | "PASSIVO" | "PATRIMONIO_LIQUIDO" | "RECEITA" | "CUSTO" | "DESPESA" | "APURACAO";
 export interface ChartRow {
   code: string;
   name: string;
