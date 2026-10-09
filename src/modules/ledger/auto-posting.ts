@@ -377,26 +377,34 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
 
 interface OpenNote { id: string; number: string | null; name: string | null; doc: string | null; issued: string; net: string }
 type Why = { why: string; hypotheses: string[]; soft?: boolean; partnerDoc?: string; partnerName?: string | null };
-type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean } | Why | null;
+/** `parts`: baixa parcial — quanto do movimento vai para cada nota (FIFO); sem `parts`, cada nota é quitada pelo saldo. */
+type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean; parts?: { note: OpenNote; amount: string }[] } | Why | null;
 
-/** NFS-e (tomadas ou emitidas) já contabilizadas, ainda sem pagamento/recebimento no extrato, de 120 dias antes a 60 dias depois do movimento (pagamento antes da nota). */
+/**
+ * NFS-e (tomadas ou emitidas) já contabilizadas, ainda sem quitação no extrato, de 120 dias antes a 60 dias
+ * depois do movimento (pagamento antes da nota). `net` é o saldo em aberto: líquido da nota menos as baixas
+ * parciais (parcelas) já feitas.
+ */
 async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): Promise<OpenNote[]> {
-  const sql = role === "TOMADA"
-    ? `SELECT d.id, d.number, d.provider_name AS name, d.provider_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
-              (SELECT sum(l.credit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = $4)::text AS net
-         FROM nfse_document d
-         JOIN journal_entry e ON e.idempotency_key = 'nfse-tomada:' || d.id::text
-        WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
-          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
-          AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE_TOMADA' AND b.reference = d.id::text)
-        ORDER BY d.issued_at, d.number`
-    : `SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS name, d.taker_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
-              (SELECT sum(l.debit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = $4)::text AS net
-         FROM nfse_document d JOIN journal_entry e ON e.idempotency_key = 'nfse:' || d.id::text
-        WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
-          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
-          AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE' AND b.reference = d.id::text)
-        ORDER BY d.issued_at, d.number`;
+  const t = role === "TOMADA"
+    ? { r: "TOMADA", name: "d.provider_name", doc: "d.provider_doc", key: "'nfse-tomada:'", side: "credit", full: "NFSE_TOMADA", part: "NFSE_TOMADA_PARCIAL" }
+    : { r: "PRESTADA", name: "coalesce(d.taker_name, d.taker_doc)", doc: "d.taker_doc", key: "'nfse:'", side: "debit", full: "NFSE", part: "NFSE_PARCIAL" };
+  const sql = `
+    SELECT id, number, name, doc, issued, (total - paid)::text AS net FROM (
+      SELECT d.id, d.number, ${t.name} AS name, ${t.doc} AS doc, d.issued_at,
+             to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
+             (SELECT sum(l.${t.side}) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = $4) AS total,
+             coalesce((SELECT sum(b.amount) FROM bank_match b JOIN journal_entry be ON be.id = b.entry_id
+                        WHERE b.method = '${t.part}' AND b.reference = d.id::text
+                          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = be.id)), 0) AS paid
+        FROM nfse_document d
+        JOIN journal_entry e ON e.idempotency_key = ${t.key} || d.id::text
+       WHERE d.entity_id = $1 AND d.role = '${t.r}' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
+         AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
+         AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = '${t.full}' AND b.reference = d.id::text)
+    ) n
+    WHERE total - paid > 0
+    ORDER BY issued_at, number`;
   const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), addDays(until, 60), ctx.acc(role === "TOMADA" ? "FORNECEDORES" : "CLIENTES")]);
   return rows;
 }
@@ -405,6 +413,8 @@ async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): 
  * Qual(is) nota(s) este movimento quita?
  * 1. Valor exato de uma nota em aberto; se houver várias, o parceiro reconhecido no histórico desempata.
  * 2. Sem nota com o valor exato: parceiro reconhecido + soma exata das notas mais antigas dele (pagamento agrupado).
+ * 3. Parceiro reconhecido + valor menor que o saldo das notas dele: baixa parcial (parcela), das mais antigas
+ *    para as mais novas; a nota fica em aberto pelo restante. Valor maior que o saldo = pendência.
  * Parceiro reconhecido pelo CNPJ ou apelido que contradiz a nota de mesmo valor = pendência, nunca força.
  */
 async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): Promise<NoteMatch> {
@@ -438,6 +448,17 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
     if (c > 0) break;
   }
   const open = mine.reduce((s, n) => s.add(n.net), Dec.ZERO);
+  if (mine.length && open.cmp(value) > 0) {
+    const parts: { note: OpenNote; amount: string }[] = [];
+    let rest = Dec.of(value);
+    for (const n of mine) {
+      if (!rest.gt("0")) break;
+      const take = rest.cmp(n.net) < 0 ? rest : Dec.of(n.net);
+      parts.push({ note: n, amount: take.toFixed(2) });
+      rest = rest.sub(take);
+    }
+    return { notes: parts.map((p) => p.note), who, grouped: true, parts };
+  }
   return mine.length
     ? { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc}: valor não fecha com as notas em aberto (${mine.length} nota(s), ${brl(open.toFixed(2))})`, hypotheses: mine.slice(0, 5).map(label) }
     : role === "TOMADA" && (await partnerHasNotes(ctx, who.doc, m.posted_on))
@@ -602,11 +623,16 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       ORDER BY t.posted_on, t.id`,
     [ctx.entityId, ctx.start],
   );
-  const link = (txId: string, entryId: string, method: string, reference: string | null) =>
+  const link = (txId: string, entryId: string, method: string, reference: string | null, amount: string | null = null) =>
     ctx.tx.query(
-      "INSERT INTO bank_match (id, tenant_id, entity_id, transaction_id, entry_id, method, reference) VALUES ($1, current_tenant(), $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
-      [newId(), ctx.entityId, txId, entryId, method, reference],
+      "INSERT INTO bank_match (id, tenant_id, entity_id, transaction_id, entry_id, method, reference, amount) VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+      [newId(), ctx.entityId, txId, entryId, method, reference, amount],
     );
+  /** Quanto o movimento baixa de cada nota; parcial quando não quita o saldo inteiro. */
+  const settle = (nm: { notes: OpenNote[]; parts?: { note: OpenNote; amount: string }[] }) =>
+    nm.parts ?? nm.notes.map((n) => ({ note: n, amount: Dec.of(n.net).toFixed(2) }));
+  const isPartial = (p: { note: OpenNote; amount: string }) => Dec.of(p.amount).cmp(p.note.net) < 0;
+  const nums = (ps: { note: OpenNote; amount: string }[]) => ps.map((p) => `${p.note.number ?? "—"}${isPartial(p) ? " parcial" : ""}`).join(", ");
   const own = await ownIdentity(ctx);
   const socios = await partnerNames(ctx);
   const done = new Set<string>();
@@ -659,13 +685,17 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       const tp = await matchNotes(ctx, m, "TOMADA");
       if (tp && "notes" in tp) {
         const ns = tp.notes;
+        const ps = settle(tp);
+        const partial = ps.some(isPartial);
         const r = await post(ctx, s, { ...base, confidence: "1",
-          history: ns.length === 1
-            ? `Pagamento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "fornecedor"}) — ${memo}`
-            : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`,
+          history: partial
+            ? `Pagamento parcial a ${ns[0]!.name ?? "fornecedor"} (NFS-e nº ${nums(ps)}) — ${memo}`
+            : ns.length === 1
+              ? `Pagamento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "fornecedor"}) — ${memo}`
+              : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`,
           evidence: [...base.evidence, ...ns.map((n) => ({ kind: "nfse_document", id: n.id }))],
-          lines: [...ns.map((n): EntryLine => ({ account: ctx.acc("FORNECEDORES"), debit: Dec.of(n.net).toFixed(2), history: `NFS-e nº ${n.number ?? "—"}`, dimensions: partner(n.doc, n.name) })), { account: m.account_code, credit: value }] });
-        if (r) for (const n of ns) await link(m.id, r.id, "NFSE_TOMADA", n.id);
+          lines: [...ps.map((p): EntryLine => ({ account: ctx.acc("FORNECEDORES"), debit: p.amount, history: `NFS-e nº ${p.note.number ?? "—"}${isPartial(p) ? " (parcial)" : ""}`, dimensions: partner(p.note.doc, p.note.name) })), { account: m.account_code, credit: value }] });
+        if (r) for (const p of ps) await link(m.id, r.id, isPartial(p) ? "NFSE_TOMADA_PARCIAL" : "NFSE_TOMADA", p.note.id, p.amount);
         if (ns[0]!.doc && (!tp.who || tp.who.via === "NOME") && !tp.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "FORNECEDOR", memo, m.id, m.posted_on, ctx.actor);
         continue;
       }
@@ -674,13 +704,17 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       const n = await matchNotes(ctx, m, "PRESTADA");
       if (n && "notes" in n) {
         const ns = n.notes;
+        const ps = settle(n);
+        const partial = ps.some(isPartial);
         const r = await post(ctx, s, { ...base, confidence: "1",
-          history: ns.length === 1
-            ? `Recebimento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "tomador"}) — ${memo}`
-            : `Recebimento de ${ns.length} NFS-e de ${ns[0]!.name ?? "tomador"} (nº ${ns.map((x) => x.number ?? "—").join(", ")}) — ${memo}`,
+          history: partial
+            ? `Recebimento parcial de ${ns[0]!.name ?? "tomador"} (NFS-e nº ${nums(ps)}) — ${memo}`
+            : ns.length === 1
+              ? `Recebimento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "tomador"}) — ${memo}`
+              : `Recebimento de ${ns.length} NFS-e de ${ns[0]!.name ?? "tomador"} (nº ${ns.map((x) => x.number ?? "—").join(", ")}) — ${memo}`,
           evidence: [...base.evidence, ...ns.map((x) => ({ kind: "nfse_document", id: x.id }))],
-          lines: [{ account: m.account_code, debit: value }, ...ns.map((x): EntryLine => ({ account: ctx.acc("CLIENTES"), credit: Dec.of(x.net).toFixed(2), history: `NFS-e nº ${x.number ?? "—"}`, dimensions: partner(x.doc, x.name) }))] });
-        if (r) for (const x of ns) await link(m.id, r.id, "NFSE", x.id);
+          lines: [{ account: m.account_code, debit: value }, ...ps.map((p): EntryLine => ({ account: ctx.acc("CLIENTES"), credit: p.amount, history: `NFS-e nº ${p.note.number ?? "—"}${isPartial(p) ? " (parcial)" : ""}`, dimensions: partner(p.note.doc, p.note.name) }))] });
+        if (r) for (const p of ps) await link(m.id, r.id, isPartial(p) ? "NFSE_PARCIAL" : "NFSE", p.note.id, p.amount);
         if (ns[0]!.doc && (!n.who || n.who.via === "NOME") && !n.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "CLIENTE", memo, m.id, m.posted_on, ctx.actor);
         continue;
       }
