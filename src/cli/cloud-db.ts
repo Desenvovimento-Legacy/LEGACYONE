@@ -198,7 +198,7 @@ async function backup() {
   const admin = store.require("CLOUD_ADMIN_DATABASE_URL");
   const c = new pg.Client({ connectionString: admin });
   await c.connect();
-  const major = (await c.query<{ v: string }>("SHOW server_version_num")).rows[0]!.v.slice(0, 2);
+  const major = (await c.query<{ v: string }>("SELECT current_setting('server_version_num') AS v")).rows[0]!.v.slice(0, 2);
   await c.end();
 
   const { mkdirSync, readdirSync, statSync, unlinkSync, createWriteStream } = await import("node:fs");
