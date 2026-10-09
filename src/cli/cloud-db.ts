@@ -136,10 +136,16 @@ async function copy() {
     const has = await cloud.query("SELECT (SELECT count(*) FROM tenant)::int AS n");
     if (has.rows[0].n > 0) throw new Error("o banco em nuvem já tem dados; a cópia só roda em banco vazio");
 
+    // Tabelas de referência que as migrações já preenchem (ex.: feriados) são
+    // substituídas pelo conteúdo local, na mesma transação da carga.
+    const seeded = (await cloud.query<{ t: string; n: string }>(COUNT_SQL)).rows.filter((r) => r.n !== "0").map((r) => r.t);
+    const clear = seeded.map((t) => `DELETE FROM public.${cloud.escapeIdentifier(t)};`).join(" ");
+    if (seeded.length) console.log(`tabelas de referência substituídas: ${seeded.join(", ")}`);
+
     // psql (libpq) não conhece uselibpqcompat; a URL vai por variável de ambiente, nunca na linha de comando.
-    const env = { ...process.env, CLOUDURL: admin.replace("&uselibpqcompat=true", "") };
+    const env = { ...process.env, CLOUDURL: admin.replace("&uselibpqcompat=true", ""), CLEARSQL: clear };
     const script =
-      `{ echo "SET session_replication_role = replica;"; ` +
+      `{ echo "SET session_replication_role = replica;"; printf '%s\\n' "$CLEARSQL"; ` +
       `pg_dump -U "$POSTGRES_USER" -d ${LOCAL_DB} --data-only --no-owner --no-privileges --exclude-table=schema_migrations; } ` +
       `| psql -q -v ON_ERROR_STOP=1 --single-transaction "$CLOUDURL"`;
     console.log("copiando dados…");
