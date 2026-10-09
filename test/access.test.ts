@@ -93,6 +93,20 @@ describe("login: senha + autenticador, perfis e sessão", () => {
     await expect(login(deps, { email: bia.email, password: PASSWORD, code: "", deviceToken: b.deviceToken })).rejects.toThrow(/inválidos/);
   });
 
+  it("sem 2 etapas (decisão do escritório): primeiro acesso e login só com senha; senha errada continua barrada", async () => {
+    const t = await newTenant();
+    const deps = { appPool, tenantId: t, authKey: AUTH_KEY, twoFactor: false };
+    const inv = await inviteUser(deps, { email: "bia@escritorio.test", name: "Bia", role: "LEITURA" }, LUAN);
+    const o = await openInvitation(deps, inv.token);
+    expect(o.twoFactor).toBe(false);
+    await acceptInvitation(deps, { token: inv.token, password: PASSWORD, code: "" });
+    const ok = await login(deps, { email: "bia@escritorio.test", password: PASSWORD, code: "" });
+    expect(await sessionFromToken(deps, ok.token)).toMatchObject({ email: "bia@escritorio.test" });
+    await expect(login(deps, { email: "bia@escritorio.test", password: "senha-errada-123", code: "" })).rejects.toThrow(/inválidos/);
+    // com 2 etapas ligado, a mesma pessoa volta a precisar do código
+    await expect(login({ ...deps, twoFactor: true }, { email: "bia@escritorio.test", password: PASSWORD, code: "" })).rejects.toThrow(/inválidos/);
+  });
+
   it(`bloqueia depois de ${MAX_FAILURES} erros, mesmo com a senha certa`, async () => {
     const t = await newTenant();
     const deps = { appPool, tenantId: t, authKey: AUTH_KEY };

@@ -110,6 +110,8 @@ export interface WebDeps {
   nfse?: NfseSyncDeps | null;
   /** IARIS_AUTH_KEY do cofre: cifra o segredo do autenticador de cada pessoa. */
   authKey: Buffer;
+  /** Código do autenticador no login (padrão: ligado). IARIS_2FA=off desliga. */
+  twoFactor?: boolean;
   /** Pasta de entrada de XML (ex.: C:\\IARIS\\entrada). Nulo = sem pasta. */
   inbox?: string | null;
   /** Orquestrador: roda os vínculos entre agentes (ex.: depois de uma ação na tela). */
@@ -304,7 +306,7 @@ async function listEntities(deps: WebDeps, competence: string) {
 }
 
 export function createWebServer(deps: WebDeps) {
-  const access: AccessDeps = { appPool: deps.appPool, tenantId: deps.tenantId, authKey: deps.authKey, now: deps.now };
+  const access: AccessDeps = { appPool: deps.appPool, tenantId: deps.tenantId, authKey: deps.authKey, now: deps.now, twoFactor: deps.twoFactor };
 
   return createServer(async (req, res) => {
     try {
@@ -320,7 +322,8 @@ export function createWebServer(deps: WebDeps) {
       }
       // Computador confiável? (a tela de entrada esconde o código). Não diz de quem é.
       if (req.method === "GET" && url.pathname === "/api/login/dispositivo") {
-        return json(res, 200, { confiavel: await deviceTrusted(access, cookieValue(req, DEVICE_COOKIE)) });
+        const duasEtapas = deps.twoFactor !== false;
+        return json(res, 200, { confiavel: duasEtapas && (await deviceTrusted(access, cookieValue(req, DEVICE_COOKIE))), duasEtapas });
       }
       if (req.method === "POST" && url.pathname === "/api/login/esquecer") {
         if (!actionAllowed(req, deps, "login")) return json(res, 403, { erro: "Requisição recusada" });
@@ -366,8 +369,9 @@ export function createWebServer(deps: WebDeps) {
           const body = (await readJson(req)) as { token?: string; password?: string; code?: string };
           if (url.pathname.endsWith("/abrir")) {
             const inv = await openInvitation(access, body.token ?? "");
+            if (!inv.twoFactor) return json(res, 200, { name: inv.name, email: inv.email, roleLabel: inv.roleLabel, expiresAt: inv.expiresAt, duasEtapas: false });
             const qrSvg = await QRCode.toString(inv.otpauthUri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
-            return json(res, 200, { name: inv.name, email: inv.email, roleLabel: inv.roleLabel, expiresAt: inv.expiresAt, secretBase32: inv.secretBase32, qrSvg });
+            return json(res, 200, { name: inv.name, email: inv.email, roleLabel: inv.roleLabel, expiresAt: inv.expiresAt, secretBase32: inv.secretBase32, qrSvg, duasEtapas: true });
           }
           await acceptInvitation(access, { token: body.token ?? "", password: body.password ?? "", code: body.code ?? "" });
           return json(res, 200, { ok: true });
@@ -1095,6 +1099,7 @@ if (isMain(import.meta.url)) {
     port,
     vault,
     authKey: parseAuthKey(vault.require("IARIS_AUTH_KEY")),
+    twoFactor: process.env.IARIS_2FA !== "off",
     publicOrigin,
     dfe: vault
       ? {

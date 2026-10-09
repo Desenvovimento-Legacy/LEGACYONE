@@ -50,7 +50,14 @@ export interface AccessDeps {
   /** IARIS_AUTH_KEY do cofre (32 bytes). Cifra o segredo do autenticador. */
   authKey: Buffer;
   now?: () => Date;
+  /**
+   * Código do autenticador no login e no primeiro acesso. Padrão: ligado.
+   * Desligado (IARIS_2FA=off, decisão do escritório): entra só com e-mail e senha.
+   */
+  twoFactor?: boolean;
 }
+
+const twoFactorOn = (deps: Pick<AccessDeps, "twoFactor">) => deps.twoFactor !== false;
 
 export interface SessionUser {
   sessionId: string;
@@ -271,13 +278,14 @@ export async function openInvitation(deps: AccessDeps, token: string) {
       role: inv.role,
       roleLabel: ROLE_LABEL[inv.role],
       expiresAt: inv.expires_at.toISOString(),
+      twoFactor: twoFactorOn(deps),
       otpauthUri: otpauthUri(secret, inv.email),
       secretBase32: base32Encode(secret).replace(/(.{4})/g, "$1 ").trim(),
     };
   });
 }
 
-/** Primeiro acesso: define a senha e confirma o autenticador com um código. */
+/** Primeiro acesso: define a senha e (com 2 etapas ligado) confirma o autenticador com um código. */
 export async function acceptInvitation(deps: AccessDeps, input: { token: string; password: string; code: string }) {
   const now = clock(deps);
   const problem = passwordProblem(input.password ?? "");
@@ -285,13 +293,15 @@ export async function acceptInvitation(deps: AccessDeps, input: { token: string;
   const hash = await hashPassword(input.password);
   return withTenant(deps.appPool, deps.tenantId, async (tx) => {
     const inv = await findInvitation(tx, input.token ?? "", now);
-    const secret = open(deps.authKey, inv.totp_secret_enc);
-    const step = matchTotp(secret, input.code ?? "", now);
-    if (step === null) throw new AccessError("Código do autenticador não confere. Confira a hora do celular e tente de novo.");
-    await tx.query("INSERT INTO totp_use (tenant_id, user_id, step) VALUES (current_tenant(), $1, $2) ON CONFLICT DO NOTHING", [
-      inv.user_id,
-      step,
-    ]);
+    if (twoFactorOn(deps)) {
+      const secret = open(deps.authKey, inv.totp_secret_enc);
+      const step = matchTotp(secret, input.code ?? "", now);
+      if (step === null) throw new AccessError("Código do autenticador não confere. Confira a hora do celular e tente de novo.");
+      await tx.query("INSERT INTO totp_use (tenant_id, user_id, step) VALUES (current_tenant(), $1, $2) ON CONFLICT DO NOTHING", [
+        inv.user_id,
+        step,
+      ]);
+    }
     await tx.query(
       "INSERT INTO user_credential (id, tenant_id, user_id, password_hash, totp_secret_enc) VALUES ($1, current_tenant(), $2, $3, $4)",
       [newId(), inv.user_id, hash, inv.totp_secret_enc],
@@ -375,11 +385,13 @@ export async function login(
   const passwordOk = await verifyPassword(input.password ?? "", found.user?.password_hash ?? DUMMY_PASSWORD_HASH);
   if (found.blocked) return fail("bloqueado", found.user?.id ?? null);
   const u = found.user;
-  if (!u || !u.password_hash || !u.totp_secret_enc) return fail("usuário ou credencial inexistente", u?.id ?? null);
+  const twoFactor = twoFactorOn(deps);
+  if (!u || !u.password_hash || (twoFactor && !u.totp_secret_enc)) return fail("usuário ou credencial inexistente", u?.id ?? null);
   if (!passwordOk) return fail("senha incorreta", u.id);
   if (!found.access?.active) return fail("acesso revogado", u.id);
-  const step = found.device ? null : matchTotp(open(deps.authKey, u.totp_secret_enc), input.code ?? "", now);
-  if (!found.device && step === null) return fail("código incorreto", u.id);
+  const askCode = twoFactor && !found.device;
+  const step = askCode ? matchTotp(open(deps.authKey, u.totp_secret_enc!), input.code ?? "", now) : null;
+  if (askCode && step === null) return fail("código incorreto", u.id);
 
   const token = randomToken();
   const expiresAt = new Date(now.getTime() + SESSION_HOURS * 3600_000);
@@ -387,7 +399,9 @@ export async function login(
   const sessionId = newId();
   let newDevice: string | null = null;
   const ok = await withTenant(deps.appPool, deps.tenantId, async (tx) => {
-    if (found.device) {
+    if (!twoFactor) {
+      // sem código: nada a registrar de autenticador nem de computador confiável
+    } else if (found.device) {
       await tx.query("UPDATE trusted_device SET last_used_at = $1 WHERE id = $2", [now, found.device]);
     } else {
       const used = await tx.query(
@@ -419,7 +433,7 @@ export async function login(
       action: "auth.login",
       resourceType: "user_session",
       resourceId: sessionId,
-      data: { role, ip: meta.ip ?? null, expires_at: expiresAt.toISOString(), trusted_device: found.device, device_trusted_now: Boolean(newDevice) },
+      data: { role, ip: meta.ip ?? null, expires_at: expiresAt.toISOString(), trusted_device: found.device, device_trusted_now: Boolean(newDevice), two_factor: twoFactor },
     });
     return true;
   });
