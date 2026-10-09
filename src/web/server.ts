@@ -14,10 +14,14 @@ import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverv
 import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
-import { incomeStatement, ledgerDetail, openItems } from "../modules/ledger/reports.js";
+import { balanceSheet, incomeStatement, ledgerDetail, openItems } from "../modules/ledger/reports.js";
 import { addAlias, PartnerError, partnerRegistry, syncPartners } from "../modules/ledger/partners.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
-import { approveTakenServicesRule, classifyMovement, classifySupplier, pendingMovements, pendingTaken, runAutoPosting, takenRuleStatus } from "../modules/ledger/auto-posting.js";
+import {
+  approveAccountingRule, approveTakenServicesRule, classifyMovement, classifySupplier, pendingMovements, pendingTaken, REVENUE_RETENTIONS_RULE, revenueRetentionsPending,
+  ruleStatus, runAutoPosting, takenRuleStatus,
+} from "../modules/ledger/auto-posting.js";
+import { closeMonth, closingStatus, reopenMonth } from "../modules/ledger/closing.js";
 import { SERVICE_ACCOUNT_BY_ITEM, SERVICE_ACCOUNT_BY_SUBITEM } from "../modules/ledger/service-accounts.js";
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
@@ -606,6 +610,18 @@ export function createWebServer(deps: WebDeps) {
           json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => incomeStatement(tx, id, mes)));
           return;
         }
+        if (parts[4] === "fechamento") {
+          const mes = url.searchParams.get("mes");
+          if (mes === null || !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { erro: "Mês inválido (AAAA-MM)" });
+          json(res, 200, await closingStatus(deps.appPool, deps.tenantId, id, mes));
+          return;
+        }
+        if (parts[4] === "balanco") {
+          const data = url.searchParams.get("data");
+          if (!isDate(data)) return json(res, 400, { erro: "Data inválida (AAAA-MM-DD)" });
+          json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => balanceSheet(tx, id, data)));
+          return;
+        }
         if (parts[4] === "abertos") {
           const conta = url.searchParams.get("conta");
           const ate = url.searchParams.get("ate");
@@ -652,8 +668,12 @@ export function createWebServer(deps: WebDeps) {
           bySupplier.set(k, g);
         }
         const takenRule = await withTenant(deps.appPool, deps.tenantId, (tx) => takenRuleStatus(tx));
+        const revenueRule = await withTenant(deps.appPool, deps.tenantId, async (tx) => ({
+          approved: await ruleStatus(tx, REVENUE_RETENTIONS_RULE), ...(data.hasChart ? await revenueRetentionsPending(tx, id) : { notes: 0, total: "0", withheld: "0" }),
+        }));
         json(res, 200, {
           ...data, pending,
+          revenueRule,
           taken: { approved: takenRule, pending: taken.length, suppliers: [...bySupplier.values()].sort((a, b) => b.total - a.total).slice(0, 60),
             proposal: { bySubitem: SERVICE_ACCOUNT_BY_SUBITEM, byItem: SERVICE_ACCOUNT_BY_ITEM } },
         });
@@ -683,6 +703,39 @@ export function createWebServer(deps: WebDeps) {
         return;
       }
       // POST /api/contabil/tomadas/aprovar — aprova a tabela tipo de serviço → conta das NFS-e tomadas.
+      // POST /api/empresa/:id/contabil/fechar {mes} | reabrir {mes, motivo} — fechamento da competência (Responsável técnico).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "contabil" && (parts[4] === "fechar" || parts[4] === "reabrir")) {
+        if (guard("aprovar")) return;
+        const body = (await readJson(req, 4096)) as { mes?: string; motivo?: string };
+        const mes = String(body.mes ?? "");
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json(res, 400, { erro: "Mês inválido (AAAA-MM)" });
+        try {
+          if (parts[4] === "fechar") {
+            const r = await closeMonth(deps.appPool, deps.tenantId, parts[2]!, mes, actor);
+            await deps.orchestrate?.();
+            json(res, 200, r);
+          } else {
+            const r = await reopenMonth(deps.appPool, deps.tenantId, parts[2]!, mes, String(body.motivo ?? ""), actor);
+            const p = await runAutoPosting(deps.appPool, deps.tenantId, parts[2]!);
+            json(res, 200, { ...r, posted: p.posted });
+          }
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // POST /api/contabil/receita-retencoes/aprovar — regra de receita com retenção sofrida.
+      if (req.method === "POST" && url.pathname === "/api/contabil/receita-retencoes/aprovar") {
+        if (guard("aprovar")) return;
+        try {
+          json(res, 200, await approveAccountingRule(deps.appPool, deps.tenantId, REVENUE_RETENTIONS_RULE, actor));
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/contabil/tomadas/aprovar") {
         if (guard("aprovar")) return;
         try {

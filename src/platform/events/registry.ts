@@ -312,6 +312,20 @@ export const EventContracts = {
       method: z.enum(["PROCURACAO", "GOVBR", "CERTIFICADO", "SENHA_PORTAL"]).optional(),
     }),
   },
+  ACCOUNTING_CLOSING_COMPLETED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      case_id: z.uuid(),
+      debit: z.string(),
+      credit: z.string(),
+      result: z.string(),
+      checks: z.array(z.object({ key: z.string(), status: z.enum(["OK", "PENDENTE", "ALERTA", "NAO_SE_APLICA"]) })),
+    }),
+  },
+  ACCOUNTING_PERIOD_REOPENED: {
+    1: z.object({ entity_id: z.uuid(), competence: z.iso.date(), reason: z.string(), by: z.string() }),
+  },
   PARTNERS_REGISTERED: {
     1: z.object({ entity_id: z.uuid(), suppliers: z.number().int(), customers: z.number().int(), source: z.enum(["NFSE", "PESSOA"]) }),
   },

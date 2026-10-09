@@ -149,6 +149,7 @@ export async function postEntry(tx: PoolClient, input: EntryInput, actor: Actor,
 
   const existing = await tx.query<{ id: string }>("SELECT id FROM journal_entry WHERE idempotency_key = $1", [input.idempotencyKey]);
   if (existing.rows[0]) return { id: existing.rows[0].id, created: false };
+  await assertOpen(tx, input.entityId, comp(input.date));
 
   const accounts = await accountsOn(tx, input.entityId, input.date);
   const resolved = input.lines.map((l) => {
@@ -215,6 +216,7 @@ export async function reverseEntry(tx: PoolClient, entryId: string, reason: stri
     [entryId],
   );
   const when = date ?? orig.entry_date;
+  await assertOpen(tx, orig.entity_id, comp(when));
   const id = newId();
   await tx.query(
     `INSERT INTO journal_entry (id, tenant_id, entity_id, competence, entry_date, history, origin, origin_ref, actor_kind, actor_id, evidence, reverses_id, idempotency_key)
@@ -241,6 +243,58 @@ export async function reverseEntry(tx: PoolClient, entryId: string, reason: stri
   });
   await audit(tx, { actor, action: "ledger.entry_reversed", resourceType: "journal_entry", resourceId: id, entityId: orig.entity_id, data: { reverses: entryId, reason } });
   return { id, created: true };
+}
+
+/** Competência fechada: lançamento novo ou estorno nela só depois de reabrir. */
+export class PeriodClosedError extends LedgerError {}
+
+/** Competências (AAAA-MM-01) fechadas da empresa (último registro = BLOQUEADO). */
+export async function lockedCompetences(tx: PoolClient, entityId: string): Promise<Set<string>> {
+  const { rows } = await tx.query<{ competence: string }>(
+    `SELECT competence::text FROM (
+       SELECT DISTINCT ON (competence) competence, status FROM ledger_period_lock WHERE entity_id = $1 ORDER BY competence, created_at DESC) x
+      WHERE status = 'BLOQUEADO'`,
+    [entityId],
+  );
+  return new Set(rows.map((r) => r.competence));
+}
+
+async function assertOpen(tx: PoolClient, entityId: string, competence: string) {
+  const r = await tx.query<{ status: string }>(
+    "SELECT status FROM ledger_period_lock WHERE entity_id = $1 AND competence = $2 ORDER BY created_at DESC LIMIT 1",
+    [entityId, competence],
+  );
+  if (r.rows[0]?.status === "BLOQUEADO") {
+    throw new PeriodClosedError(`Competência ${competence.slice(5, 7)}/${competence.slice(0, 4)} fechada: reabra antes de lançar`);
+  }
+}
+
+/**
+ * Contas novas do plano padrão (versão nova da proposta) entram no plano da
+ * empresa que já usa o padrão, com a mesma vigência. Nada é alterado nem apagado.
+ */
+export async function ensureStandardAccounts(tx: PoolClient, entityId: string, actor: Actor): Promise<string[]> {
+  const cur = await tx.query<{ code: string; valid_from: string }>(
+    "SELECT code, valid_from::text FROM chart_account WHERE entity_id = $1 AND source = 'PADRAO_LEGACY'",
+    [entityId],
+  );
+  if (!cur.rows.length) return [];
+  const have = new Set(cur.rows.map((r) => r.code));
+  const from = cur.rows.map((r) => r.valid_from).sort()[0]!;
+  const added: string[] = [];
+  for (const r of STANDARD_CHART) {
+    if (have.has(r.code)) continue;
+    await tx.query(
+      `INSERT INTO chart_account (id, tenant_id, entity_id, code, name, nature, analytic, parent_code, valid_from, source, created_by)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, 'PADRAO_LEGACY', $9)`,
+      [newId(), entityId, r.code, r.name, r.nature, r.analytic, parentOf(r.code), from, actor.id],
+    );
+    added.push(r.code);
+  }
+  if (added.length) {
+    await audit(tx, { actor, action: "ledger.chart_extended", resourceType: "chart_account", resourceId: entityId, entityId, data: { chart: STANDARD_CHART_ID, added } });
+  }
+  return added;
 }
 
 /** Bloqueia ou reabre a competência (reabrir: só pessoa). */

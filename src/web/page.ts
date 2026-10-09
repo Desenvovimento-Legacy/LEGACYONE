@@ -460,7 +460,7 @@ function viewEmpresa(id) {
   });
 }
 
-var CTB_TABS = [["bal", "Balancete"], ["dre", "DRE"], ["raz", "Razão"], ["forn", "Fornecedores em aberto"], ["cli", "Clientes em aberto"], ["parc", "Cadastro de parceiros"]];
+var CTB_TABS = [["fech", "Fechamento"], ["bal", "Balancete"], ["bp", "Balanço"], ["dre", "DRE"], ["raz", "Razão"], ["forn", "Fornecedores em aberto"], ["cli", "Clientes em aberto"], ["parc", "Cadastro de parceiros"]];
 var CTB = { entity: null, tab: "bal", raz: null };
 function monthEnd(m) { return new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).toISOString().slice(0, 10); }
 function dc(v) { var n = Number(v); return n === 0 ? '0,00' : brl(Math.abs(n).toFixed(2)) + (n > 0 ? ' D' : ' C'); }
@@ -552,6 +552,24 @@ function showCtb(id, r, tab, raz) {
     }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
     return;
   }
+  if (tab === "fech") {
+    out.innerHTML = '<div class="empty">Conferindo ' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + '…</div>';
+    getJson("/api/empresa/" + id + "/contabil/fechamento?mes=" + r.month).then(function (x) { renderClosing(id, r, out, x); })
+      .catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    return;
+  }
+  if (tab === "bp") {
+    out.innerHTML = '<div class="empty">Carregando…</div>';
+    getJson("/api/empresa/" + id + "/contabil/balanco?data=" + end).then(function (x) {
+      var row = function (l) { return '<tr' + (l.strong ? ' style="font-weight:700"' : '') + '><td style="padding-left:' + (8 + l.level * 16) + 'px">' + esc(l.label) + (l.code && !l.strong ? ' <span class="mut mono" style="font-size:11px">' + esc(l.code) + '</span>' : '') + '</td><td class="num">' + brl(l.value) + '</td></tr>'; };
+      out.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">' +
+        '<div class="scroll"><table><tbody>' + x.assets.map(row).join("") + '</tbody></table></div>' +
+        '<div class="scroll"><table><tbody>' + x.liabilities.map(row).join("") + '</tbody></table></div></div>' +
+        '<div class="empty">Balanço em ' + d(x.date) + ' · ' + (x.totals.balanced ? '<span class="ok">ativo = passivo + PL ✓</span>' : '<span class="bad">diferença ' + brl(x.totals.diff) + '</span>') +
+        '. Saldos desde ' + d(x.from) + ' (início da contabilidade na IARIS); saldos de abertura do escritório anterior ainda não implantados, por isso bancos, clientes e fornecedores mostram só o movimento desde então.</div>';
+    }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    return;
+  }
   if (tab === "parc") {
     out.innerHTML = '<div class="empty">Carregando…</div>';
     getJson("/api/empresa/" + id + "/parceiros?mes=" + r.month).then(function (x) { renderPartners(id, r, out, x); }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
@@ -564,6 +582,35 @@ var PST = {
   EVENTUAL: '<span class="st">eventual</span>',
   SEM_NOTA: '<span class="st">sem nota no período</span>'
 };
+var CST = { OK: '<span class="st ok">ok</span>', PENDENTE: '<span class="st bad">pendente</span>', ALERTA: '<span class="st wr">alerta</span>', NAO_SE_APLICA: '<span class="mut">não se aplica</span>' };
+function renderClosing(id, r, out, x) {
+  var rows = x.checks.map(function (c) {
+    return '<tr><td><b>' + esc(c.label) + '</b>' + (c.blocking ? '' : ' <span class="mut" style="font-size:11px">(não bloqueia)</span>') + '<div class="mut" style="font-size:12px">' + esc(c.detail) + '</div>' +
+      (c.items && c.items.length ? '<ul style="margin:4px 0 0 16px;padding:0;font-size:12px">' + c.items.map(function (i) { return '<li>' + esc(i) + '</li>'; }).join("") + '</ul>' : '') + '</td><td>' + (CST[c.status] || esc(c.status)) + '</td></tr>';
+  }).join("");
+  var head = x.locked
+    ? '<div class="empty"><span class="st ok">competência fechada</span> em ' + dt(x.lockedAt) + ' por ' + esc(x.lockedBy) + '. Nada entra nela sem reabrir.</div>' +
+      '<div class="form-row only-aprovar" style="margin:6px 0"><input id="ro-why" placeholder="motivo da reabertura" style="min-width:260px"><button class="ghost" id="ro-btn">Reabrir competência</button></div>'
+    : (x.canClose
+      ? '<div class="form-row only-aprovar" style="margin:6px 0"><button class="warn" id="cl-btn">Fechar ' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + '</button><span class="mut" style="font-size:12px">Conferências sem pendência. Ao fechar, a competência fica bloqueada no razão.</span></div>'
+      : '<div class="empty">Para fechar ' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + ', resolva os itens pendentes. Os alertas não bloqueiam.</div>');
+  out.innerHTML = head + '<div class="scroll"><table><thead><tr><th>Conferência</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    (x.totals ? '<div class="empty">Débitos ' + brl(x.totals.debit) + ' · Créditos ' + brl(x.totals.credit) + ' · Resultado acumulado ' + brl(x.totals.result) + '</div>' : '');
+  var cb = $("cl-btn");
+  if (cb) cb.addEventListener("click", function () {
+    if (!window.confirm("Fechar a competência " + r.month.slice(5, 7) + "/" + r.month.slice(0, 4) + "? Nada mais será lançado nela; corrigir exige reabrir com motivo. Fica na auditoria em seu nome.")) return;
+    cb.disabled = true;
+    post("/api/empresa/" + id + "/contabil/fechar", "aprovar", { mes: r.month }).then(function () { toast("Competência fechada."); showCtb(id, r, "fech"); }).catch(function (e) { toast(e.message); cb.disabled = false; });
+  });
+  var rb = $("ro-btn");
+  if (rb) rb.addEventListener("click", function () {
+    var why = $("ro-why").value.trim();
+    if (why.length < 5) { toast("Escreva o motivo da reabertura."); return; }
+    rb.disabled = true;
+    post("/api/empresa/" + id + "/contabil/reabrir", "aprovar", { mes: r.month, motivo: why }).then(function (y) { toast("Competência reaberta." + (y.posted ? " " + y.posted + " lançamento(s) que esperavam entraram." : "")); showCtb(id, r, "fech"); }).catch(function (e) { toast(e.message); rb.disabled = false; });
+  });
+}
+
 function renderPartners(id, r, out, x) {
   var head = '<th>Parceiro</th><th>Serviço</th>' + x.window.map(function (m) { return '<th class="num" style="font-size:11px">' + m.slice(5, 7) + '/' + m.slice(2, 4) + '</th>'; }).join("") + '<th>No mês</th><th>Conta</th><th class="num">Em aberto</th><th>Aparece no banco como</th>';
   var table = function (list, role) {
@@ -643,6 +690,12 @@ function loadContabil(id, mes) {
       }).join("");
       h += '<h3 style="font-size:13px;margin:12px 0 6px">Movimentos para classificar (' + r.pending.length + ')</h3><div class="scroll"><table><thead><tr><th>Data</th><th>Histórico do banco</th><th class="num">Valor</th><th class="only-confirmar">Classificação</th></tr></thead><tbody>' + pend + '</tbody></table></div>';
     }
+    var rr = r.revenueRule || { approved: null, notes: 0 };
+    if (!rr.approved && rr.notes) {
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">NFS-e emitidas com retenção do tomador (proposta)</h3>' +
+        '<div class="empty">' + rr.notes + ' nota(s) emitida(s) com retenção (' + brl(rr.total) + ', retido ' + brl(rr.withheld) + ') esperando a regra. Cada nota vira: D Clientes (líquido recebido) · D IRRF / PIS-COFINS-CSLL / INSS retidos a recuperar · D ISS retido na fonte (dedução da receita, conta 3.2.1.03 nova no plano) / C Receita de serviços (valor bruto). Valores tirados da própria nota; nota com leitura divergente continua esperando.</div>' +
+        '<div class="only-aprovar" style="margin-top:6px"><button class="warn" data-act="rr-aprovar">Aprovar e contabilizar as notas com retenção</button></div>';
+    }
     var tk = r.taken || { pending: 0, suppliers: [] };
     if (!tk.approved) {
       var pr = Object.keys(tk.proposal.byItem).map(function (k) { var x = tk.proposal.byItem[k]; return '<tr><td class="mono">' + k + '</td><td>' + esc(x.label) + '</td><td class="mono">' + esc(x.account) + '</td></tr>'; }).join("") +
@@ -674,7 +727,7 @@ function loadContabil(id, mes) {
     var ms = $("ctb-mes"); if (ms) ms.addEventListener("change", function () { loadContabil(id, ms.value); });
     if (r.trial) {
       box.querySelectorAll("[data-tab]").forEach(function (b) { b.addEventListener("click", function () { CTB.raz = null; showCtb(id, r, b.getAttribute("data-tab")); }); });
-      showCtb(id, r, CTB.entity === id ? CTB.tab : "bal");
+      showCtb(id, r, CTB.entity === id ? CTB.tab : "fech");
     }
     var bo = box.querySelector("[data-act=ofx]");
     if (bo) bo.addEventListener("click", function () {
@@ -688,6 +741,12 @@ function loadContabil(id, mes) {
         }).catch(function (e) { toast(e.message); });
       };
       fr.readAsDataURL(f);
+    });
+    var ra = box.querySelector("[data-act=rr-aprovar]");
+    if (ra) ra.addEventListener("click", function () {
+      if (!window.confirm("Aprovar a regra de receita com retenção do tomador? Vale para todas as empresas do escritório e fica na auditoria em seu nome.")) return;
+      ra.disabled = true;
+      post("/api/contabil/receita-retencoes/aprovar", "aprovar", {}).then(function (x) { toast("Regra aprovada. " + x.posted + " lançamento(s) feitos."); return loadContabil(id); }).catch(function (e) { toast(e.message); ra.disabled = false; });
     });
     var ta = box.querySelector("[data-act=tk-aprovar]");
     if (ta) ta.addEventListener("click", function () {

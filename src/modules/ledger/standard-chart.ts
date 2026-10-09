@@ -87,6 +87,7 @@ export const STANDARD_CHART: ChartRow[] = [
   S("3.2", "DEDUÇÕES DA RECEITA", "RECEITA"),
   A("3.2.1.01", "Simples Nacional sobre a receita", "RECEITA"),
   A("3.2.1.02", "Devoluções e cancelamentos", "RECEITA"),
+  A("3.2.1.03", "ISS retido na fonte pelo tomador", "RECEITA"),
   S("3.3", "OUTRAS RECEITAS", "RECEITA"),
   A("3.3.1.01", "Rendimentos de aplicações financeiras", "RECEITA"),
   A("3.3.1.02", "Juros e descontos obtidos", "RECEITA"),

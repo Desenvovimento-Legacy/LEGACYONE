@@ -110,7 +110,7 @@ describe("One Ledger: partidas dobradas", () => {
 
     // Período bloqueado
     await withTenant(appPool, t, (tx) => setPeriodLock(tx, entityId, "2026-09-01", "BLOQUEADO", "fechamento", LUAN));
-    await expect(withTenant(appPool, t, (tx) => postEntry(tx, { ...energia, idempotencyKey: "bloq" }, ENGINE))).rejects.toThrow(/bloqueado/);
+    await expect(withTenant(appPool, t, (tx) => postEntry(tx, { ...energia, idempotencyKey: "bloq" }, ENGINE))).rejects.toThrow(/fechada: reabra/);
     await expect(withTenant(appPool, t, (tx) => setPeriodLock(tx, entityId, "2026-09-01", "REABERTO", "agente", ENGINE))).rejects.toThrow(LedgerError);
     await withTenant(appPool, t, (tx) => setPeriodLock(tx, entityId, "2026-09-01", "REABERTO", "ajuste", LUAN));
     expect((await withTenant(appPool, t, (tx) => postEntry(tx, { ...energia, idempotencyKey: "reaberto" }, ENGINE))).created).toBe(true);

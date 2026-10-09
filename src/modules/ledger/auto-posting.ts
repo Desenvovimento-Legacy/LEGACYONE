@@ -8,7 +8,7 @@ import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
 import { normalize } from "../../shared/text.js";
 import { identifyPartner, learnAlias, loadPartnerIndex, syncPartners, type IdentifiedPartner, type PartnerIndex } from "./partners.js";
-import { LedgerError, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
+import { ensureStandardAccounts, LedgerError, lockedCompetences, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
 import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
 
 /**
@@ -28,6 +28,12 @@ import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
  */
 
 export const AUTO_POSTING_RULES = "contabil-auto@1";
+/**
+ * Receita com retenção sofrida (o tomador reteve): D Clientes (líquido),
+ * D IRRF/CSRF/INSS a recuperar, D ISS retido na fonte (dedução), C Receita (bruto).
+ * Só vale depois de aprovada por uma pessoa.
+ */
+export const REVENUE_RETENTIONS_RULE = "receita-retencoes@1";
 const PRODUCER: Producer = { kind: "engine", name: "ledger", version: "0.1.0" };
 export const LEDGER_ENGINE: Actor = { kind: "AGENT", id: "ledger" };
 
@@ -58,7 +64,7 @@ export function federalItemAccount(code: string | null, description: string | nu
   return null;
 }
 
-interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex }
+interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>; revenueRule: boolean }
 
 /** Parceiro (cliente ou fornecedor) gravado na linha: base de razão auxiliar e contas em aberto. */
 const partner = (doc: string | null, name: string | null): Record<string, string> => {
@@ -67,14 +73,31 @@ const partner = (doc: string | null, name: string | null): Record<string, string
   if (name) d.parceiro = name.slice(0, 120);
   return d;
 };
-interface Stats { posted: number; reversed: number; pending: number; total: Dec; dates: string[] }
+interface Stats { posted: number; reversed: number; pending: number; locked: number; total: Dec; dates: string[] }
+const newStats = (): Stats => ({ posted: 0, reversed: 0, pending: 0, locked: 0, total: Dec.ZERO, dates: [] });
+const compOf = (date: string) => `${date.slice(0, 7)}-01`;
+
+async function makeCtx(tx: PoolClient, entityId: string, start: string, actor: Actor): Promise<Ctx> {
+  return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE) };
+}
+
+async function ruleApproved(tx: PoolClient, ruleSet: string): Promise<boolean> {
+  const r = await tx.query("SELECT 1 FROM accounting_rule_approval WHERE rule_set = $1", [ruleSet]);
+  return Boolean(r.rowCount);
+}
 
 async function chartStart(tx: PoolClient, entityId: string): Promise<string | null> {
   const r = await tx.query<{ d: string | null }>("SELECT min(valid_from)::text AS d FROM chart_account WHERE entity_id = $1 AND source <> 'BANCO'", [entityId]);
   return r.rows[0]?.d ?? null;
 }
 
+/** Lança; em competência fechada não lança (conta como item em período fechado) e devolve null. */
 async function post(ctx: Ctx, s: Stats, input: Parameters<typeof postEntry>[1]) {
+  if (ctx.locked.has(compOf(input.date))) {
+    const done = await ctx.tx.query("SELECT 1 FROM journal_entry WHERE idempotency_key = $1", [input.idempotencyKey]);
+    if (!done.rowCount) s.locked++;
+    return null;
+  }
   const r = await postEntry(ctx.tx, { ...input, rule: input.rule ?? AUTO_POSTING_RULES }, ctx.actor, { event: false });
   if (r.created) {
     s.posted++;
@@ -84,11 +107,24 @@ async function post(ctx: Ctx, s: Stats, input: Parameters<typeof postEntry>[1]) 
   return r;
 }
 
+/** Estorno na data do original; competência fechada fica para pessoa (reabrir ou estornar no mês aberto). */
+async function reverse(ctx: Ctx, s: Stats, entryId: string, reason: string) {
+  const e = await ctx.tx.query<{ d: string }>("SELECT entry_date::text AS d FROM journal_entry WHERE id = $1", [entryId]);
+  const done = await ctx.tx.query("SELECT 1 FROM journal_entry WHERE reverses_id = $1", [entryId]);
+  if (done.rowCount) return;
+  if (e.rows[0] && ctx.locked.has(compOf(e.rows[0].d))) {
+    s.locked++;
+    return;
+  }
+  if ((await reverseEntry(ctx.tx, entryId, reason, ctx.actor)).created) s.reversed++;
+}
+
 // ------------------------------------------------------------------ fiscal → razão
 
 async function nfseRevenue(ctx: Ctx, s: Stats) {
   const { rows } = await ctx.tx.query<{
     id: string; number: string | null; taker: string | null; taker_doc: string | null; issued: string; value: string; key: string | null; withheld: string | null; cancelled: boolean;
+    irrf: string; csrf: string; cp: string; iss: string; read_check: string | null;
   }>(
     `WITH cancelled AS (
        SELECT DISTINCT access_key FROM nfse_document
@@ -96,9 +132,10 @@ async function nfseRevenue(ctx: Ctx, s: Stats) {
           AND (event_type ILIKE '%101101%' OR event_type ILIKE '%105102%' OR event_type ILIKE '%cancel%'))
      SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS taker, d.taker_doc,
             to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued, d.service_value::text AS value, d.access_key AS key,
-            (SELECT (t.total_withheld_calc)::text FROM nfse_tax t WHERE t.nfse_id = d.id AND t.parser = $3) AS withheld,
+            t.total_withheld_calc::text AS withheld,
+            coalesce(t.irrf, 0)::text AS irrf, coalesce(t.csrf, 0)::text AS csrf, coalesce(t.cp, 0)::text AS cp, coalesce(t.iss_withheld, 0)::text AS iss, t.read_check,
             d.access_key IS NOT NULL AND d.access_key IN (SELECT access_key FROM cancelled) AS cancelled
-       FROM nfse_document d
+       FROM nfse_document d LEFT JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $3
       WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND d.service_value > 0
         AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date >= $2
       ORDER BY d.issued_at`,
@@ -108,21 +145,33 @@ async function nfseRevenue(ctx: Ctx, s: Stats) {
     const key = `nfse:${n.id}`;
     if (n.cancelled) {
       const e = await ctx.tx.query<{ id: string }>("SELECT id FROM journal_entry WHERE idempotency_key = $1", [key]);
-      if (e.rows[0]) {
-        const r = await reverseEntry(ctx.tx, e.rows[0].id, "NFS-e cancelada", ctx.actor);
-        if (r.created) s.reversed++;
-      }
+      if (e.rows[0]) await reverse(ctx, s, e.rows[0].id, "NFS-e cancelada");
       continue;
     }
+    const lines: EntryLine[] = [{ account: "1.1.2.01", debit: n.value, dimensions: partner(n.taker_doc, n.taker) }, { account: "3.1.1.01", credit: n.value }];
     if (n.withheld !== null && Dec.of(n.withheld).gt("0")) {
-      s.pending++; // nota com retenção sofrida: contabilização com retenções ainda não automática
-      continue;
+      // Retenção sofrida (tomador reteve): só com a regra aprovada e com a leitura da nota conferida.
+      if (!ctx.revenueRule || n.read_check === "DIVERGENTE") {
+        const done = await ctx.tx.query("SELECT 1 FROM journal_entry WHERE idempotency_key = $1", [key]);
+        if (!done.rowCount) s.pending++;
+        continue;
+      }
+      const net = Dec.of(n.value).sub(n.withheld);
+      if (!net.gt("0")) { s.pending++; continue; }
+      const dim = partner(n.taker_doc, n.taker);
+      lines.splice(0, 1, { account: "1.1.2.01", debit: net.toFixed(2), dimensions: dim });
+      const add = (account: string, v: string, history: string) => { if (Dec.of(v).gt("0")) lines.splice(lines.length - 1, 0, { account, debit: Dec.of(v).toFixed(2), history, dimensions: dim }); };
+      add("1.1.3.01", n.irrf, "IRRF retido pelo tomador");
+      add("1.1.3.02", n.csrf, "PIS/COFINS/CSLL retidos pelo tomador");
+      add("1.1.3.03", n.cp, "INSS retido pelo tomador");
+      add("3.2.1.03", n.iss, "ISS retido pelo tomador");
     }
     await post(ctx, s, {
       entityId: ctx.entityId, date: n.issued, origin: "FISCAL", originRef: `nfse_document:${n.id}`, idempotencyKey: key,
       history: `NFS-e nº ${n.number ?? "—"} prestada a ${n.taker ?? "tomador"}`,
       evidence: [{ kind: "nfse_document", id: n.id }], confidence: "1",
-      lines: [{ account: "1.1.2.01", debit: n.value, dimensions: partner(n.taker_doc, n.taker) }, { account: "3.1.1.01", credit: n.value }],
+      rule: Dec.of(n.withheld ?? "0").gt("0") ? REVENUE_RETENTIONS_RULE : undefined,
+      lines,
     });
   }
 }
@@ -176,7 +225,7 @@ async function simplesProvision(ctx: Ctx, s: Stats) {
           AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)`,
       [ctx.entityId, `simples:${b.competence.slice(0, 7)}:%`, b.key],
     );
-    for (const p of prev.rows) if ((await reverseEntry(ctx.tx, p.id, `substituída: ${b.history}`, ctx.actor)).created) s.reversed++;
+    for (const p of prev.rows) await reverse(ctx, s, p.id, `substituída: ${b.history}`);
     if (done.rows[0]?.total) continue;
     await post(ctx, s, {
       entityId: ctx.entityId, date: lastDay(b.competence), origin: "TRIBUTOS", originRef: b.ref, idempotencyKey: b.key,
@@ -233,7 +282,7 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
     const key = `nfse-tomada:${n.id}`;
     if (n.cancelled) {
       const e = await ctx.tx.query<{ id: string }>("SELECT id FROM journal_entry WHERE idempotency_key = $1", [key]);
-      if (e.rows[0] && (await reverseEntry(ctx.tx, e.rows[0].id, "NFS-e tomada cancelada", ctx.actor)).created) s.reversed++;
+      if (e.rows[0]) await reverse(ctx, s, e.rows[0].id, "NFS-e tomada cancelada");
       continue;
     }
     const done = await ctx.tx.query("SELECT 1 FROM journal_entry WHERE idempotency_key = $1", [key]);
@@ -290,22 +339,21 @@ type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: bo
 async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): Promise<OpenNote[]> {
   const sql = role === "TOMADA"
     ? `SELECT d.id, d.number, d.provider_name AS name, d.provider_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
-              (d.service_value - t.total_withheld_calc)::text AS net
-         FROM nfse_document d JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $4
+              (SELECT sum(l.credit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = '2.1.1.01')::text AS net
+         FROM nfse_document d
          JOIN journal_entry e ON e.idempotency_key = 'nfse-tomada:' || d.id::text
         WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
           AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
           AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE_TOMADA' AND b.reference = d.id::text)
         ORDER BY d.issued_at, d.number`
     : `SELECT d.id, d.number, coalesce(d.taker_name, d.taker_doc) AS name, d.taker_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
-              coalesce(d.net_value, d.service_value)::text AS net
+              (SELECT sum(l.debit) FROM journal_line l JOIN chart_account c ON c.id = l.account_id WHERE l.entry_id = e.id AND c.code = '1.1.2.01')::text AS net
          FROM nfse_document d JOIN journal_entry e ON e.idempotency_key = 'nfse:' || d.id::text
         WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $2 AND $3
           AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
           AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE' AND b.reference = d.id::text)
-          AND $4::text IS NOT NULL
         ORDER BY d.issued_at, d.number`;
-  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), until, NFSE_TAX_PARSER]);
+  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), until]);
   return rows;
 }
 
@@ -421,6 +469,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       [newId(), ctx.entityId, txId, entryId, method, reference],
     );
   for (const m of rows) {
+    if (ctx.locked.has(compOf(m.posted_on))) { s.locked++; continue; }
     const out = Dec.of(m.amount).cmp("0") < 0;
     const value = Dec.of(m.amount).mul(out ? "-1" : "1").toFixed(2);
     const memo = [m.memo, m.payee].filter(Boolean).join(" · ") || "movimento bancário";
@@ -432,7 +481,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       const f = await federalPaymentLines(ctx, m);
       if (f && "lines" in f) {
         const r = await post(ctx, s, { ...base, history: `Pagamento DARF/DAS ${f.doc} — ${memo}`, lines: f.lines, confidence: "1", evidence: [...base.evidence, { kind: "federal_payment", id: f.ref }] });
-        await link(m.id, r.id, "PAGAMENTO_FEDERAL", f.ref);
+        if (r) await link(m.id, r.id, "PAGAMENTO_FEDERAL", f.ref);
         continue;
       }
       if (f) notes.push(f);
@@ -445,7 +494,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
             : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`,
           evidence: [...base.evidence, ...ns.map((n) => ({ kind: "nfse_document", id: n.id }))],
           lines: [...ns.map((n): EntryLine => ({ account: "2.1.1.01", debit: Dec.of(n.net).toFixed(2), history: `NFS-e nº ${n.number ?? "—"}`, dimensions: partner(n.doc, n.name) })), { account: m.account_code, credit: value }] });
-        for (const n of ns) await link(m.id, r.id, "NFSE_TOMADA", n.id);
+        if (r) for (const n of ns) await link(m.id, r.id, "NFSE_TOMADA", n.id);
         if (ns[0]!.doc && (!tp.who || tp.who.via === "NOME") && !tp.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "FORNECEDOR", memo, m.id, m.posted_on, ctx.actor);
         continue;
       }
@@ -460,7 +509,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
             : `Recebimento de ${ns.length} NFS-e de ${ns[0]!.name ?? "tomador"} (nº ${ns.map((x) => x.number ?? "—").join(", ")}) — ${memo}`,
           evidence: [...base.evidence, ...ns.map((x) => ({ kind: "nfse_document", id: x.id }))],
           lines: [{ account: m.account_code, debit: value }, ...ns.map((x): EntryLine => ({ account: "1.1.2.01", credit: Dec.of(x.net).toFixed(2), history: `NFS-e nº ${x.number ?? "—"}`, dimensions: partner(x.doc, x.name) }))] });
-        for (const x of ns) await link(m.id, r.id, "NFSE", x.id);
+        if (r) for (const x of ns) await link(m.id, r.id, "NFSE", x.id);
         if (ns[0]!.doc && (!n.who || n.who.via === "NOME") && !n.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "CLIENTE", memo, m.id, m.posted_on, ctx.actor);
         continue;
       }
@@ -473,7 +522,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
           ? [{ account: rule.account_code, debit: value }, { account: m.account_code, credit: value }]
           : [{ account: m.account_code, debit: value }, { account: rule.account_code, credit: value }];
         const r = await post(ctx, s, { ...base, history: `${rule.history} — ${memo}`, rule: `bank_rule:${rule.id}`, confidence: "1", lines });
-        await link(m.id, r.id, "REGRA", rule.id);
+        if (r) await link(m.id, r.id, "REGRA", rule.id);
         continue;
       } catch (err) {
         if (!(err instanceof LedgerError)) throw err;
@@ -498,21 +547,23 @@ export interface AutoPostingResult {
   reversed: number;
   pendingFiscal: number;
   pendingBank: number;
+  /** Documentos ou movimentos de competência fechada ainda não lançados (ou estornos pendentes). */
+  lockedItems: number;
 }
 
 /** Roda os três passos para a empresa. Sem plano de contas, não lança nada. */
 export async function runAutoPosting(pool: Pool, tenantId: string, entityId: string, actor: Actor = LEDGER_ENGINE): Promise<AutoPostingResult> {
   return withTenant(pool, tenantId, async (tx) => {
     const start = await chartStart(tx, entityId);
-    if (!start) return { entityId, skipped: "sem plano de contas", posted: 0, reversed: 0, pendingFiscal: 0, pendingBank: 0 };
+    if (!start) return { entityId, skipped: "sem plano de contas", posted: 0, reversed: 0, pendingFiscal: 0, pendingBank: 0, lockedItems: 0 };
     await syncPartners(tx, entityId);
-    const ctx: Ctx = { tx, entityId, start, actor };
-    const fiscal: Stats = { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] };
+    const ctx = await makeCtx(tx, entityId, start, actor);
+    const fiscal = newStats();
     await nfseRevenue(ctx, fiscal);
     await simplesProvision(ctx, fiscal);
     const takenPending: PendingTaken[] = [];
     await nfseExpenses(ctx, fiscal, takenPending);
-    const bank: Stats = { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] };
+    const bank = newStats();
     const pending: PendingMovement[] = [];
     await bankMovements(ctx, bank, pending);
     const posted = fiscal.posted + bank.posted;
@@ -531,7 +582,7 @@ export async function runAutoPosting(pool: Pool, tenantId: string, entityId: str
         },
       });
     }
-    return { entityId, skipped: null, posted, reversed, pendingFiscal: fiscal.pending, pendingBank: bank.pending };
+    return { entityId, skipped: null, posted, reversed, pendingFiscal: fiscal.pending, pendingBank: bank.pending, lockedItems: fiscal.locked + bank.locked };
   });
 }
 
@@ -545,7 +596,7 @@ export async function pendingMovements(pool: Pool, tenantId: string, entityId: s
     const start = await chartStart(client, entityId);
     if (!start) return [];
     const pending: PendingMovement[] = [];
-    await bankMovements({ tx: client, entityId, start, actor: LEDGER_ENGINE }, { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] }, pending);
+    await bankMovements(await makeCtx(client, entityId, start, LEDGER_ENGINE), newStats(), pending);
     return pending;
   } finally {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -609,7 +660,7 @@ export async function pendingTaken(pool: Pool, tenantId: string, entityId: strin
     const start = await chartStart(client, entityId);
     if (!start) return [];
     const pending: PendingTaken[] = [];
-    await nfseExpenses({ tx: client, entityId, start, actor: LEDGER_ENGINE }, { posted: 0, reversed: 0, pending: 0, total: Dec.ZERO, dates: [] }, pending);
+    await nfseExpenses(await makeCtx(client, entityId, start, LEDGER_ENGINE), newStats(), pending);
     return pending;
   } finally {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -642,28 +693,56 @@ export async function classifySupplier(
   return runAutoPosting(pool, tenantId, input.entityId);
 }
 
-/** Aprovação da tabela tipo de serviço → conta (decisão de pessoa). */
-export async function approveTakenServicesRule(pool: Pool, tenantId: string, actor: Actor) {
+/** Aprovação de regra de contabilização (decisão de pessoa); em seguida contabiliza as empresas. */
+export async function approveAccountingRule(pool: Pool, tenantId: string, ruleSet: string, actor: Actor) {
   if (actor.kind !== "USER") throw new LedgerError("Só uma pessoa aprova regra de contabilização");
+  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
   await withTenant(pool, tenantId, async (tx) => {
     const ins = await tx.query(
       "INSERT INTO accounting_rule_approval (id, tenant_id, rule_set, approved_by) VALUES ($1, current_tenant(), $2, $3) ON CONFLICT DO NOTHING",
-      [newId(), TAKEN_SERVICES_RULE, actor.id],
+      [newId(), ruleSet, actor.id],
     );
     if (!ins.rowCount) return;
     await appendEvent(tx, {
       type: "ACCOUNTING_RULES_APPROVED",
       schemaVersion: 1,
       producer: { kind: "user", name: actor.id, version: "1" },
-      idempotencyKey: `regra-contabil:${TAKEN_SERVICES_RULE}`,
-      payload: { rule_set: TAKEN_SERVICES_RULE, approved_by: actor.id },
+      idempotencyKey: `regra-contabil:${ruleSet}`,
+      payload: { rule_set: ruleSet, approved_by: actor.id },
     });
-    await audit(tx, { actor, action: "ledger.rule_approved", resourceType: "accounting_rule_approval", resourceId: TAKEN_SERVICES_RULE, ruleRef: TAKEN_SERVICES_RULE, approvedBy: actor.id });
+    await audit(tx, { actor, action: "ledger.rule_approved", resourceType: "accounting_rule_approval", resourceId: ruleSet, ruleRef: ruleSet, approvedBy: actor.id });
   });
   const ents = await withTenant(pool, tenantId, (tx) => tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM chart_account"));
   let posted = 0;
-  for (const e of ents.rows) posted += (await runAutoPosting(pool, tenantId, e.id)).posted;
+  for (const e of ents.rows) {
+    // ISS retido na fonte (3.2.1.03) entrou no plano padrão junto com a regra de receita com retenção.
+    await withTenant(pool, tenantId, (tx) => ensureStandardAccounts(tx, e.id, actor));
+    posted += (await runAutoPosting(pool, tenantId, e.id)).posted;
+  }
   return { approved: true, posted };
+}
+
+/** Aprovação da tabela tipo de serviço → conta (decisão de pessoa). */
+export function approveTakenServicesRule(pool: Pool, tenantId: string, actor: Actor) {
+  return approveAccountingRule(pool, tenantId, TAKEN_SERVICES_RULE, actor);
+}
+
+/** Notas emitidas com retenção sofrida ainda sem lançamento (para a tela mostrar a proposta). */
+export async function revenueRetentionsPending(tx: PoolClient, entityId: string) {
+  const r = await tx.query<{ n: number; total: string | null; withheld: string | null }>(
+    `SELECT count(*)::int AS n, sum(d.service_value)::text AS total, sum(t.total_withheld_calc)::text AS withheld
+       FROM nfse_document d JOIN nfse_tax t ON t.nfse_id = d.id AND t.parser = $2
+      WHERE d.entity_id = $1 AND d.role = 'PRESTADA' AND t.total_withheld_calc > 0
+        AND NOT EXISTS (SELECT 1 FROM journal_entry e WHERE e.idempotency_key = 'nfse:' || d.id::text)
+        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date >= coalesce((SELECT min(valid_from) FROM chart_account c WHERE c.entity_id = $1 AND c.source <> 'BANCO'), '9999-12-31')`,
+    [entityId, NFSE_TAX_PARSER],
+  );
+  return { notes: r.rows[0]?.n ?? 0, total: r.rows[0]?.total ?? "0", withheld: r.rows[0]?.withheld ?? "0" };
+}
+
+export async function ruleStatus(tx: PoolClient, ruleSet: string) {
+  const r = await tx.query<{ approved_by: string; approved_at: Date }>("SELECT approved_by, approved_at FROM accounting_rule_approval WHERE rule_set = $1", [ruleSet]);
+  return r.rows[0] ?? null;
 }
 
 export async function takenRuleStatus(tx: PoolClient) {

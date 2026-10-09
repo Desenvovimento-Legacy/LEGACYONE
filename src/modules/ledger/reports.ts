@@ -165,3 +165,44 @@ export async function incomeStatement(tx: PoolClient, entityId: string, month: s
     ytdLines: dreLines(await movement(tx, entityId, ytdFrom, to)),
   };
 }
+
+export interface BalanceLine { code: string; label: string; value: string; level: number; strong?: boolean }
+
+/**
+ * Balanço patrimonial na data (saldos acumulados desde o início da contabilidade).
+ * Sem encerramento do exercício, o resultado das contas 3 e 4 aparece no PL como
+ * "Resultado do período (não encerrado)". Ativo positivo; passivo e PL positivos.
+ */
+export async function balanceSheet(tx: PoolClient, entityId: string, date: string) {
+  const start = await tx.query<{ d: string | null }>("SELECT min(valid_from)::text AS d FROM chart_account WHERE entity_id = $1 AND source <> 'BANCO'", [entityId]);
+  const from = start.rows[0]?.d ?? date;
+  const { rows } = await tx.query<{ code: string; name: string; analytic: boolean; bal: string }>(
+    `WITH acc AS (SELECT DISTINCT ON (code) code, name, analytic FROM chart_account WHERE entity_id = $1 AND valid_from <= $2 ORDER BY code, valid_from DESC),
+          mov AS (SELECT c.code, sum(l.debit - l.credit) AS bal FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id JOIN chart_account c ON c.id = l.account_id
+                   WHERE l.entity_id = $1 AND e.entry_date <= $2 GROUP BY c.code)
+     SELECT a.code, a.name, a.analytic,
+            coalesce((SELECT sum(m.bal) FROM mov m WHERE m.code = a.code OR m.code LIKE a.code || '.%'), 0)::text AS bal
+       FROM acc a ORDER BY a.code`,
+    [entityId, date],
+  );
+  const bal = (code: string) => Dec.of(rows.find((r) => r.code === code)?.bal ?? "0");
+  const result = Dec.ZERO.sub(bal("3")).sub(bal("4")); // crédito positivo
+  const f = (v: Dec) => v.toFixed(2);
+  const section = (root: string, sign: 1 | -1) =>
+    rows
+      .filter((r) => r.code.startsWith(`${root}.`) && !r.analytic && r.code.split(".").length <= 3 && !Dec.of(r.bal).isZero())
+      .map((r) => ({ code: r.code, label: r.name, value: f(sign === 1 ? Dec.of(r.bal) : Dec.ZERO.sub(r.bal)), level: r.code.split(".").length - 1 }));
+  const ativo = bal("1");
+  const passivo = Dec.ZERO.sub(bal("2.1")).sub(bal("2.2"));
+  const pl = Dec.ZERO.sub(bal("2.3")).add(result);
+  const assets: BalanceLine[] = [{ code: "1", label: "ATIVO", value: f(ativo), level: 0, strong: true }, ...section("1", 1)];
+  const liabilities: BalanceLine[] = [
+    { code: "2", label: "PASSIVO E PATRIMÔNIO LÍQUIDO", value: f(passivo.add(pl)), level: 0, strong: true },
+    ...section("2", -1).filter((l) => !l.code.startsWith("2.3")),
+    { code: "2.3", label: "PATRIMÔNIO LÍQUIDO", value: f(pl), level: 1 },
+    ...rows.filter((r) => r.code.startsWith("2.3.") && r.analytic && !Dec.of(r.bal).isZero()).map((r) => ({ code: r.code, label: r.name, value: f(Dec.ZERO.sub(r.bal)), level: 2 })),
+    ...(result.isZero() ? [] : [{ code: "", label: "Resultado do período (não encerrado)", value: f(result), level: 2 }]),
+  ];
+  const diff = ativo.sub(passivo.add(pl));
+  return { date, from, assets, liabilities, totals: { ativo: f(ativo), passivo: f(passivo), pl: f(pl), result: f(result), balanced: diff.isZero(), diff: f(diff) } };
+}
