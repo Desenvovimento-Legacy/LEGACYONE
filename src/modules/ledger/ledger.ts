@@ -141,7 +141,7 @@ export async function nextChildCode(tx: PoolClient, entityId: string, parent: st
 
 export async function addAccount(
   tx: PoolClient,
-  input: { entityId: string; parent: string; name: string; validFrom: string; source: "BANCO" | "MANUAL" | "MIGRACAO" },
+  input: { entityId: string; parent: string; name: string; validFrom: string; source: "BANCO" | "MANUAL" | "MIGRACAO" | "PADRAO_ESCRITORIO" },
   actor: Actor,
 ): Promise<{ id: string; code: string }> {
   const parent = await tx.query<{ nature: Nature; analytic: boolean }>(

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { readEntityNfseTaxes } from "../src/modules/fiscal/withholdings.js";
 import { importBankStatement } from "../src/modules/financial/bank-statements.js";
-import { approveTakenServicesRule, runAutoPosting } from "../src/modules/ledger/auto-posting.js";
+import { approveAccountingRule, approveTakenServicesRule, NO_NOTE_RULE, pendingMovements, runAutoPosting } from "../src/modules/ledger/auto-posting.js";
+import { trialBalance } from "../src/modules/ledger/ledger.js";
 import { importChartTemplate, parseDominioChart } from "../src/modules/ledger/chart-template.js";
 import { closingStatus } from "../src/modules/ledger/closing.js";
 import { applyStandardChart, LedgerError } from "../src/modules/ledger/ledger.js";
@@ -42,6 +43,7 @@ const ACCOUNTS: [string, boolean, string, string][] = [
   ["269", true, "4", "CONTAS DE RESULTADOS - CUSTOS E DESPESAS"], ["500", true, "4.1", "CUSTOS"],
   ["295", true, "4.2", "DESPESAS OPERACIONAIS"], ["329", true, "4.2.2", "DESPESAS ADMINISTRATIVAS"],
   ["345", true, "4.2.2.03", "IMPOSTOS, TAXAS E CONTRIBUIÇÕES"], ["352", false, "4.2.2.03.000007", "MULTAS DE MORA"],
+  ["376", true, "4.2.2.07", "OUTRAS DESPESAS OPERACIONAIS"], ["377", false, "4.2.2.07.000001", "PROVISÕES P/ PERDAS E A JUSTES DE ATIVOS"],
   ["566", true, "4.2.2.05", "SERVICOS TOMADOS DE PJ"], ["573", false, "4.2.2.05.000007", "SERVS. ADVOCATICIOS"],
   ["367", true, "4.2.2.06", "DESPESAS FINANCEIRAS"], ["372", false, "4.2.2.06.000005", "JUROS DE MORA"],
   ["526", false, "4.2.2.06.000010", "MULTAS DE MORA"], ["535", false, "4.2.2.06.000011", "TARIFA BANCÁRIA"],
@@ -126,5 +128,59 @@ describe("plano de contas padrão do escritório (modelo do Domínio)", () => {
     });
     const st = await closingStatus(appPool, t, entityId, "2026-07");
     expect(st.checks.find((c) => c.key === "simples")!.status).toBe("OK");
+  });
+
+  it("pagamento sem nota fiscal vai para Outras Despesas Operacionais (conta criada no padrão); nota que chega depois estorna e baixa Fornecedores", async () => {
+    const t = await newTenant();
+    await importChartTemplate(appPool, t, { name: "modelo", fileName: "p.csv", bytes: Buffer.from(csv, "latin1") }, LUAN);
+    const { entityId } = await newEntity(t, CNPJ_MATRIZ);
+    await applyStandardChart(appPool, t, entityId, "2026-07-01", LUAN);
+    await approveTakenServicesRule(appPool, t, LUAN);
+    await withTenant(appPool, t, (tx) => tx.query(
+      "INSERT INTO partner_history (id, tenant_id, entity_id, name, valid_from, source) VALUES ($1, current_tenant(), $2, 'FULANO SOCIO DA SILVA', '2020-01-01', 'teste')", [newId(), entityId]));
+    const note = (prov: string, name: string, value: string, day: string, nsu: number) => {
+      const xml = `<NFSe xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01"><infNFSe Id="N"><nNFSe>${nsu}</nNFSe><emit><CNPJ>${prov}</CNPJ></emit><valores><vLiq>${value}</vLiq></valores>` +
+        `<DPS versao="1.01"><infDPS Id="D"><dhEmi>${day}T10:00:00-03:00</dhEmi><dCompet>${day}</dCompet><prest><CNPJ>${prov}</CNPJ><regTrib><opSimpNac>3</opSimpNac></regTrib></prest>` +
+        `<toma><CNPJ>${CNPJ_MATRIZ}</CNPJ></toma><serv><cServ><cTribNac>171401</cTribNac></cServ></serv><valores><vServPrest><vServ>${value}</vServ></vServPrest><trib><tribMun><tpRetISSQN>1</tpRetISSQN></tribMun><tribFed></tribFed></trib></valores></infDPS></DPS></infNFSe></NFSe>`;
+      return withTenant(appPool, t, (tx) => tx.query(
+        `INSERT INTO nfse_document (id, tenant_id, entity_id, nsu, role, number, issued_at, provider_doc, provider_name, service_value, xml, sha256)
+         VALUES ($1, current_tenant(), $2, $3, 'TOMADA', $4, $5, $6, $7, $8, $9, $10)`,
+        [newId(), entityId, nsu, `N${nsu}`, `${day}T10:00:00-03:00`, prov, name, value, xml, createHash("sha256").update(`x${nsu}`).digest()]));
+    };
+    // fornecedor com nota no período ainda não lida: o pagamento espera
+    await note("11222333000181", "ADVOGADOS ASSOCIADOS LTDA", "300.00", "2026-07-25", 1);
+    const ofx = `OFXHEADER:100\r\n<OFX>\r\n<BANKMSGSRSV1>\r\n<STMTTRNRS>\r\n<STMTRS>\r\n<BANKACCTFROM>\r\n<BANKID>0341\r\n<ACCTID>5-5\r\n</BANKACCTFROM>\r\n<BANKTRANLIST>\r\n<DTSTART>20260701\r\n<DTEND>20260731\r\n` +
+      [["1", "20260703", "-250,00", "PAGTO ELETRON COBRANCA ENERGIA"], ["2", "20260704", "-1000,00", "PAGTO DARF"], ["3", "20260705", "-500,00", "PIX ENVIADO FULANO SOCIO"],
+        ["4", "20260706", "-400,00", "PIX ENVIADO DELTAX SERVICOS"], ["5", "20260707", "-300,00", "PIX ENVIADO ADVOGADOS ASSOCIADOS"]]
+        .map(([id, d, a, m]) => `<STMTTRN>\r\n<TRNTYPE>OTHER\r\n<DTPOSTED>${d}\r\n<TRNAMT>${a}\r\n<FITID>${id}\r\n<MEMO>${m}\r\n</STMTTRN>\r\n`).join("") +
+      `</BANKTRANLIST>\r\n</STMTRS>\r\n</STMTTRNRS>\r\n</BANKMSGSRSV1>\r\n</OFX>\r\n`;
+    await importBankStatement(appPool, t, entityId, { name: "i.ofx", bytes: Buffer.from(ofx, "latin1") }, LUAN);
+
+    // sem a regra: tudo espera
+    expect(await runAutoPosting(appPool, t, entityId)).toMatchObject({ pendingBank: 5 });
+    await approveAccountingRule(appPool, t, NO_NOTE_RULE, LUAN);
+    const pend = (await pendingMovements(appPool, t, entityId)).map((p) => [p.amount, p.reason]);
+    expect(pend).toEqual([
+      ["-1000.00", "Saída sem DARF, regra ou documento correspondente"],
+      ["-500.00", "Saída sem DARF, regra ou documento correspondente"],
+      ["-300.00", "Pagamento a ADVOGADOS ASSOCIADOS LTDA: tem NFS-e no período ainda não lançada"],
+    ]);
+    await withTenant(appPool, t, async (tx) => {
+      const c = await tx.query("SELECT code, name, source FROM chart_account WHERE entity_id = $1 AND parent_code = '4.2.2.07' ORDER BY code", [entityId]);
+      expect(c.rows.at(-1)).toEqual({ code: "4.2.2.07.000002", name: "OUTRAS DESPESAS OPERACIONAIS", source: "PADRAO_ESCRITORIO" });
+    });
+    let tb = await withTenant(appPool, t, (tx) => trialBalance(tx, entityId, "2026-07-01", "2026-07-31"));
+    expect(tb.rows.find((r) => r.code === "4.2.2.07.000002")!.closing).toBe("650.00"); // 250 energia + 400 Deltax
+
+    // a nota da Deltax chega depois: estorna o "sem nota" e o pagamento baixa Fornecedores; a da advocacia é lida e casa
+    await note("44555666000177", "DELTAX SERVICOS LTDA", "400.00", "2026-07-20", 2);
+    await readEntityNfseTaxes(appPool, t, entityId);
+    await runAutoPosting(appPool, t, entityId);
+    tb = await withTenant(appPool, t, (tx) => trialBalance(tx, entityId, "2026-07-01", "2026-07-31"));
+    const by = Object.fromEntries(tb.rows.map((r) => [r.code, r.closing]));
+    expect(by["4.2.2.07.000002"]).toBe("250.00");
+    expect(by["4.2.2.05.000007"]).toBe("700.00"); // 300 advocacia + 400 Deltax (171401)
+    expect(by["2.1.3.01.000001"]).toBe("0.00");
+    expect((await pendingMovements(appPool, t, entityId)).map((p) => p.amount)).toEqual(["-1000.00", "-500.00"]);
   });
 });

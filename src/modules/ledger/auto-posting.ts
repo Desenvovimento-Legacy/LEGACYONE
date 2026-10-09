@@ -42,6 +42,15 @@ export const REVENUE_RETENTIONS_RULE = "receita-retencoes@1";
  * tarifa bancária. Só vale depois de aprovada por uma pessoa.
  */
 export const BANK_STANDARD_RULE = "extrato-padrao@1";
+/**
+ * Pagamento sem nota fiscal (regra do responsável técnico): saída do banco que
+ * não é tributo, transferência, aplicação, tarifa, fatura de cartão, empréstimo
+ * nem pagamento a sócio, e cujo favorecido não tem NFS-e no período, é lançada
+ * em Outras Despesas Operacionais (a conta é criada no padrão do plano se não
+ * existir). Se a nota do fornecedor chegar depois, o lançamento é estornado e o
+ * pagamento passa a baixar Fornecedores.
+ */
+export const NO_NOTE_RULE = "sem-nota@1";
 const PRODUCER: Producer = { kind: "engine", name: "ledger", version: "0.1.0" };
 export const LEDGER_ENGINE: Actor = { kind: "AGENT", id: "ledger" };
 
@@ -80,7 +89,7 @@ export function federalItemAccount(code: string | null, description: string | nu
 
 interface Ctx {
   tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>;
-  revenueRule: boolean; bankStdRule: boolean; cfg: ChartConfig; acc: (r: Role) => string;
+  revenueRule: boolean; bankStdRule: boolean; noNoteRule: boolean; cfg: ChartConfig; acc: (r: Role) => string;
 }
 
 /** Parceiro (cliente ou fornecedor) gravado na linha: base de razão auxiliar e contas em aberto. */
@@ -97,7 +106,7 @@ const compOf = (date: string) => `${date.slice(0, 7)}-01`;
 async function makeCtx(tx: PoolClient, entityId: string, start: string, actor: Actor): Promise<Ctx> {
   const cfg = await chartConfig(tx, entityId);
   return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE),
-    bankStdRule: await ruleApproved(tx, BANK_STANDARD_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
+    bankStdRule: await ruleApproved(tx, BANK_STANDARD_RULE), noNoteRule: await ruleApproved(tx, NO_NOTE_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
 }
 
 async function ruleApproved(tx: PoolClient, ruleSet: string): Promise<boolean> {
@@ -344,6 +353,21 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
         rule: byRule ? `supplier_rule:${byRule.id}` : TAKEN_SERVICES_RULE, confidence: "1",
         evidence: [{ kind: "nfse_document", id: n.id }], lines,
       });
+      // Pagamento já lançado como "sem nota" para este fornecedor e valor: a nota chegou, estorna; o extrato volta a casar com Fornecedores.
+      {
+        // pelo CNPJ do fornecedor gravado no pagamento; sem ele, pelo nome do fornecedor no histórico do banco
+        const key = normalize(n.supplier).replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).find((w) => w.length >= 5) ?? null;
+        const paid = await ctx.tx.query<{ id: string; history: string; doc: string | null }>(
+          `SELECT e.id, e.history, l.dimensions->>'parceiro_doc' AS doc FROM journal_entry e JOIN journal_line l ON l.entry_id = e.id
+            WHERE e.entity_id = $1 AND e.rule_ref = $2 AND l.debit = $3 AND e.entry_date BETWEEN $4 AND $5
+              AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
+            ORDER BY e.entry_date`,
+          [ctx.entityId, NO_NOTE_RULE, net.toFixed(2), addDays(n.issued, -60), addDays(n.issued, 120)],
+        );
+        const hit = paid.rows.find((p) => n.doc && p.doc === n.doc)
+          ?? paid.rows.find((p) => !p.doc && key && ` ${normalize(p.history).replace(/[^A-Z0-9 ]/g, " ")} `.includes(` ${key} `));
+        if (hit) await reverse(ctx, s, hit.id, `chegou a NFS-e nº ${n.number ?? "—"} do fornecedor: o pagamento baixa Fornecedores`);
+      }
     } catch (err) {
       if (!(err instanceof LedgerError)) throw err;
       miss(err.message);
@@ -352,9 +376,10 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
 }
 
 interface OpenNote { id: string; number: string | null; name: string | null; doc: string | null; issued: string; net: string }
-type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean } | { why: string; hypotheses: string[] } | null;
+type Why = { why: string; hypotheses: string[]; soft?: boolean; partnerDoc?: string; partnerName?: string | null };
+type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean } | Why | null;
 
-/** NFS-e (tomadas ou emitidas) já contabilizadas, ainda sem pagamento/recebimento no extrato, até 120 dias antes do movimento. */
+/** NFS-e (tomadas ou emitidas) já contabilizadas, ainda sem pagamento/recebimento no extrato, de 120 dias antes a 60 dias depois do movimento (pagamento antes da nota). */
 async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): Promise<OpenNote[]> {
   const sql = role === "TOMADA"
     ? `SELECT d.id, d.number, d.provider_name AS name, d.provider_doc AS doc, to_char(d.issued_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS issued,
@@ -372,7 +397,7 @@ async function openNotes(ctx: Ctx, role: "TOMADA" | "PRESTADA", until: string): 
           AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)
           AND NOT EXISTS (SELECT 1 FROM bank_match b WHERE b.method = 'NFSE' AND b.reference = d.id::text)
         ORDER BY d.issued_at, d.number`;
-  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), until, ctx.acc(role === "TOMADA" ? "FORNECEDORES" : "CLIENTES")]);
+  const { rows } = await ctx.tx.query<OpenNote>(sql, [ctx.entityId, addDays(until, -120), addDays(until, 60), ctx.acc(role === "TOMADA" ? "FORNECEDORES" : "CLIENTES")]);
   return rows;
 }
 
@@ -415,7 +440,9 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
   const open = mine.reduce((s, n) => s.add(n.net), Dec.ZERO);
   return mine.length
     ? { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc}: valor não fecha com as notas em aberto (${mine.length} nota(s), ${brl(open.toFixed(2))})`, hypotheses: mine.slice(0, 5).map(label) }
-    : { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc} sem NFS-e em aberto`, hypotheses: [] };
+    : role === "TOMADA" && (await partnerHasNotes(ctx, who.doc, m.posted_on))
+      ? { why: `Pagamento a ${who.name ?? who.doc}: tem NFS-e no período ainda não lançada`, hypotheses: [] }
+      : { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc} sem NFS-e em aberto`, hypotheses: [], soft: true, partnerDoc: who.doc, partnerName: who.name };
 }
 
 // ------------------------------------------------------------------ extrato → razão
@@ -505,6 +532,53 @@ async function applicationAccount(ctx: Ctx, m: Movement): Promise<string> {
   return a.code;
 }
 
+/** Saídas que não são despesa (tributo, cartão, empréstimo, investimento, devolução): ficam para pessoa. */
+const NOT_EXPENSE = /\b(DARF|DAS|GPS|FGTS|GRF|GFD|IMPOSTO|TRIBUT|SIMPLES NACIONAL|RECEITA FEDERAL|SEFAZ|ICMS|IPVA|IPTU|FATURA|CARTAO DE CREDITO|CARTAO CREDITO|EMPRESTIMO|FINANCIAMENTO|CONSORCIO|PARCELA|CDB|INVEST|DEVOLUCAO|ESTORNO)\b/;
+
+/** Primeiros nomes dos sócios (quadro societário): pagamento a sócio não é despesa (pró-labore, lucros, mútuo). */
+async function partnerNames(ctx: Ctx): Promise<string[]> {
+  const r = await ctx.tx.query<{ name: string }>("SELECT name FROM partner_history WHERE entity_id = $1 AND valid_to IS NULL", [ctx.entityId]);
+  return r.rows.map((x) => normalize(x.name).replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter(Boolean).slice(0, 2).join(" ")).filter((x) => x.includes(" "));
+}
+function mentionsAny(memo: string, names: string[]): boolean {
+  const t = ` ${normalize(memo).replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ")} `;
+  return names.some((n) => t.includes(` ${n} `));
+}
+
+/** Fornecedor tem NFS-e tomada perto da data ainda não lançada? Então o pagamento espera a nota. */
+async function partnerHasNotes(ctx: Ctx, doc: string, date: string): Promise<boolean> {
+  const r = await ctx.tx.query(
+    `SELECT 1 FROM nfse_document d WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND d.provider_doc = $2
+        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $3 AND $4
+        AND NOT EXISTS (SELECT 1 FROM journal_entry e WHERE e.idempotency_key = 'nfse-tomada:' || d.id::text
+                         AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id))
+      LIMIT 1`,
+    [ctx.entityId, doc, addDays(date, -120), addDays(date, 60)],
+  );
+  return Boolean(r.rowCount);
+}
+
+/** Chave do lançamento do movimento; depois de estorno (ex.: nota chegou), uma chave nova. */
+async function bankKey(ctx: Ctx, txId: string): Promise<string> {
+  const r = await ctx.tx.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM journal_entry e WHERE (e.idempotency_key = $1 OR e.idempotency_key LIKE $1 || ':r%')
+        AND EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id)`,
+    [`banco:${txId}`],
+  );
+  const n = r.rows[0]?.n ?? 0;
+  return n ? `banco:${txId}:r${n}` : `banco:${txId}`;
+}
+
+/** Conta analítica Outras Despesas Operacionais; sem ela, criada no grupo de mesmo nome, no padrão do plano. */
+async function otherExpensesAccount(ctx: Ctx): Promise<string | null> {
+  if (ctx.cfg.roles.OUTRAS_DESPESAS) return ctx.cfg.roles.OUTRAS_DESPESAS;
+  const group = ctx.cfg.roles.OUTRAS_DESPESAS_GRUPO;
+  if (!group) return null;
+  const a = await addAccount(ctx.tx, { entityId: ctx.entityId, parent: group, name: "OUTRAS DESPESAS OPERACIONAIS", validFrom: ctx.start, source: "PADRAO_ESCRITORIO" }, ctx.actor);
+  ctx.cfg = { ...ctx.cfg, roles: { ...ctx.cfg.roles, OUTRAS_DESPESAS: a.code } };
+  return a.code;
+}
+
 interface OwnIdentity { cnpj: string; name: string | null }
 async function ownIdentity(ctx: Ctx): Promise<OwnIdentity> {
   const r = await ctx.tx.query<{ cnpj: string | null; legal_name: string }>("SELECT cnpj, legal_name FROM entity WHERE id = $1", [ctx.entityId]);
@@ -534,6 +608,7 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       [newId(), ctx.entityId, txId, entryId, method, reference],
     );
   const own = await ownIdentity(ctx);
+  const socios = await partnerNames(ctx);
   const done = new Set<string>();
   for (const m of rows) {
     if (done.has(m.id)) continue;
@@ -541,9 +616,9 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
     const out = Dec.of(m.amount).cmp("0") < 0;
     const value = Dec.of(m.amount).mul(out ? "-1" : "1").toFixed(2);
     const memo = [m.memo, m.payee].filter(Boolean).join(" · ") || "movimento bancário";
-    const base = { entityId: ctx.entityId, date: m.posted_on, origin: "BANCO" as const, originRef: `bank_transaction:${m.id}`, idempotencyKey: `banco:${m.id}`,
+    const base = { entityId: ctx.entityId, date: m.posted_on, origin: "BANCO" as const, originRef: `bank_transaction:${m.id}`, idempotencyKey: await bankKey(ctx, m.id),
       evidence: [{ kind: "bank_transaction", id: m.id }] };
-    const notes: { why: string; hypotheses: string[] }[] = [];
+    const notes: Why[] = [];
 
     // Transferência entre contas da própria empresa: o histórico cita a empresa e a outra conta tem o movimento oposto.
     if (mentionsOwn(memo, own)) {
@@ -637,6 +712,19 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         if (r) await link(m.id, r.id, "REGRA", BANK_STANDARD_RULE);
         continue;
       }
+    }
+    // Pagamento sem nota fiscal → Outras Despesas Operacionais (regra aprovada)
+    if (out && ctx.noNoteRule && !kind && notes.every((n) => n.soft) && !NOT_EXPENSE.test(normalize(memo)) && !mentionsAny(memo, socios)) {
+      const who = notes.find((n) => n.partnerDoc);
+      const acc = await otherExpensesAccount(ctx);
+      if (acc) {
+        const dim = who ? partner(who.partnerDoc!, who.partnerName ?? null) : {};
+        const r = await post(ctx, s, { ...base, history: `Pagamento sem nota fiscal — ${memo}`, rule: NO_NOTE_RULE, confidence: "1",
+          lines: [{ account: acc, debit: value, dimensions: dim }, { account: m.account_code, credit: value }] });
+        if (r) await link(m.id, r.id, "REGRA", NO_NOTE_RULE);
+        continue;
+      }
+      notes.push({ why: "Pagamento sem nota: o plano não tem o grupo Outras Despesas Operacionais", hypotheses: [] });
     }
     s.pending++;
     pending.push({
@@ -805,7 +893,7 @@ export async function classifySupplier(
 /** Aprovação de regra de contabilização (decisão de pessoa); em seguida contabiliza as empresas. */
 export async function approveAccountingRule(pool: Pool, tenantId: string, ruleSet: string, actor: Actor) {
   if (actor.kind !== "USER") throw new LedgerError("Só uma pessoa aprova regra de contabilização");
-  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE, BANK_STANDARD_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
+  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE, BANK_STANDARD_RULE, NO_NOTE_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
   await withTenant(pool, tenantId, async (tx) => {
     const ins = await tx.query(
       "INSERT INTO accounting_rule_approval (id, tenant_id, rule_set, approved_by) VALUES ($1, current_tenant(), $2, $3) ON CONFLICT DO NOTHING",
