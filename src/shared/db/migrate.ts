@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { config } from "../../config.js";
 import { isMain } from "../is-main.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../db/migrations", import.meta.url));
@@ -48,7 +49,5 @@ export async function migrate(connectionString: string, log = console.log): Prom
 }
 
 if (isMain(import.meta.url)) {
-  const url = process.env.ADMIN_DATABASE_URL;
-  if (!url) throw new Error("ADMIN_DATABASE_URL não definida");
-  await migrate(url);
+  await migrate(config.adminDatabaseUrl());
 }

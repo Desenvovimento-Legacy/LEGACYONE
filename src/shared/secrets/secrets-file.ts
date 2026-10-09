@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 /**
  * Credential Vault — backend de arquivo local (fase piloto).
@@ -96,6 +96,26 @@ export function defaultSecretsPath(): string | null {
   if (env) return env;
   if (process.platform !== "win32") return null;
   return WINDOWS_VAULT_CANDIDATES.find((p) => existsSync(p)) ?? WINDOWS_VAULT_CANDIDATES[0]!;
+}
+
+/**
+ * Grava (ou substitui) chaves no arquivo do cofre, preservando as demais linhas.
+ * Os valores nunca são devolvidos nem impressos.
+ */
+export function upsertSecrets(path: string, values: Record<string, string>): void {
+  const lines = existsSync(path) ? readFileSync(path, "utf8").replace(/^﻿/, "").split(/\r?\n/) : [];
+  const pending = new Map(Object.entries(values));
+  const out = lines.map((line) => {
+    const eq = line.indexOf("=");
+    const key = eq > 0 ? line.slice(0, eq).trim() : "";
+    if (!pending.has(key)) return line;
+    const v = pending.get(key)!;
+    pending.delete(key);
+    return `${key}=${v}`;
+  });
+  while (out.length && out[out.length - 1] === "") out.pop();
+  for (const [k, v] of pending) out.push(`${k}=${v}`);
+  writeFileSync(path, out.join("\r\n") + "\r\n", "utf8");
 }
 
 /** Abre o cofre; devolve null se o arquivo não existir. */

@@ -29,7 +29,8 @@
     "auth:init": "tsx --env-file-if-exists=.env src/cli/users.ts init",
     "user:invite": "tsx --env-file-if-exists=.env src/cli/users.ts invite",
     "user:revoke": "tsx --env-file-if-exists=.env src/cli/users.ts revoke",
-    "user:list": "tsx --env-file-if-exists=.env src/cli/users.ts list"
+    "user:list": "tsx --env-file-if-exists=.env src/cli/users.ts list",
+    "cloud:db": "tsx --env-file-if-exists=.env src/cli/cloud-db.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.2",
