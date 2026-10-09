@@ -149,7 +149,7 @@ async function copy() {
       `pg_dump -U "$POSTGRES_USER" -d ${LOCAL_DB} --data-only --no-owner --no-privileges --exclude-table=schema_migrations; } ` +
       `| psql -q -v ON_ERROR_STOP=1 --single-transaction "$CLOUDURL"`;
     console.log("copiando dados…");
-    await run("docker", ["exec", "-i", "-e", "CLOUDURL", LOCAL_CONTAINER, "sh", "-c", script], null, env);
+    await run("docker", ["exec", "-i", "-e", "CLOUDURL", "-e", "CLEARSQL", LOCAL_CONTAINER, "sh", "-c", script], null, env);
 
     const local = new Map(
       (await localPsql(COUNT_SQL + ";"))
