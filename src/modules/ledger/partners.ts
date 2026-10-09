@@ -50,6 +50,8 @@ const words = (s: string | null | undefined) => normalize(s).replace(/[^A-Z0-9/ 
 /** Histórico do banco sem números e sem palavras de banco: o que sobra é o nome. */
 export const bankText = (memo: string | null | undefined) =>
   words(memo).filter((w) => !/\d/.test(w) && !BANK_WORDS.has(w)).join(" ");
+/** Primeira palavra que identifica o nome (≥ 5 letras, fora das genéricas). */
+export const nameKey = (name: string | null): string | null => significant(name).find((w) => w.length >= 5) ?? null;
 const significant = (name: string | null) => words(name).filter((w) => w.length >= 4 && !GENERIC.has(w) && !/^\d+$/.test(w));
 
 // ------------------------------------------------------------------ cadastro automático

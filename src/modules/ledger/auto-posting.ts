@@ -8,7 +8,7 @@ import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
 import { normalize } from "../../shared/text.js";
-import { identifyPartner, learnAlias, loadPartnerIndex, syncPartners, type IdentifiedPartner, type PartnerIndex } from "./partners.js";
+import { identifyPartner, learnAlias, loadPartnerIndex, nameKey, syncPartners, type IdentifiedPartner, type PartnerIndex } from "./partners.js";
 import { addAccount, ensureStandardAccounts, LedgerError, lockedCompetences, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
 import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
 import { BUILTIN_CONFIG, chartConfig, roleAccount, type ChartConfig, type Role } from "./chart-config.js";
@@ -356,7 +356,7 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
       // Pagamento já lançado como "sem nota" para este fornecedor e valor: a nota chegou, estorna; o extrato volta a casar com Fornecedores.
       {
         // pelo CNPJ do fornecedor gravado no pagamento; sem ele, pelo nome do fornecedor no histórico do banco
-        const key = normalize(n.supplier).replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).find((w) => w.length >= 5) ?? null;
+        const key = nameKey(n.supplier);
         const paid = await ctx.tx.query<{ id: string; history: string; doc: string | null }>(
           `SELECT e.id, e.history, l.dimensions->>'parceiro_doc' AS doc FROM journal_entry e JOIN journal_line l ON l.entry_id = e.id
             WHERE e.entity_id = $1 AND e.rule_ref = $2 AND l.debit = $3 AND e.entry_date BETWEEN $4 AND $5
