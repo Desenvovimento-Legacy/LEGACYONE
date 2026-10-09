@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { bankName } from "../../integrations/bank/ofx.js";
 import { NFSE_TAX_PARSER } from "../../integrations/nfse/nfse-taxes.js";
 import { audit } from "../../platform/audit/audit.js";
 import { appendEvent, type Producer } from "../../platform/events/outbox.js";
@@ -8,7 +9,7 @@ import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
 import { normalize } from "../../shared/text.js";
 import { identifyPartner, learnAlias, loadPartnerIndex, syncPartners, type IdentifiedPartner, type PartnerIndex } from "./partners.js";
-import { ensureStandardAccounts, LedgerError, lockedCompetences, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
+import { addAccount, ensureStandardAccounts, LedgerError, lockedCompetences, postEntry, reverseEntry, type EntryLine } from "./ledger.js";
 import { serviceAccount, TAKEN_SERVICES_RULE } from "./service-accounts.js";
 import { BUILTIN_CONFIG, chartConfig, roleAccount, type ChartConfig, type Role } from "./chart-config.js";
 
@@ -35,6 +36,12 @@ export const AUTO_POSTING_RULES = "contabil-auto@1";
  * Só vale depois de aprovada por uma pessoa.
  */
 export const REVENUE_RETENTIONS_RULE = "receita-retencoes@1";
+/**
+ * Movimentos típicos do banco, pelo histórico: aplicação e resgate automáticos
+ * (conta de aplicação daquele banco), rendimento (receita de aplicação) e
+ * tarifa bancária. Só vale depois de aprovada por uma pessoa.
+ */
+export const BANK_STANDARD_RULE = "extrato-padrao@1";
 const PRODUCER: Producer = { kind: "engine", name: "ledger", version: "0.1.0" };
 export const LEDGER_ENGINE: Actor = { kind: "AGENT", id: "ledger" };
 
@@ -71,7 +78,10 @@ export function federalItemAccount(code: string | null, description: string | nu
   return r ? cfg.roles[r] ?? null : null;
 }
 
-interface Ctx { tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>; revenueRule: boolean; cfg: ChartConfig; acc: (r: Role) => string }
+interface Ctx {
+  tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>;
+  revenueRule: boolean; bankStdRule: boolean; cfg: ChartConfig; acc: (r: Role) => string;
+}
 
 /** Parceiro (cliente ou fornecedor) gravado na linha: base de razão auxiliar e contas em aberto. */
 const partner = (doc: string | null, name: string | null): Record<string, string> => {
@@ -86,7 +96,8 @@ const compOf = (date: string) => `${date.slice(0, 7)}-01`;
 
 async function makeCtx(tx: PoolClient, entityId: string, start: string, actor: Actor): Promise<Ctx> {
   const cfg = await chartConfig(tx, entityId);
-  return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
+  return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE),
+    bankStdRule: await ruleApproved(tx, BANK_STANDARD_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
 }
 
 async function ruleApproved(tx: PoolClient, ruleSet: string): Promise<boolean> {
@@ -384,11 +395,12 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
   if (byValue.length) {
     if (who) {
       const mine = byValue.filter((n) => n.doc === who.doc);
-      if (mine.length === 1) return { notes: mine, who, grouped: false };
-      if (mine.length > 1) return { why: `${mine.length} NFS-e ${kind} de ${who.name ?? who.doc} em aberto com o mesmo valor`, hypotheses: mine.slice(0, 5).map(label) };
+      // mesmo parceiro, mesmo valor: quita a nota mais antiga em aberto (FIFO)
+      if (mine.length >= 1) return { notes: [mine[0]!], who, grouped: false };
       if (who.via !== "NOME") return { why: `O banco indica ${who.name ?? who.doc}, mas a NFS-e com esse valor é de outro parceiro`, hypotheses: byValue.slice(0, 5).map(label) };
     }
     if (byValue.length === 1) return { notes: byValue, who: null, grouped: false };
+    if (byValue[0]!.doc && byValue.every((n) => n.doc === byValue[0]!.doc)) return { notes: [byValue[0]!], who: null, grouped: false };
     return { why: `${byValue.length} NFS-e ${kind} em aberto com o mesmo valor`, hypotheses: byValue.slice(0, 5).map(label) };
   }
   if (!who) return id && "ambiguous" in id ? { why: "O histórico do banco serve para mais de um parceiro", hypotheses: id.ambiguous.slice(0, 5) } : null;
@@ -408,7 +420,7 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
 
 // ------------------------------------------------------------------ extrato → razão
 
-interface Movement { id: string; posted_on: string; amount: string; memo: string | null; payee: string | null; account_code: string; label: string }
+interface Movement { id: string; posted_on: string; amount: string; memo: string | null; payee: string | null; account_code: string; label: string; bank_account_id: string; bank_code: string | null }
 
 export interface PendingMovement extends Movement { reason: string; hypotheses: string[] }
 
@@ -464,9 +476,51 @@ async function ruleFor(ctx: Ctx, m: Movement) {
   return best;
 }
 
+type StdKind = "APLICACAO" | "RESGATE" | "RENDIMENTO" | "TARIFA";
+const STD_LABEL: Record<StdKind, string> = { APLICACAO: "Aplicação financeira", RESGATE: "Resgate de aplicação", RENDIMENTO: "Rendimento de aplicação", TARIFA: "Tarifa bancária" };
+
+/** Tipo de movimento típico pelo histórico do banco (determinístico); nulo = não é. */
+export function standardKind(memo: string, out: boolean): StdKind | null {
+  const t = ` ${normalize(memo).replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ")} `;
+  if (!out && / (RENDIMENTO|RENDIMENTOS|RENTAB|REND PAGO) /.test(t)) return "RENDIMENTO";
+  if (!out && / (RES|RESG|RESGATE) /.test(t) && / (APLIC|APLICACAO|CDB|INVEST|AUT) /.test(t)) return "RESGATE";
+  if (out && / (APL|APLIC|APLICACAO) /.test(t) && !/ (RES|RESGATE) /.test(t)) return "APLICACAO";
+  if (out && / (TARIFA|TAR|CESTA|ANUIDADE) /.test(t)) return "TARIFA";
+  return null;
+}
+
+/** Conta de aplicação do banco do movimento: a do plano com o nome do banco; senão cria debaixo do grupo de aplicações. */
+async function applicationAccount(ctx: Ctx, m: Movement): Promise<string> {
+  const root = ctx.acc("APLICACOES");
+  const r = await ctx.tx.query<{ code: string; name: string; analytic: boolean }>(
+    "SELECT code, name, analytic FROM chart_account WHERE entity_id = $1 AND (code = $2 OR parent_code = $2) AND valid_to IS NULL ORDER BY code",
+    [ctx.entityId, root],
+  );
+  const self = r.rows.find((x) => x.code === root);
+  if (self?.analytic) return root;
+  const bank = normalize(bankName(m.bank_code)).replace(/^BANCO /, "");
+  const hit = r.rows.find((x) => x.analytic && x.code !== root && ` ${normalize(x.name)} `.includes(` ${bank} `));
+  if (hit) return hit.code;
+  const a = await addAccount(ctx.tx, { entityId: ctx.entityId, parent: root, name: `APLICAÇÃO ${m.label}`.toUpperCase().slice(0, 120), validFrom: ctx.start, source: "BANCO" }, ctx.actor);
+  return a.code;
+}
+
+interface OwnIdentity { cnpj: string; name: string | null }
+async function ownIdentity(ctx: Ctx): Promise<OwnIdentity> {
+  const r = await ctx.tx.query<{ cnpj: string | null; legal_name: string }>("SELECT cnpj, legal_name FROM entity WHERE id = $1", [ctx.entityId]);
+  const words = normalize(r.rows[0]?.legal_name).replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  return { cnpj: (r.rows[0]?.cnpj ?? "").trim(), name: words.length >= 2 ? `${words[0]} ${words[1]}` : words[0] ?? null };
+}
+function mentionsOwn(memo: string, own: OwnIdentity): boolean {
+  const t = normalize(memo);
+  const flat = t.replace(/[.\-/\s]/g, "");
+  if (own.cnpj && flat.includes(own.cnpj)) return true;
+  return Boolean(own.name && ` ${t.replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ")} `.includes(` ${own.name} `));
+}
+
 async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
   const { rows } = await ctx.tx.query<Movement>(
-    `SELECT t.id, t.posted_on::text, t.amount::text, t.memo, t.payee, c.code AS account_code, b.label
+    `SELECT t.id, t.posted_on::text, t.amount::text, t.memo, t.payee, c.code AS account_code, b.label, b.id AS bank_account_id, b.bank_code
        FROM bank_transaction t JOIN bank_account b ON b.id = t.bank_account_id JOIN chart_account c ON c.id = b.ledger_account_id
       WHERE t.entity_id = $1 AND t.posted_on >= $2
         AND NOT EXISTS (SELECT 1 FROM bank_match m JOIN journal_entry e ON e.id = m.entry_id
@@ -479,7 +533,10 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       "INSERT INTO bank_match (id, tenant_id, entity_id, transaction_id, entry_id, method, reference) VALUES ($1, current_tenant(), $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
       [newId(), ctx.entityId, txId, entryId, method, reference],
     );
+  const own = await ownIdentity(ctx);
+  const done = new Set<string>();
   for (const m of rows) {
+    if (done.has(m.id)) continue;
     if (ctx.locked.has(compOf(m.posted_on))) { s.locked++; continue; }
     const out = Dec.of(m.amount).cmp("0") < 0;
     const value = Dec.of(m.amount).mul(out ? "-1" : "1").toFixed(2);
@@ -487,6 +544,34 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
     const base = { entityId: ctx.entityId, date: m.posted_on, origin: "BANCO" as const, originRef: `bank_transaction:${m.id}`, idempotencyKey: `banco:${m.id}`,
       evidence: [{ kind: "bank_transaction", id: m.id }] };
     const notes: { why: string; hypotheses: string[] }[] = [];
+
+    // Transferência entre contas da própria empresa: o histórico cita a empresa e a outra conta tem o movimento oposto.
+    if (mentionsOwn(memo, own)) {
+      const cp = await ctx.tx.query<{ id: string; posted_on: string; account_code: string; label: string }>(
+        `SELECT t.id, t.posted_on::text, c.code AS account_code, b.label
+           FROM bank_transaction t JOIN bank_account b ON b.id = t.bank_account_id JOIN chart_account c ON c.id = b.ledger_account_id
+          WHERE t.entity_id = $1 AND t.bank_account_id <> $2 AND t.amount = $3 AND t.posted_on BETWEEN $4 AND $5
+            AND NOT EXISTS (SELECT 1 FROM bank_match x JOIN journal_entry e ON e.id = x.entry_id
+                             WHERE x.transaction_id = t.id AND NOT EXISTS (SELECT 1 FROM journal_entry y WHERE y.reverses_id = e.id))
+          ORDER BY abs(t.posted_on - $6::date), t.id`,
+        [ctx.entityId, m.bank_account_id, Dec.of(m.amount).mul("-1").toFixed(2), addDays(m.posted_on, -3), addDays(m.posted_on, 3), m.posted_on],
+      );
+      const other = cp.rows.find((x) => !done.has(x.id));
+      if (other) {
+        const [from, to] = out ? [m, other] : [other, m];
+        const date = [m.posted_on, other.posted_on].sort()[0]!;
+        const r = await post(ctx, s, {
+          entityId: ctx.entityId, date, origin: "BANCO", originRef: `bank_transaction:${m.id}`, idempotencyKey: `transferencia:${[m.id, other.id].sort().join(":")}`,
+          history: `Transferência entre contas: ${from.label} → ${to.label} — ${memo}`, confidence: "1",
+          evidence: [{ kind: "bank_transaction", id: m.id }, { kind: "bank_transaction", id: other.id }],
+          lines: [{ account: to.account_code, debit: value }, { account: from.account_code, credit: value }],
+        });
+        if (r) { await link(m.id, r.id, "TRANSFERENCIA", other.id); await link(other.id, r.id, "TRANSFERENCIA", m.id); }
+        done.add(other.id);
+        continue;
+      }
+      notes.push({ why: "Transferência entre contas da própria empresa: falta o extrato (ou o movimento) da outra conta", hypotheses: [] });
+    }
 
     if (out) {
       const f = await federalPaymentLines(ctx, m);
@@ -540,6 +625,19 @@ async function bankMovements(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         notes.push({ why: `Regra "${rule.pattern}" aponta para ${rule.account_code}: ${err.message}`, hypotheses: [] });
       }
     } else if (rule) notes.push(rule);
+    const kind = standardKind(memo, out);
+    if (kind) {
+      if (!ctx.bankStdRule) notes.push({ why: `${STD_LABEL[kind]} do banco: aprove as regras padrão de extrato`, hypotheses: [] });
+      else {
+        const acc = kind === "RENDIMENTO" ? ctx.acc("RECEITA_APLICACOES") : kind === "TARIFA" ? ctx.acc("TARIFAS") : await applicationAccount(ctx, m);
+        const lines: EntryLine[] = out
+          ? [{ account: acc, debit: value }, { account: m.account_code, credit: value }]
+          : [{ account: m.account_code, debit: value }, { account: acc, credit: value }];
+        const r = await post(ctx, s, { ...base, history: `${STD_LABEL[kind]} — ${memo}`, rule: `${BANK_STANDARD_RULE}:${kind}`, confidence: "1", lines });
+        if (r) await link(m.id, r.id, "REGRA", BANK_STANDARD_RULE);
+        continue;
+      }
+    }
     s.pending++;
     pending.push({
       ...m,
@@ -707,7 +805,7 @@ export async function classifySupplier(
 /** Aprovação de regra de contabilização (decisão de pessoa); em seguida contabiliza as empresas. */
 export async function approveAccountingRule(pool: Pool, tenantId: string, ruleSet: string, actor: Actor) {
   if (actor.kind !== "USER") throw new LedgerError("Só uma pessoa aprova regra de contabilização");
-  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
+  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE, BANK_STANDARD_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
   await withTenant(pool, tenantId, async (tx) => {
     const ins = await tx.query(
       "INSERT INTO accounting_rule_approval (id, tenant_id, rule_set, approved_by) VALUES ($1, current_tenant(), $2, $3) ON CONFLICT DO NOTHING",

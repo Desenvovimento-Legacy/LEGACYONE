@@ -69,13 +69,13 @@ describe("cadastro de parceiros, razão, DRE e contas em aberto", () => {
       ["2", "20260825", "-1100,00", `SISPAG FORNECEDOR ${DELTA}`], // CNPJ no histórico
       ["3", "20260915", "-750,00", "PIX ENVIADO UNIMED BH"], // 300 + 450 agrupados
       ["4", "20260916", "-999,00", "PIX ENVIADO UNIMED BH"], // não fecha: pendência com hipóteses
-      ["5", "20260825", "5000,00", "PIX RECEBIDO SAFE ON"], // duas notas de 5.000 do mesmo cliente em aberto: não escolhe sozinho
+      ["5", "20260825", "5000,00", "PIX RECEBIDO SAFE ON"], // duas notas de 5.000 do mesmo cliente em aberto: quita a mais antiga (FIFO)
     ]), "latin1") }, LUAN);
     await runAutoPosting(appPool, t, entityId);
 
     await withTenant(appPool, t, async (tx) => {
       const m = await tx.query<{ method: string; n: number }>("SELECT method, count(*)::int AS n FROM bank_match GROUP BY method ORDER BY method");
-      expect(m.rows).toEqual([{ method: "NFSE_TOMADA", n: 4 }]);
+      expect(m.rows).toEqual([{ method: "NFSE", n: 1 }, { method: "NFSE_TOMADA", n: 4 }]);
       // apelido aprendido no pagamento conciliado pelo nome
       const a = await tx.query("SELECT a.pattern, a.source FROM partner_alias a JOIN partner p ON p.id = a.partner_id WHERE p.doc = $1", [DELTA]);
       expect(a.rows).toEqual([{ pattern: "DELTA SERV MANUT", source: "APRENDIDO" }]);
@@ -85,7 +85,6 @@ describe("cadastro de parceiros, razão, DRE e contas em aberto", () => {
     });
     const pend = await pendingMovements(appPool, t, entityId);
     expect(pend.map((p) => [p.amount, p.reason])).toEqual([
-      ["5000.00", "2 NFS-e emitidas em aberto com o mesmo valor"],
       ["-999.00", expect.stringMatching(/^Pagamento a UNIMED .*sem NFS-e em aberto$/)],
     ]);
 
@@ -99,7 +98,7 @@ describe("cadastro de parceiros, razão, DRE e contas em aberto", () => {
       expect(open.items.map((i) => [i.partnerDoc, i.balance])).toEqual([[COMPU, "-1000.00"]]);
       expect(open.total).toBe("-1000.00");
       const cli = await openItems(tx, entityId, "1.1.2.01", "2026-09-30");
-      expect(cli.items).toEqual([expect.objectContaining({ partnerDoc: CLIENTE, partner: "SAFE ON SERVICOS LTDA", balance: "10000.00", lines: 2 })]);
+      expect(cli.items).toEqual([expect.objectContaining({ partnerDoc: CLIENTE, partner: "SAFE ON SERVICOS LTDA", balance: "5000.00", lines: 3 })]);
 
       // Razão de Fornecedores filtrado pela DELTA: crédito das notas, débito dos pagamentos, saldo zerado
       const rz = await ledgerDetail(tx, entityId, "2.1.1.01", "2026-07-01", "2026-09-30", DELTA);
@@ -132,7 +131,7 @@ describe("cadastro de parceiros, razão, DRE e contas em aberto", () => {
       expect(delta.account).toEqual({ code: "4.3.1.06", source: "TABELA" });
       expect(reg.suppliers.find((p) => p.doc === UNIMED)).toMatchObject({ status: "NO_MES", recurring: false });
       expect(reg.suppliers.find((p) => p.doc === COMPU)).toMatchObject({ status: "EVENTUAL", open: "-1000.00" });
-      expect(reg.customers).toEqual([expect.objectContaining({ doc: CLIENTE, status: "ESPERADA", open: "10000.00" })]);
+      expect(reg.customers).toEqual([expect.objectContaining({ doc: CLIENTE, status: "ESPERADA", open: "5000.00" })]);
       expect(reg.expectedMissing.map((e) => e.doc).sort()).toEqual([CLIENTE, DELTA].sort());
       const ev = await tx.query("SELECT payload FROM outbox WHERE type = 'PARTNERS_REGISTERED'");
       expect(ev.rows[0].payload).toMatchObject({ suppliers: 3, customers: 1 });

@@ -143,8 +143,11 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
     // 6. Extratos de todas as contas cobrindo o mês
     const banks = await tx.query<{ id: string; label: string; code: string | null; first: string | null; last: string | null; mov: string; ledger: string | null }>(
       `SELECT b.id, b.label, c.code,
-              (SELECT min(f.period_start)::text FROM bank_statement_file f WHERE f.bank_account_id = b.id) AS first,
-              (SELECT max(f.period_end)::text FROM bank_statement_file f WHERE f.bank_account_id = b.id) AS last,
+              -- cobertura: período declarado no arquivo ou datas dos movimentos (alguns bancos mandam DTSTART = data da exportação)
+              (SELECT least((SELECT min(f.period_start) FROM bank_statement_file f WHERE f.bank_account_id = b.id),
+                            (SELECT min(t.posted_on) FROM bank_transaction t WHERE t.bank_account_id = b.id))::text) AS first,
+              (SELECT greatest((SELECT max(f.period_end) FROM bank_statement_file f WHERE f.bank_account_id = b.id),
+                               (SELECT max(t.posted_on) FROM bank_transaction t WHERE t.bank_account_id = b.id))::text) AS last,
               (SELECT coalesce(sum(t.amount), 0)::text FROM bank_transaction t WHERE t.bank_account_id = b.id AND t.posted_on BETWEEN $2 AND $3) AS mov,
               (SELECT coalesce(sum(l.debit - l.credit), 0)::text FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id
                 WHERE l.account_id = b.ledger_account_id AND e.entry_date BETWEEN $2 AND $3) AS ledger

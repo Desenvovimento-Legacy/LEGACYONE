@@ -688,7 +688,13 @@ function loadContabil(id, mes) {
           '<label style="font-size:11px;display:flex;gap:4px;align-items:center"><input type="checkbox" id="cl-all-' + i + '"> vale para todas as empresas</label>' +
           '<button class="ghost" data-act="classif" data-i="' + i + '" data-id="' + p.id + '" style="margin-top:4px">Lançar</button></td></tr>';
       }).join("");
-      h += '<h3 style="font-size:13px;margin:12px 0 6px">Movimentos para classificar (' + r.pending.length + ')</h3><div class="scroll"><table><thead><tr><th>Data</th><th>Histórico do banco</th><th class="num">Valor</th><th class="only-confirmar">Classificação</th></tr></thead><tbody>' + pend + '</tbody></table></div>';
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">Movimentos para classificar (' + (r.pendingTotal || r.pending.length) + (r.pendingTotal > r.pending.length ? ', mostrando ' + r.pending.length : '') + ')</h3><div class="scroll"><table><thead><tr><th>Data</th><th>Histórico do banco</th><th class="num">Valor</th><th class="only-confirmar">Classificação</th></tr></thead><tbody>' + pend + '</tbody></table></div>';
+    }
+    var br = r.bankRule || { approved: null, pending: 0 };
+    if (!br.approved && br.pending) {
+      h += '<h3 style="font-size:13px;margin:12px 0 6px">Movimentos típicos do banco (proposta)</h3>' +
+        '<div class="empty">' + br.pending + ' movimento(s) reconhecido(s) pelo histórico do banco esperando a regra: aplicação e resgate automáticos (conta de aplicação daquele banco no plano), rendimento (receita de aplicações) e tarifa (tarifa bancária).</div>' +
+        '<div class="only-aprovar" style="margin-top:6px"><button class="warn" data-act="br-aprovar">Aprovar e contabilizar</button></div>';
     }
     var rr = r.revenueRule || { approved: null, notes: 0 };
     if (!rr.approved && rr.notes) {
@@ -740,6 +746,12 @@ function loadContabil(id, mes) {
         }).catch(function (e) { toast(e.message); });
       };
       fr.readAsDataURL(f);
+    });
+    var bra = box.querySelector("[data-act=br-aprovar]");
+    if (bra) bra.addEventListener("click", function () {
+      if (!window.confirm("Aprovar as regras padrão de extrato (aplicação, resgate, rendimento e tarifa)? Vale para todas as empresas e fica na auditoria em seu nome.")) return;
+      bra.disabled = true;
+      post("/api/contabil/extrato-padrao/aprovar", "aprovar", {}).then(function (x) { toast("Regras aprovadas. " + x.posted + " lançamento(s) feitos."); return loadContabil(id); }).catch(function (e) { toast(e.message); bra.disabled = false; });
     });
     var ra = box.querySelector("[data-act=rr-aprovar]");
     if (ra) ra.addEventListener("click", function () {

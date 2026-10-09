@@ -18,7 +18,7 @@ import { balanceSheet, incomeStatement, ledgerDetail, openItems } from "../modul
 import { addAlias, PartnerError, partnerRegistry, syncPartners } from "../modules/ledger/partners.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
 import {
-  approveAccountingRule, approveTakenServicesRule, classifyMovement, classifySupplier, pendingMovements, pendingTaken, REVENUE_RETENTIONS_RULE, revenueRetentionsPending,
+  approveAccountingRule, approveTakenServicesRule, BANK_STANDARD_RULE, classifyMovement, classifySupplier, pendingMovements, pendingTaken, REVENUE_RETENTIONS_RULE, revenueRetentionsPending,
   ruleStatus, runAutoPosting, takenRuleStatus,
 } from "../modules/ledger/auto-posting.js";
 import { closeMonth, closingStatus, reopenMonth } from "../modules/ledger/closing.js";
@@ -658,7 +658,12 @@ export function createWebServer(deps: WebDeps) {
             trial,
           };
         });
-        const pending = data.hasChart ? (await pendingMovements(deps.appPool, deps.tenantId, id)).slice(0, 100) : [];
+        const allPending = data.hasChart ? await pendingMovements(deps.appPool, deps.tenantId, id) : [];
+        const pending = allPending.slice(0, 100);
+        const bankRule = {
+          approved: await withTenant(deps.appPool, deps.tenantId, (tx) => ruleStatus(tx, BANK_STANDARD_RULE)),
+          pending: allPending.filter((p) => p.reason.includes("regras padrão de extrato")).length,
+        };
         const taken = data.hasChart ? await pendingTaken(deps.appPool, deps.tenantId, id) : [];
         const bySupplier = new Map<string, { doc: string | null; supplier: string | null; notes: number; total: number; reason: string; codes: string[] }>();
         for (const t of taken) {
@@ -678,6 +683,8 @@ export function createWebServer(deps: WebDeps) {
         json(res, 200, {
           ...data, pending,
           revenueRule,
+          bankRule,
+          pendingTotal: allPending.length,
           roles: { clientes: cfg.roles.CLIENTES ?? null, fornecedores: cfg.roles.FORNECEDORES ?? null },
           chartTemplate: cfg.template,
           taken: { approved: takenRule, pending: taken.length, suppliers: [...bySupplier.values()].sort((a, b) => b.total - a.total).slice(0, 60),
@@ -749,11 +756,11 @@ export function createWebServer(deps: WebDeps) {
         }
         return;
       }
-      // POST /api/contabil/receita-retencoes/aprovar — regra de receita com retenção sofrida.
-      if (req.method === "POST" && url.pathname === "/api/contabil/receita-retencoes/aprovar") {
+      // POST /api/contabil/receita-retencoes/aprovar | /api/contabil/extrato-padrao/aprovar — regras de contabilização (Responsável técnico).
+      if (req.method === "POST" && (url.pathname === "/api/contabil/receita-retencoes/aprovar" || url.pathname === "/api/contabil/extrato-padrao/aprovar")) {
         if (guard("aprovar")) return;
         try {
-          json(res, 200, await approveAccountingRule(deps.appPool, deps.tenantId, REVENUE_RETENTIONS_RULE, actor));
+          json(res, 200, await approveAccountingRule(deps.appPool, deps.tenantId, url.pathname.includes("extrato") ? BANK_STANDARD_RULE : REVENUE_RETENTIONS_RULE, actor));
         } catch (err) {
           if (err instanceof LedgerError) json(res, 409, { erro: err.message });
           else throw err;

@@ -6,7 +6,7 @@ import type { Actor } from "../../shared/actor.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
 import { normalize } from "../../shared/text.js";
-import { ROLES, SERVICE_KEYS, type ChartConfig, type DreGroup, type Role, type ServiceKey } from "./chart-config.js";
+import { resolveConfig, type ChartConfig } from "./chart-config.js";
 import { LedgerError } from "./ledger.js";
 import type { Nature } from "./standard-chart.js";
 
@@ -24,7 +24,8 @@ import type { Nature } from "./standard-chart.js";
 
 const PRODUCER: Producer = { kind: "engine", name: "ledger", version: "0.1.0" };
 
-export interface TemplateAccount { code: string; shortCode: string | null; name: string; analytic: boolean; nature: Nature; parentCode: string | null }
+import type { TemplateAccount } from "./chart-config.js";
+export type { TemplateAccount };
 
 /** Lê o CSV do relatório do Domínio (Excel → CSV, separador vírgula ou ponto e vírgula). */
 export function parseDominioChart(text: string): TemplateAccount[] {
@@ -69,97 +70,6 @@ export function natureOf(code: string): Nature {
   if (code === "4.1" || code.startsWith("4.1.")) return "CUSTO";
   if (code === "4" || code.startsWith("4.")) return "DESPESA";
   return "APURACAO";
-}
-
-// ------------------------------------------------------------------ localização das contas por nome
-
-interface Spec { name: string; analytic?: boolean; under?: string }
-const ROLE_SPECS: Record<Role, Spec> = {
-  CLIENTES: { name: "CLIENTES", analytic: true, under: "ATIVO CIRCULANTE" },
-  FORNECEDORES: { name: "FORNECEDORES", analytic: true, under: "PASSIVO CIRCULANTE" },
-  RECEITA_SERVICOS: { name: "SERVICOS PRESTADOS", analytic: true },
-  SIMPLES_DEDUCAO: { name: "(-) SIMPLES NACIONAL", analytic: true },
-  SIMPLES_RECOLHER: { name: "SIMPLES NACIONAL A RECOLHER", analytic: true },
-  IRRF_RET_RECOLHER: { name: "IRRF A RECOLHER", analytic: true },
-  CSRF_RET_RECOLHER: { name: "CRF A RECOLHER", analytic: true },
-  ISS_RET_RECOLHER: { name: "ISS RETIDO A RECOLHER", analytic: true },
-  INSS_RET_RECOLHER: { name: "INSS RETIDO A RECOLHER", analytic: true },
-  IRRF_RECUPERAR: { name: "IRRF A RECUPERAR", analytic: true },
-  CSRF_RECUPERAR: { name: "TRIBUTOS FEDERAIS A COMPENSAR (DCTF WEB)", analytic: true },
-  INSS_RECUPERAR: { name: "INSS A COMPENSAR", analytic: true },
-  ISS_RETIDO_DEDUCAO: { name: "(-) ISS", analytic: true },
-  BANCOS: { name: "BANCOS CONTA MOVIMENTO", analytic: false },
-  IRRF_FOLHA_RECOLHER: { name: "IRRF A RECOLHER", analytic: true },
-  INSS_RECOLHER: { name: "INSS A RECOLHER", analytic: true, under: "OBRIGACOES SOCIAIS" },
-  JUROS_MORA: { name: "JUROS DE MORA", analytic: true, under: "DESPESAS FINANCEIRAS" },
-  MULTA_MORA: { name: "MULTAS DE MORA", analytic: true, under: "DESPESAS FINANCEIRAS" },
-};
-const PJ = "SERVICOS TOMADOS DE PJ";
-const SERVICE_SPECS: Record<ServiceKey, Spec> = {
-  INFORMATICA: { name: "SERVS. MANUTENCAO DE INFORMATICA", under: PJ },
-  CONSULTORIA: { name: "SERVS. DE ASSESSORIA E CONSULTORIA", under: PJ },
-  LOCACAO: { name: "ALUGUEIS DE MAQUINAS E EQUIPAMENTOS", under: "DESPESAS ADMINISTRATIVAS" },
-  ENGENHARIA: { name: "SERVS. ENGENHARIA", under: PJ },
-  LIMPEZA: { name: "SERVICOS DE LIMPEZA E CONSERVACAO", under: PJ },
-  VIGILANCIA: { name: "SERVS. SISTEMAS E MONITORAMENTO", under: PJ },
-  REPROGRAFIA: { name: "SERVS. XEROX, PLASTIFICACAO, ENCADERNACAO", under: PJ },
-  MANUTENCAO: { name: "SERVS. DE MANUTENCAO E REPARO", under: PJ },
-  BANCARIOS: { name: "TARIFA BANCARIA", under: "DESPESAS FINANCEIRAS" },
-  TRANSPORTE: { name: "SERVS. DE TRANSPORTE", under: PJ },
-  ADMINISTRATIVOS: { name: "SERVS. ADMINISTRATIVOS", under: PJ },
-  MAO_DE_OBRA: { name: "SERVICOS PRESTADOS POR TERCEIROS", under: PJ },
-  PUBLICIDADE: { name: "SERVS. DE PUBLICIDADE E PROPAGANDA", under: PJ },
-  ADVOCACIA: { name: "SERVS. ADVOCATICIOS", under: PJ },
-  AUDITORIA: { name: "SERVS. AUDITORIA", under: PJ },
-  CONTABILIDADE: { name: "SERVS. DE CONTABILIDADE", under: PJ },
-  PLANO_SAUDE: { name: "ASSISTENCIA MEDICA E SOCIAL", under: "DESPESAS ADMINISTRATIVAS" },
-  SAUDE: { name: "SERVS. MEDICINAIS", under: PJ },
-  TREINAMENTO: { name: "SERVS. ENSINO DE IDIOMAS/TREINAMENTO", under: PJ },
-  COURIER: { name: "SERVS. DE MOTOBOY", under: PJ },
-  ADUANEIRO: { name: "SERVS. DE ASSESSORIA ADUANEIRA", under: PJ },
-  CORRETAGEM: { name: "SERVS. AGENCIAMENTO E CORRETAGEM", under: PJ },
-  TERCEIROS: { name: "SERVICOS PRESTADOS POR TERCEIROS", under: PJ },
-};
-const DRE_SPECS: { key: string; label: string; include: string[]; exclude?: string[] }[] = [
-  { key: "rb", label: "Receita bruta", include: ["RECEITA BRUTA DE VENDAS E SERVICOS"] },
-  { key: "ded", label: "(−) Deduções da receita", include: ["(-) DEDUCOES DA RECEITA BRUTA"] },
-  { key: "cost", label: "(−) Custos", include: ["CUSTOS"] },
-  { key: "vendas", label: "(−) Despesas com vendas", include: ["DESPESAS COM VENDAS"] },
-  { key: "adm", label: "(−) Despesas administrativas", include: ["DESPESAS ADMINISTRATIVAS"], exclude: ["IMPOSTOS, TAXAS E CONTRIBUICOES", "DESPESAS FINANCEIRAS"] },
-  { key: "trib", label: "(−) Despesas tributárias", include: ["IMPOSTOS, TAXAS E CONTRIBUICOES"] },
-  { key: "fin", label: "(+/−) Resultado financeiro", include: ["RECEITAS FINANCEIRAS", "DESPESAS FINANCEIRAS"] },
-  { key: "outras", label: "(+) Outras receitas operacionais", include: ["RECUPERACAO DE DESPESAS", "OUTRAS RECEITAS OPERACIONAIS"] },
-  { key: "naoop", label: "(+/−) Resultado não operacional", include: ["RECEITAS NAO OPERACIONAIS", "DESPESAS NAO OPERACIONAIS"], exclude: ["PROVISAO DE IRPJ E CSLL"] },
-  { key: "ircs", label: "(−) IRPJ e CSLL", include: ["PROVISAO DE IRPJ E CSLL"] },
-];
-
-/** Localiza as contas pelo nome. Devolve a configuração e o que não foi achado (ou achado em dobro). */
-export function resolveConfig(accounts: TemplateAccount[], template: string): { config: ChartConfig; unresolved: string[] } {
-  const byCode = new Map(accounts.map((a) => [a.code, a]));
-  const ancestors = (a: TemplateAccount): string[] => {
-    const out: string[] = [];
-    let p = a.parentCode;
-    while (p) { const x = byCode.get(p); if (!x) break; out.push(normalize(x.name)); p = x.parentCode; }
-    return out;
-  };
-  const unresolved: string[] = [];
-  const find = (label: string, s: Spec): string | null => {
-    const hits = accounts.filter((a) => normalize(a.name) === normalize(s.name) && (s.analytic === undefined || a.analytic === s.analytic) && (!s.under || ancestors(a).includes(normalize(s.under))));
-    if (hits.length === 1) return hits[0]!.code;
-    unresolved.push(`${label}: "${s.name}"${s.under ? ` em "${s.under}"` : ""} ${hits.length ? `aparece ${hits.length} vezes` : "não encontrada"}`);
-    return null;
-  };
-  const roles: ChartConfig["roles"] = {};
-  for (const r of ROLES) { const c = find(r, ROLE_SPECS[r]); if (c) roles[r] = c; }
-  const services: ChartConfig["services"] = {};
-  for (const k of SERVICE_KEYS) { const c = find(`serviço ${k}`, { analytic: true, ...SERVICE_SPECS[k] }); if (c) services[k] = c; }
-  const dre: DreGroup[] = [];
-  for (const g of DRE_SPECS) {
-    const inc = g.include.map((n) => find(`DRE ${g.key}`, { name: n, analytic: false })).filter((x): x is string => Boolean(x));
-    const exc = (g.exclude ?? []).map((n) => find(`DRE ${g.key} (exceto)`, { name: n, analytic: false })).filter((x): x is string => Boolean(x));
-    if (inc.length) dre.push({ key: g.key, label: g.label, include: inc, ...(exc.length ? { exclude: exc } : {}) });
-  }
-  return { config: { template, roles, services, dre }, unresolved };
 }
 
 // ------------------------------------------------------------------ importação
