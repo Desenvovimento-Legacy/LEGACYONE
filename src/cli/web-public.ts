@@ -11,6 +11,11 @@ import { isMain } from "../shared/is-main.js";
  * O endereço muda a cada vez que este comando é iniciado: convites gerados
  * antes deixam de abrir. Se só o servidor da tela fechar (atualização do
  * sistema), ele é reaberto sozinho e o endereço continua o mesmo.
+ *
+ * Endereço fixo: com IARIS_TUNNEL (nome do túnel nomeado da Cloudflare) e
+ * IARIS_PUBLIC_HOST (ex.: iaris.grouplegacy.com.br) no .env, usa o túnel
+ * nomeado e o endereço não muda mais. A credencial do túnel fica no perfil do
+ * usuário do Windows (pasta .cloudflared), fora do repositório.
  * Uso: pnpm web:publico
  */
 
@@ -36,14 +41,22 @@ if (isMain(import.meta.url)) {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const tunnel = spawn(cloudflaredPath(), ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`], { stdio: ["ignore", "pipe", "pipe"] });
+  const named = process.env.IARIS_TUNNEL;
+  const fixedHost = process.env.IARIS_PUBLIC_HOST;
+  if (named && !fixedHost) throw new Error("IARIS_TUNNEL definido sem IARIS_PUBLIC_HOST");
+  const args = named
+    ? ["tunnel", "--no-autoupdate", "run", "--url", `http://127.0.0.1:${port}`, named]
+    : ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`];
+  const tunnel = spawn(cloudflaredPath(), args, { stdio: ["ignore", "pipe", "pipe"] });
   children.push(tunnel);
   let started = false;
   const onOutput = (chunk: Buffer) => {
-    const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(chunk.toString());
-    if (!m || started) return;
+    const text = chunk.toString();
+    const origin = named
+      ? /Registered tunnel connection/.test(text) ? `https://${fixedHost}` : null
+      : /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(text)?.[0] ?? null;
+    if (!origin || started) return;
     started = true;
-    const origin = m[0];
     try {
       writeFileSync(join(process.cwd(), "..", "endereco-publico.txt"), `${origin}\r\n`);
     } catch {
