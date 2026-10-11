@@ -62,7 +62,7 @@ export const PROCESSES: ProcessInfo[] = [
   { id: "transmissao", name: "Transmissão", status: "PLANEJADO", phase: "Fase 11", agents: ["transmission"], summary: "Assinatura, envio e recibo, sempre com sua aprovação." },
   { id: "societario", name: "Societário e contratos", status: "PLANEJADO", phase: "—", agents: ["corporate", "contracts"], summary: "Abertura, alteração, contratos e assinatura eletrônica." },
   { id: "regularizacao", name: "Regularização", status: "PLANEJADO", phase: "Fase 11", agents: ["regularization"], summary: "Parcelamentos, certidões, PER/DCOMP e intimações." },
-  { id: "relacionamento", name: "Relacionamento", status: "PLANEJADO", phase: "Fase 11", agents: ["relationship"], summary: "Um pedido consolidado ao cliente; entrega do mês no portal." },
+  { id: "relacionamento", name: "Relacionamento", status: "EM_CONSTRUCAO", phase: "Fase 11", agents: ["relationship"], summary: "Um pedido consolidado ao cliente, montado sozinho (extratos, comprovantes, notas esperadas, esclarecimentos); envio por e-mail e entrega do mês no portal a seguir." },
   { id: "revisao", name: "Revisão independente", status: "PLANEJADO", phase: "Fase 12", agents: ["review"], summary: "Cruza tudo antes de qualquer entrega." },
 ];
 
@@ -162,5 +162,5 @@ export const DEPARTMENTS: DepartmentInfo[] = [
 export const SHARED_AGENTS: AgentInfo[] = [
   { id: "orchestrator", name: "Orquestrador", status: "OPERANDO", summary: "Liga os agentes por evento: quando um termina, o próximo começa sozinho.", capabilities: [cap("Vínculos por evento", true), cap("Cadeia de causa visível", true), cap("Refazer com limite e escalar", true)] },
   { id: "case-engine", name: "Cases e pendências", status: "OPERANDO", summary: "Toda operação é um Case; o que falta vira pendência.", capabilities: [cap("Cases", true), cap("Pendências", true), cap("Fila humana", true)] },
-  { id: "relationship", name: "Relacionamento", status: "PLANEJADO", summary: "Um pedido consolidado ao cliente.", capabilities: [cap("Pedido consolidado"), cap("Portal do cliente"), cap("WhatsApp e e-mail")] },
+  { id: "relationship", name: "Relacionamento", status: "OPERANDO", summary: "Um pedido consolidado ao cliente, montado sozinho.", capabilities: [cap("Pedido consolidado", true), cap("Itens resolvidos sozinhos", true), cap("Texto pronto para WhatsApp", true), cap("Envio por e-mail"), cap("Portal do cliente")] },
 ];

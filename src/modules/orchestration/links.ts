@@ -9,6 +9,7 @@ import { refreshGuides } from "../tax/guides.js";
 import { runAutoPosting } from "../ledger/auto-posting.js";
 import { refreshPowerRequirements } from "../onboarding/powers.js";
 import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
+import { prepareClientRequest } from "../relationship/client-request.js";
 
 /**
  * Vínculos entre agentes: "quando acontecer X, o agente Y faz Z".
@@ -126,6 +127,17 @@ export const LINKS: Link<LinkDeps>[] = [
     run: async ({ pool, tenantId, entityId }) => ({ ...(await refreshPowerRequirements(pool, tenantId, entityId!)) }),
   },
   {
+    id: "relacionamento-pedido",
+    on: ["ACCOUNTING_BATCH_POSTED", "BANK_STATEMENT_RECEIVED", "NFSE_BATCH_RECEIVED", "PENDING_ITEM_CREATED", "OPENING_BALANCES_IMPORTED", "CHART_OF_ACCOUNTS_DEFINED", "ACCOUNTING_CLOSING_COMPLETED", "ACCOUNTING_RULES_APPROVED"],
+    agent: "relationship",
+    does: "Junta num pedido só ao cliente o que falta: extratos, comprovantes, notas esperadas e esclarecimentos",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId, deps }) => {
+      const r = await prepareClientRequest(pool, tenantId, entityId!, today(deps));
+      return { version: r.version, changed: r.changed, items: r.items };
+    },
+  },
+  {
     id: "certificado-notas",
     on: ["DIGITAL_CERTIFICATE_REGISTERED"],
     agent: "docs",
@@ -153,4 +165,9 @@ export const EVENT_LABEL: Record<string, string> = {
   BANK_STATEMENT_RECEIVED: "Extrato bancário recebido",
   ENTITY_PROFILE_CREATED: "Perfil da empresa montado",
   POWER_OF_ATTORNEY_REGISTERED: "Procuração estadual ou municipal registrada",
+  ACCOUNTING_BATCH_POSTED: "Lançamentos automáticos feitos",
+  PENDING_ITEM_CREATED: "Pendência aberta",
+  OPENING_BALANCES_IMPORTED: "Saldos de abertura lançados",
+  ACCOUNTING_CLOSING_COMPLETED: "Competência contábil fechada",
+  ACCOUNTING_RULES_APPROVED: "Regra de contabilização aprovada",
 };

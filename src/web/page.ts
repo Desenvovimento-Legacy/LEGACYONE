@@ -426,6 +426,7 @@ function viewEmpresa(id) {
         '<section class="card" id="ctb"><h2>Contabilidade</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
+        '<section class="card" id="pedido"><h2>Pedido ao cliente</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Perfil</h2><table>' + facts + '</table></section>' +
         '<section class="card"><h2>Mapa de acessos</h2><table>' + acc + '</table>' +
           '<details class="only-confirmar" style="margin-top:10px"><summary style="cursor:pointer;font-size:13px">Registrar acesso estadual ou municipal</summary>' +
@@ -442,6 +443,7 @@ function viewEmpresa(id) {
     loadGuias(id);
     loadRetencoes(id);
     loadContabil(id);
+    loadPedido(id);
     var bpoa = document.querySelector("[data-act=poa]");
     if (bpoa) bpoa.addEventListener("click", function () {
       var ini = $("poa-ini").value; if (!ini) { toast("Informe desde quando a procuração vale."); return; }
@@ -701,6 +703,37 @@ function renderPartners(id, r, out, x) {
       showCtb(id, r, "raz", { conta: a.getAttribute("data-raz"), nome: "", parceiro: a.getAttribute("data-parc"), parceiroNome: a.getAttribute("data-pnome"), de: r.chartFrom, ate: monthEnd(r.month) });
     });
   });
+}
+
+var REQ_ST = { PREPARADO: "preparado", ENVIADO: "enviado", RESPONDIDO: "respondido", DISPENSADO: "dispensado" };
+function loadPedido(id) {
+  var box = $("pedido"); if (!box) return;
+  getJson("/api/empresa/" + id + "/pedido").then(function (x) {
+    var r = x.request;
+    if (!r) { box.innerHTML = '<h2>Pedido ao cliente</h2><div class="empty">Nada a pedir ao cliente por enquanto.</div>'; return; }
+    var sent = x.lastSent;
+    var st = x.history[0];
+    var resolved = x.resolvedSinceSent.length
+      ? '<div class="empty"><span class="ok">' + x.resolvedSinceSent.length + ' item(ns) já resolvido(s)</span> desde o envio de ' + dt(sent.at) + ': ' + x.resolvedSinceSent.slice(0, 4).map(function (i) { return esc(i.text); }).join("; ") + (x.resolvedSinceSent.length > 4 ? '…' : '') + '</div>' : '';
+    box.innerHTML = '<h2>Pedido ao cliente</h2>' +
+      '<div class="mut" style="font-size:12px;margin-bottom:6px">' + r.items.length + ' item(ns) · versão ' + r.version + ' de ' + dt(r.created_at) + (sent ? ' · último envio ' + dt(sent.at) + ' (' + esc(String(sent.channel || "").toLowerCase()) + ', versão ' + sent.version + ')' : ' · ainda não enviado') + '</div>' +
+      resolved +
+      '<textarea id="ped-txt" readonly style="width:100%;min-height:180px;font-size:12px;font-family:inherit">' + esc(r.message) + '</textarea>' +
+      '<div class="form-row only-confirmar" style="margin-top:6px"><button class="ghost" id="ped-copy">Copiar texto</button>' +
+      (r.items.length ? '<select id="ped-canal"><option value="WHATSAPP">WhatsApp</option><option value="EMAIL">E-mail</option><option value="TELEFONE">Telefone</option><option value="OUTRO">Outro</option></select><button class="warn" id="ped-sent">Marquei como enviado</button>' : '') + '</div>' +
+      '<div class="empty">Montado sozinho pelo agente de Relacionamento com o que falta de todos os departamentos; quando o documento chega, o item sai do pedido. ' + (st && st.status !== "PREPARADO" ? 'Situação: ' + esc(REQ_ST[st.status] || st.status) + '.' : '') + '</div>';
+    $("ped-copy").addEventListener("click", function () {
+      var v = $("ped-txt"); v.focus(); v.select();
+      var done = function () { toast("Texto copiado."); };
+      if (navigator.clipboard) navigator.clipboard.writeText(v.value).then(done).catch(function () { document.execCommand("copy"); done(); });
+      else { document.execCommand("copy"); done(); }
+    });
+    var sb = $("ped-sent");
+    if (sb) sb.addEventListener("click", function () {
+      sb.disabled = true;
+      post("/api/pedido/" + r.id + "/enviado", "confirmar", { canal: $("ped-canal").value }).then(function () { toast("Envio registrado."); loadPedido(id); }).catch(function (e) { toast(e.message); sb.disabled = false; });
+    });
+  }).catch(function (e) { box.innerHTML = '<h2>Pedido ao cliente</h2><div class="empty bad">' + esc(e.message) + '</div>'; });
 }
 
 function loadContabil(id, mes) {

@@ -33,7 +33,7 @@ describe("orquestrador: vínculos entre agentes por evento", () => {
     expect(r1.errors).toBe(0);
     await withTenant(appPool, t, async (tx) => {
       const reac = await tx.query<{ link_id: string; status: string }>("SELECT link_id, status FROM agent_reaction ORDER BY link_id");
-      expect(reac.rows.map((r) => r.link_id)).toEqual(["contabil-automatico", "declaracao-conferencia", "declaracao-simples", "procuracoes-locais", "receita-guias"]);
+      expect(reac.rows.map((r) => r.link_id)).toEqual(["contabil-automatico", "declaracao-conferencia", "declaracao-simples", "procuracoes-locais", "receita-guias", "relacionamento-pedido"]);
       const errs = await tx.query("SELECT link_id, error FROM agent_reaction WHERE status = 'ERRO'");
       expect(errs.rows).toEqual([]);
       const decl = await tx.query<{ event_id: string; correlation_id: string }>("SELECT event_id, correlation_id FROM outbox WHERE type = 'PGDAS_DECLARATION_READ'");
@@ -47,7 +47,7 @@ describe("orquestrador: vínculos entre agentes por evento", () => {
 
     const view = await withTenant(appPool, t, (tx) => linksData(tx));
     expect(view.links.find((l) => l.id === "declaracao-simples")).toMatchObject({ agentName: "Tributos", ok7d: 1 });
-    expect(view.recent[0]).toMatchObject({ status: "OK", event: "Declaração do PGDAS-D lida" });
+    expect(view.recent.find((x) => x.event === "Declaração do PGDAS-D lida")).toMatchObject({ status: "OK", event: "Declaração do PGDAS-D lida" });
   });
 
   it("eventos da mesma empresa viram uma reação; erro refaz até o limite e vai para a Fila humana", async () => {

@@ -335,6 +335,12 @@ export const EventContracts = {
   ACCOUNTING_RULES_APPROVED: {
     1: z.object({ rule_set: z.string(), approved_by: z.string() }),
   },
+  CLIENT_REQUEST_PREPARED: {
+    1: z.object({ entity_id: z.uuid(), request_id: z.uuid(), version: z.number().int(), items: z.number().int(), resolved: z.number().int() }),
+  },
+  CLIENT_REQUEST_SENT: {
+    1: z.object({ entity_id: z.uuid(), request_id: z.uuid(), version: z.number().int(), channel: z.string(), items: z.number().int() }),
+  },
   OPENING_BALANCES_IMPORTED: {
     1: z.object({ entity_id: z.uuid(), import_id: z.uuid(), entry_id: z.uuid(), period_end: z.string(), accounts: z.number().int(), total: z.string(), by_similarity: z.number().int() }),
   },

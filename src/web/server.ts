@@ -16,6 +16,7 @@ import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun 
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
 import { balanceSheet, incomeStatement, ledgerDetail, openItems } from "../modules/ledger/reports.js";
 import { importOpeningBalances, openingBalanceImports, previewOpeningBalances } from "../modules/ledger/opening-balances.js";
+import { ClientRequestError, clientRequestView, markRequestSent, prepareClientRequest } from "../modules/relationship/client-request.js";
 import { addAlias, PartnerError, partnerRegistry, syncPartners } from "../modules/ledger/partners.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
 import {
@@ -641,6 +642,27 @@ export function createWebServer(deps: WebDeps) {
           return;
         }
         return json(res, 404, { erro: "Relatório não encontrado" });
+      }
+      // GET /api/empresa/:id/pedido — pedido consolidado ao cliente (o agente atualiza antes de mostrar).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "pedido" && parts.length === 4) {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        await prepareClientRequest(deps.appPool, deps.tenantId, parts[2]!, today);
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => clientRequestView(tx, parts[2]!)));
+        return;
+      }
+      // POST /api/pedido/:id/enviado {canal} — pessoa registra que mandou o pedido ao cliente.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "pedido" && parts[3] === "enviado") {
+        if (guard("confirmar")) return;
+        const body = (await readJson(req, 1024)) as { canal?: string };
+        const canal = String(body.canal ?? "WHATSAPP").toUpperCase();
+        if (!["WHATSAPP", "EMAIL", "PORTAL", "TELEFONE", "OUTRO"].includes(canal)) return json(res, 400, { erro: "Canal inválido" });
+        try {
+          json(res, 200, await markRequestSent(deps.appPool, deps.tenantId, parts[2]!, canal as "WHATSAPP", actor));
+        } catch (err) {
+          if (err instanceof ClientRequestError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
       }
       // GET /api/empresa/:id/contabil[?mes=AAAA-MM] — plano, contas bancárias, balancete e pendentes (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "contabil") {
