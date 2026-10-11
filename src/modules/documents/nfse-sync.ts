@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { LOTE_SIZE, type AdnLote, type NfseDistribution } from "../../integrations/nfse/adn.js";
 import { nfseRole, summarizeNfse } from "../../integrations/nfse/nfse-parse.js";
+import { sameNote } from "./nfse-intake.js";
 import type { ClientCertificate } from "../../integrations/sefaz/dist-dfe.js";
 import { audit } from "../../platform/audit/audit.js";
 import { appendEvent, type Producer } from "../../platform/events/outbox.js";
@@ -66,6 +67,17 @@ async function storeLote(tx: PoolClient, entityId: string, cnpj: string, request
   for (const d of l.docs) {
     const s = summarizeNfse(d.xml);
     const role = nfseRole(s, cnpj);
+    // a mesma nota já veio por arquivo (upload/pasta): a cópia do ADN fica guardada, sem somar duas vezes
+    const same = role === "EVENTO" ? null : await sameNote(tx, entityId, { ...s, accessKey: d.accessKey ?? s.accessKey }, true);
+    if (same) {
+      await tx.query(
+        `INSERT INTO nfse_duplicate (id, tenant_id, entity_id, nfse_id, source, nsu, reason, xml, sha256)
+         VALUES ($1, current_tenant(), $2, $3, 'ADN', $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+        [newId(), entityId, same, d.nsu, "Nota já recebida por arquivo (mesma chave, ou mesmo prestador, número e dia)", d.xml,
+          createHash("sha256").update(d.xml, "utf8").digest()],
+      );
+      continue;
+    }
     const ins = await tx.query(
       `INSERT INTO nfse_document (id, tenant_id, entity_id, nsu, access_key, doc_type, event_type, role, number, issued_at, provider_doc, provider_name,
                                   taker_doc, taker_name, service_value, net_value, iss_value, iss_withheld, municipality, generated_at, xml, sha256)

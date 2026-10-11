@@ -9,6 +9,7 @@ import { appendEvent } from "../../platform/events/outbox.js";
 import type { Actor } from "../../shared/actor.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
+import { announceNfseIntake, bridgeNfseXml, type BridgeResult } from "./nfse-intake.js";
 
 /**
  * Agente Documentos — entrada de XML fiscal por upload na tela ou por pasta
@@ -92,6 +93,7 @@ export async function ingestFiles(
     );
     const byRoot = new Map<string, { id: string; cnpj: string; name: string }[]>();
     for (const e of ents.rows) byRoot.set(e.cnpj.slice(0, 8), [...(byRoot.get(e.cnpj.slice(0, 8)) ?? []), e]);
+    const nfse: Record<string, BridgeResult> = {};
 
     for (const f of xmls) {
       const xml = decodeXml(f.bytes);
@@ -111,14 +113,24 @@ export async function ingestFiles(
       const sha = createHash("sha256").update(xml, "utf8").digest();
       for (const e of targets.values()) {
         const role = roleOf(doc, e.cnpj);
+        const xmlId = newId();
         const ins = await tx.query(
           `INSERT INTO fiscal_xml (id, tenant_id, entity_id, source, doc_type, role, access_key, number, issuer_doc, issuer_name, recipient_doc,
                                    recipient_name, issued_at, total, status, event_type, file_name, xml, sha256, received_by)
            VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
            ON CONFLICT DO NOTHING`,
-          [newId(), e.id, opts.source, doc.docType, role, doc.accessKey, doc.number, doc.issuerDoc, doc.issuerName, doc.recipientDoc,
+          [xmlId, e.id, opts.source, doc.docType, role, doc.accessKey, doc.number, doc.issuerDoc, doc.issuerName, doc.recipientDoc,
             doc.recipientName, doc.issuedAt, doc.total, doc.status, doc.eventType, basename(f.name).slice(0, 200), xml, sha, opts.actor.id],
         );
+        // NFS-e (nacional ou municipal ABRASF) também vira nota para o fiscal e o contábil
+        if (doc.docType === "NFSE") {
+          const stored = ins.rowCount ? xmlId : (await tx.query<{ id: string }>("SELECT id FROM fiscal_xml WHERE entity_id = $1 AND sha256 = $2", [e.id, sha])).rows[0]?.id ?? null;
+          const b = await bridgeNfseXml(tx, e, xml, opts.source, stored);
+          const acc = (nfse[e.id] ??= { inserted: 0, duplicates: 0, roles: {} });
+          acc.inserted += b.inserted;
+          acc.duplicates += b.duplicates;
+          for (const [k, v] of Object.entries(b.roles)) acc.roles[k] = (acc.roles[k] ?? 0) + v;
+        }
         if (ins.rowCount) {
           report.imported++;
           const per = (report.byEntity[e.id] ??= {});
@@ -131,6 +143,7 @@ export async function ingestFiles(
       }
     }
 
+    for (const [entityId, r] of Object.entries(nfse)) await announceNfseIntake(tx, entityId, r, opts.actor, opts.source);
     for (const [entityId, types] of Object.entries(report.byEntity)) {
       const n = Object.values(types).reduce((a, b) => a + b, 0);
       const batch = newId();

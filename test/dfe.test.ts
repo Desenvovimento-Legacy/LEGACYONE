@@ -131,7 +131,40 @@ describe("SEFAZ: distribuição de DF-e", () => {
     expect(dist.calls).toEqual(["MG:000000000000000", "MG:000000000000000"]);
   });
 
-  it("656 de sequência para a busca automática até uma pessoa informar o NSU", async () => {
+  it("656 de sequência: segue do ultNSU que a SEFAZ informou, anota a lacuna e avisa o escritório", async () => {
+    const { t, entityId } = await entityWithUf();
+    await withTenant(appPool, t, (tx) =>
+      tx.query(
+        `INSERT INTO digital_certificate (id, tenant_id, owner_kind, entity_id, holder_document, kind, subject, serial_number, valid_from, valid_to, vault_ref)
+         VALUES ($1, current_tenant(), 'ENTITY', $2, $3, 'A1', 'CN=X', $4, now() - interval '1 day', now() + interval '300 days', 'cofre-local:x')`,
+        [newId(), entityId, CNPJ_MATRIZ, newId()],
+      ),
+    );
+    const SEQ = "Rejeicao: Consumo Indevido (Deve ser utilizado o ultNSU nas solicitacoes subsequentes. Tente apos 1 hora)";
+    const jump = soap("656", "000000000034680", "000000000000000", []).replace("motivo 656", SEQ);
+    const dist = new FakeDist([jump, soap("138", "000000000034681", "000000000034681", [{ nsu: "000000000034681", schema: "resNFe_v1.01.xsd", xml: resNFe(KEY1, "100.00") }])]);
+    const now = new Date("2026-10-06T19:00:00Z");
+    const deps = { appPool, dist, certificates: cert, now: () => now };
+    await syncAllDfe(deps, t);
+    expect(dist.calls).toEqual(["MG:000000000000000"]);
+    // dentro da hora não insiste
+    expect((await syncAllDfe(deps, t))[0]).toMatchObject({ outcome: "aguardando" });
+    // passada a hora, segue sozinha do NSU indicado (sem pessoa)
+    const later = new Date(now.getTime() + 62 * 60_000);
+    const r = await syncAllDfe({ ...deps, now: () => later }, t);
+    expect(dist.calls[1]).toBe("MG:000000000034680");
+    expect(r[0]).toMatchObject({ outcome: "ok", documents: 1 });
+    await withTenant(appPool, t, async (tx) => {
+      const g = await tx.query("SELECT channel, from_nsu, to_nsu FROM dfe_gap WHERE entity_id = $1", [entityId]);
+      expect(g.rows).toEqual([{ channel: "NFE", from_nsu: "000000000000001", to_nsu: "000000000034680" }]);
+      const p = await tx.query("SELECT type, responsible_source, required_information FROM pending_item WHERE entity_id = $1 AND status = 'OPEN'", [entityId]);
+      expect(p.rows).toHaveLength(1);
+      expect(p.rows[0]).toMatchObject({ type: "DFE_NSU_GAP_NFE", responsible_source: "OFFICE" });
+      expect(p.rows[0].required_information).toMatch(/NSU 1 a 34\.680 já foram baixados por outro sistema/);
+    });
+  });
+
+  it("656 de sequência sem ultNSU utilizável para até uma pessoa informar o NSU", async () => {
     const { t, entityId } = await entityWithUf();
     await withTenant(appPool, t, (tx) =>
       tx.query(
@@ -146,11 +179,8 @@ describe("SEFAZ: distribuição de DF-e", () => {
     const deps = { appPool, dist, certificates: cert, now: () => now };
     await syncAllDfe(deps, t);
     expect(dist.calls).toHaveLength(1);
-    // Passada a hora, a automática NÃO insiste.
     const later = new Date(now.getTime() + 62 * 60_000);
     expect(await syncAllDfe({ ...deps, now: () => later }, t)).toEqual([]);
-    expect(dist.calls).toHaveLength(1);
-    // Pessoa informa o NSU do outro sistema; a busca volta e parte dele.
     await expect(setStartingNsu(appPool, t, entityId, "abc", LUAN)).rejects.toThrow(/números/);
     const adj = await setStartingNsu(appPool, t, entityId, "480", LUAN, later);
     expect(adj.ultNsu).toBe("000000000000480");

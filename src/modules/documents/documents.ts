@@ -94,6 +94,10 @@ export async function dfeStatus(tx: PoolClient) {
       lastQueryAt: c.lastQueryAt ? c.lastQueryAt.toISOString() : null,
       nextAllowedAt: c.nextAllowedAt ? c.nextAllowedAt.toISOString() : null,
       blockedBySequence: blockedBySequence(c),
+      gaps: (await tx.query<{ from_nsu: string; to_nsu: string; detected_at: Date }>(
+        "SELECT from_nsu, to_nsu, detected_at FROM dfe_gap WHERE entity_id = $1 AND channel = 'NFE' ORDER BY detected_at",
+        [e.id],
+      )).rows.map((g) => ({ from: Number(g.from_nsu), to: Number(g.to_nsu), at: g.detected_at.toISOString() })),
     });
   }
   return out;

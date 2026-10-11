@@ -5,6 +5,7 @@ import { nsu15 } from "../../integrations/sefaz/dist-dfe.js";
 import { summarizeDfe } from "../../integrations/sefaz/nfe-parse.js";
 import { parseFiscalXml, roleOf } from "../../integrations/fiscal-xml/parse.js";
 import { audit } from "../../platform/audit/audit.js";
+import { openPendingItem } from "../../platform/pending/pending.js";
 import { appendEvent, type Producer } from "../../platform/events/outbox.js";
 import type { Actor } from "../../shared/actor.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
@@ -18,6 +19,9 @@ import { newId } from "../../shared/ids.js";
  *  - enquanto ultNSU < maxNSU, segue no mesmo ciclo (até `maxCalls` chamadas);
  *  - sem documento novo (137) ou ultNSU = maxNSU: próxima só depois de 61 min;
  *  - 656 (consumo indevido) ou qualquer outra resposta: espera 61 min;
+ *  - 656 de sequência ("Deve ser utilizado o ultNSU") com ultNSU adiante do pedido:
+ *    a SEFAZ diz de onde seguir; a próxima consulta parte dele e os NSU pulados
+ *    (baixados por outro sistema com o mesmo certificado) ficam como lacuna;
  *  - falha de rede: espera 15 min.
  * O XML original de cada documento é guardado com SHA-256 (evidência).
  */
@@ -48,6 +52,8 @@ export interface DfeCursor {
   lastStatus: string | null;
   lastMessage: string | null;
   lastQueryAt: Date | null;
+  /** O último 656 de sequência já trouxe o ultNSU de onde seguir. */
+  moved?: boolean;
 }
 
 export async function dfeCursor(tx: PoolClient, entityId: string, channel: DfeChannel = "NFE"): Promise<DfeCursor> {
@@ -58,8 +64,9 @@ export async function dfeCursor(tx: PoolClient, entityId: string, channel: DfeCh
   );
   const q = rows[0];
   if (!q) return { ultNsu: nsu15(0), maxNsu: null, nextAllowedAt: null, lastStatus: null, lastMessage: null, lastQueryAt: null };
-  // O cursor só anda com resposta válida (137/138) ou ajuste manual; o resto mantém o NSU pedido.
-  const moved = (q.status_code === "137" || q.status_code === "138" || q.status_code === "AJUSTE") && q.ult_nsu;
+  // O cursor anda com resposta válida (137/138), ajuste manual ou 656 de sequência
+  // em que a SEFAZ informa um ultNSU adiante do pedido; o resto mantém o NSU pedido.
+  const moved = ((q.status_code === "137" || q.status_code === "138" || q.status_code === "AJUSTE") && q.ult_nsu) || sequenceJump(q);
   return {
     ultNsu: moved ? q.ult_nsu! : q.requested_nsu,
     maxNsu: q.max_nsu,
@@ -67,6 +74,7 @@ export async function dfeCursor(tx: PoolClient, entityId: string, channel: DfeCh
     lastStatus: q.status_code,
     lastMessage: q.status_message,
     lastQueryAt: q.queried_at,
+    moved: sequenceJump(q),
   };
 }
 
@@ -79,6 +87,12 @@ export interface DfeSyncResult {
   statusCode: string | null;
   statusMessage: string | null;
   nextAllowedAt: Date | null;
+}
+
+const SEQUENCE_RE = /ultNSU/i;
+/** 656 de sequência com o ultNSU que a SEFAZ manda usar, adiante do que foi pedido. */
+function sequenceJump(q: { status_code: string; status_message: string | null; requested_nsu: string; ult_nsu: string | null }): boolean {
+  return q.status_code === "656" && SEQUENCE_RE.test(q.status_message ?? "") && Boolean(q.ult_nsu) && BigInt(q.ult_nsu!) > BigInt(q.requested_nsu);
 }
 
 function nextAllowed(r: DistResult, now: Date): Date {
@@ -135,6 +149,9 @@ async function store(tx: PoolClient, entityId: string, requested: string, r: Dis
      VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [queryId, entityId, requested, r.statusCode, r.statusMessage.slice(0, 500), r.ultNsu, r.maxNsu, inserted, next, actor.kind, actor.id, now, channel],
   );
+  if (r.ultNsu && sequenceJump({ status_code: r.statusCode, status_message: r.statusMessage, requested_nsu: requested, ult_nsu: r.ultNsu })) {
+    await recordGap(tx, entityId, channel, requested, r, actor);
+  }
   if (inserted) {
     await appendEvent(tx, {
       type: "DFE_BATCH_RECEIVED",
@@ -156,6 +173,31 @@ async function store(tx: PoolClient, entityId: string, requested: string, r: Dis
   return inserted;
 }
 
+/**
+ * Lacuna de NSU: outro sistema com o certificado da empresa já baixou do NSU
+ * pedido até o ultNSU que a SEFAZ indicou. A IARIS segue adiante (não há como
+ * pedir de novo esses NSU em lote) e o escritório traz os XML desse sistema
+ * pela entrada de XML. Uma pendência do escritório por empresa.
+ */
+async function recordGap(tx: PoolClient, entityId: string, channel: DfeChannel, requested: string, r: DistResult, actor: Actor) {
+  const from = nsu15(BigInt(requested) + 1n);
+  const to = r.ultNsu!;
+  const ins = await tx.query(
+    `INSERT INTO dfe_gap (id, tenant_id, entity_id, channel, from_nsu, to_nsu, status_code, message)
+     VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+    [newId(), entityId, channel, from, to, r.statusCode, r.statusMessage.slice(0, 300)],
+  );
+  if (!ins.rowCount) return;
+  await audit(tx, { actor, action: "documents.dfe_gap", resourceType: "dfe_gap", resourceId: `${entityId}:${channel}:${from}`, entityId, data: { channel, from, to } });
+  const name = (await tx.query<{ n: string }>("SELECT coalesce(trade_name, legal_name) AS n FROM entity WHERE id = $1", [entityId])).rows[0]?.n ?? "";
+  const doc = channel === "CTE" ? "CT-e" : "NF-e";
+  await openPendingItem(tx, {
+    type: `DFE_NSU_GAP_${channel}`, entityId, responsibleSource: "OFFICE",
+    requiredInformation: `${doc} de ${name}: os NSU ${Number(from).toLocaleString("pt-BR")} a ${Number(to).toLocaleString("pt-BR")} já foram baixados por outro sistema com o certificado da empresa (coletor de XML ou contabilidade anterior). Coloque os XML desse sistema na entrada de XML da IARIS e deixe só a IARIS buscando, para não haver novo bloqueio 656.`,
+    impact: `As ${doc} desse intervalo só entram na IARIS pela entrada de XML; a busca automática já segue do NSU ${Number(to).toLocaleString("pt-BR")}.`,
+  }, actor);
+}
+
 /** Busca as NF-e de uma empresa até zerar a fila da SEFAZ ou bater a regra de espera. */
 export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityId: string, actor: Actor = DOCS_AGENT, channel: DfeChannel = "NFE"): Promise<DfeSyncResult> {
   const dist = channel === "CTE" ? deps.cteDist : deps.dist;
@@ -167,7 +209,16 @@ export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityI
          FROM entity e WHERE e.id = $1`,
       [entityId],
     );
-    return { row: e.rows[0], cursor: await dfeCursor(tx, entityId, channel) };
+    const cursor = await dfeCursor(tx, entityId, channel);
+    // 656 de sequência registrado antes desta versão: a lacuna ainda não foi anotada
+    if (cursor.moved) {
+      const q = (await tx.query<{ requested_nsu: string; status_code: string; status_message: string; ult_nsu: string; max_nsu: string | null }>(
+        "SELECT requested_nsu, status_code, status_message, ult_nsu, max_nsu FROM dfe_query WHERE entity_id = $1 AND channel = $2 ORDER BY queried_at DESC, id DESC LIMIT 1",
+        [entityId, channel],
+      )).rows[0]!;
+      await recordGap(tx, entityId, channel, q.requested_nsu, { statusCode: q.status_code, statusMessage: q.status_message, ultNsu: q.ult_nsu, maxNsu: q.max_nsu, respondedAt: null, docs: [] }, actor);
+    }
+    return { row: e.rows[0], cursor };
   });
   const base = { entityId, calls: 0, documents: 0, statusCode: ent.cursor.lastStatus, statusMessage: ent.cursor.lastMessage };
   if (!ent.row?.cnpj || !ent.row.uf) return { ...base, outcome: "sem_uf", nextAllowedAt: null };
@@ -203,19 +254,19 @@ export async function syncEntityDfe(deps: DfeSyncDeps, tenantId: string, entityI
     last = r;
     nextAt = nextAllowed(r, now);
     if ((r.statusCode === "137" || r.statusCode === "138") && r.ultNsu) ultNsu = r.ultNsu;
+    else if (r.ultNsu && sequenceJump({ status_code: r.statusCode, status_message: r.statusMessage, requested_nsu: requested, ult_nsu: r.ultNsu })) ultNsu = r.ultNsu;
     if (nextAt > now) break;
   }
   return { entityId, calls, documents, outcome: "ok", statusCode: last?.statusCode ?? null, statusMessage: last?.statusMessage ?? null, nextAllowedAt: nextAt };
 }
 
 /**
- * 656 por sequência ("Deve ser utilizado o ultNSU"): outro sistema já consulta
- * este CNPJ com NSU mais adiantado. A busca automática para (insistir renova o
- * bloqueio de 1 h e atrapalha o outro sistema) até uma pessoa informar o NSU
- * inicial ou pedir nova tentativa.
+ * 656 por sequência sem ultNSU utilizável na resposta: a busca automática para
+ * (insistir renova o bloqueio de 1 h) até uma pessoa informar o NSU inicial.
+ * Quando a SEFAZ informa o ultNSU, o cursor já segue dele (não fica parada).
  */
-export function blockedBySequence(c: Pick<DfeCursor, "lastStatus" | "lastMessage">): boolean {
-  return c.lastStatus === "656" && /ultNSU/i.test(c.lastMessage ?? "");
+export function blockedBySequence(c: Pick<DfeCursor, "lastStatus" | "lastMessage"> & { moved?: boolean }): boolean {
+  return c.lastStatus === "656" && SEQUENCE_RE.test(c.lastMessage ?? "") && !c.moved;
 }
 
 /** Ajuste humano do ponto de partida (NSU do outro sistema). Não consulta a SEFAZ. */

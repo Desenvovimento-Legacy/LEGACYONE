@@ -1,5 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 import { Dec } from "../../shared/decimal.js";
+import { isAbrasf, readAbrasfTaxes } from "./abrasf.js";
 
 /**
  * Tributos e retenções da NFS-e do padrão nacional (leitura determinística, sem IA).
@@ -86,6 +87,8 @@ const brl = (v: string) => Number(v).toLocaleString("pt-BR", { minimumFractionDi
 
 /** Lê os tributos de uma NFS-e (infNFSe com a DPS dentro). Nulo se não for NFS-e. */
 export function readNfseTaxes(xml: string): NfseTaxes | null {
+  // nota de emissor municipal (ABRASF) enviada por upload/pasta
+  if (isAbrasf(xml)) return readAbrasfTaxes(xml);
   let root: Node;
   try {
     root = parser.parse(xml) as Node;

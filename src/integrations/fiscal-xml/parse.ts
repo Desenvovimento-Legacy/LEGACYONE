@@ -1,17 +1,20 @@
 import { XMLParser } from "fast-xml-parser";
+import { isAbrasf, splitAbrasf, summarizeAbrasf } from "../nfse/abrasf.js";
 import { summarizeNfse } from "../nfse/nfse-parse.js";
 import { money } from "../sefaz/nfe-parse.js";
+import { Dec } from "../../shared/decimal.js";
 
 /**
  * Identificação determinística de XML fiscal (sem IA): NF-e (mod. 55), NFC-e
  * (mod. 65), CT-e (mod. 57), CT-e OS (mod. 67: transporte de pessoas, valores e
- * excesso de bagagem), NFS-e do padrão nacional e eventos de NF-e e
+ * excesso de bagagem), NFS-e do padrão nacional e do ABRASF (emissores
+ * municipais; o arquivo pode trazer várias notas) e eventos de NF-e e
  * CT-e. Lê só o que está no XML; não confere assinatura (a evidência é o
  * próprio arquivo guardado com hash).
  */
 
 /** Versão do leitor: muda quando passa a reconhecer documento novo. */
-export const FISCAL_XML_PARSER = "fiscal-xml-2";
+export const FISCAL_XML_PARSER = "fiscal-xml-3";
 
 export type FiscalDocType = "NFE" | "NFCE" | "CTE" | "NFSE" | "EVENTO_NFE" | "EVENTO_CTE" | "OUTRO";
 export type FiscalStatus = "AUTORIZADO" | "CANCELADO" | "DENEGADO" | "SEM_PROTOCOLO";
@@ -201,6 +204,28 @@ export function parseFiscalXml(xml: string): FiscalDoc | null {
       total: s.serviceValue,
       status: "AUTORIZADO",
       parties: uniq([s.providerDoc, s.takerDoc]),
+    };
+  }
+
+  // ---------------------------------------------------------------- NFS-e municipal (ABRASF)
+  if (isAbrasf(xml)) {
+    const notes = splitAbrasf(xml).map((n) => summarizeAbrasf(n.xml)).filter((n): n is NonNullable<typeof n> => Boolean(n));
+    const s = notes[0];
+    if (!s) return null;
+    const total = notes.length === 1 ? s.serviceValue : notes.reduce((a, n) => a.add(n.serviceValue ?? "0"), Dec.ZERO).toFixed(2);
+    return {
+      ...empty("NFSE"),
+      accessKey: notes.length === 1 ? s.accessKey : null,
+      number: notes.length === 1 ? s.number : `${notes.length} notas`,
+      issuerDoc: s.providerDoc,
+      issuerName: s.providerName,
+      recipientDoc: notes.length === 1 ? s.takerDoc : null,
+      recipientName: notes.length === 1 ? s.takerName : null,
+      takerDoc: notes.length === 1 ? s.takerDoc : null,
+      issuedAt: s.issuedAt,
+      total,
+      status: "AUTORIZADO",
+      parties: uniq(notes.flatMap((n) => [n.providerDoc, n.takerDoc])),
     };
   }
   return null;
