@@ -13,7 +13,7 @@ import { defaultSecretsPath, openSecretsFile, upsertSecrets } from "../shared/se
  *   pnpm cloud:db copy          copia os dados do Postgres local (docker) para a nuvem
  *                               e confere contagem por tabela e a cadeia da auditoria.
  *   pnpm cloud:db check         testa os três logins na nuvem.
- *   pnpm cloud:db backup        cópia de segurança da nuvem para C:\\IARIS\\backup\\nuvem.
+ *   pnpm cloud:db backup        cópia de segurança da nuvem para C:\\IARIS\\backup\\nuvem (só Node).
  *
  * Nenhuma senha ou URL com senha é impressa: só ✓/✗.
  */
@@ -187,40 +187,67 @@ async function copy() {
 
 /**
  * Cópia de segurança do banco em nuvem para o PC (o plano gratuito não tem
- * backup automático). Usa o pg_dump da mesma versão do servidor (imagem
- * postgres oficial) e mantém as últimas KEEP cópias.
+ * backup automático). Só Node, sem Docker: um arquivo .sql.gz com o COPY de
+ * cada tabela do schema public. Para restaurar: banco novo com as migrações
+ * listadas no cabeçalho (db:migrate) e depois psql -f do arquivo descompactado,
+ * como dono do schema. Mantém as últimas KEEP cópias.
  */
 const BACKUP_DIR = process.env.IARIS_BACKUP_DIR ?? "C:\\IARIS\\backup\\nuvem";
 const KEEP = 30;
 
 async function backup() {
   const { store } = vault();
-  const admin = store.require("CLOUD_ADMIN_DATABASE_URL");
-  const c = new pg.Client({ connectionString: admin });
-  await c.connect();
-  const major = (await c.query<{ v: string }>("SELECT current_setting('server_version_num') AS v")).rows[0]!.v.slice(0, 2);
-  await c.end();
-
   const { mkdirSync, readdirSync, statSync, unlinkSync, createWriteStream } = await import("node:fs");
   const { join } = await import("node:path");
+  const { createGzip } = await import("node:zlib");
+  const { pipeline } = await import("node:stream/promises");
+  const { PassThrough } = await import("node:stream");
+  const { to: copyTo } = await import("pg-copy-streams");
+
+  const c = new pg.Client({ connectionString: store.require("CLOUD_ADMIN_DATABASE_URL") });
+  await c.connect();
   mkdirSync(BACKUP_DIR, { recursive: true });
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
-  const file = join(BACKUP_DIR, `iaris-${stamp}.dump`);
-  const env = { ...process.env, CLOUDURL: admin.replace("&uselibpqcompat=true", "") };
-  await new Promise<void>((resolve, reject) => {
-    const p = spawn("docker", ["run", "--rm", "-e", "CLOUDURL", `postgres:${major}-alpine`, "sh", "-c", 'pg_dump -Fc -n public --no-owner --no-privileges "$CLOUDURL"'], { env, stdio: ["ignore", "pipe", "pipe"] });
-    const out = createWriteStream(file);
-    let err = "";
-    p.stdout.pipe(out);
-    p.stderr.on("data", (d) => (err += d));
-    p.on("error", reject);
-    p.on("close", (code) => out.close(() => (code === 0 ? resolve() : reject(new Error(err.trim() || `pg_dump saiu com código ${code}`)))));
-  });
-  const size = statSync(file).size;
-  if (size < 1024) throw new Error("cópia vazia; verifique a conexão");
-  const old = readdirSync(BACKUP_DIR).filter((f) => /^iaris-\d+\.dump$/.test(f)).sort().reverse().slice(KEEP);
-  for (const f of old) unlinkSync(join(BACKUP_DIR, f));
-  console.log(`✓ cópia do banco em nuvem: ${file} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+  const file = join(BACKUP_DIR, `iaris-${stamp}.sql.gz`);
+  try {
+    const migrations = (await c.query<{ name: string }>("SELECT name FROM schema_migrations ORDER BY name")).rows.map((r) => r.name);
+    const tables = (await c.query<{ t: string; cols: string }>(
+      `SELECT c.relname AS t, string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) AS cols
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname <> 'schema_migrations'
+        GROUP BY c.relname ORDER BY c.relname`,
+    )).rows;
+    const out = new PassThrough();
+    const done = pipeline(out, createGzip({ level: 9 }), createWriteStream(file));
+    const write = (text: string) => new Promise<void>((r) => (out.write(text) ? r() : out.once("drain", r)));
+    await write(`-- IARIS: cópia do banco em nuvem ${new Date().toISOString()}\n-- Migrações: ${migrations.join(" ")}\n`);
+    await write("SET session_replication_role = replica;\nBEGIN;\n");
+    await c.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    let rows = 0;
+    for (const t of tables) {
+      const n = (await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM public.${c.escapeIdentifier(t.t)}`)).rows[0]!.n;
+      rows += Number(n);
+      // DELETE antes do COPY: no banco novo, as tabelas de referência já vêm preenchidas pelas migrações.
+      await write(`\n-- ${t.t}: ${n} linha(s)\nDELETE FROM public.${c.escapeIdentifier(t.t)};\nCOPY public.${c.escapeIdentifier(t.t)} (${t.cols}) FROM stdin;\n`);
+      const stream = c.query(copyTo(`COPY public.${c.escapeIdentifier(t.t)} (${t.cols}) TO STDOUT`));
+      for await (const chunk of stream) await write(chunk.toString());
+      await write("\\.\n");
+    }
+    await c.query("COMMIT");
+    await write("COMMIT;\n");
+    out.end();
+    await done;
+    const size = statSync(file).size;
+    const old = readdirSync(BACKUP_DIR).filter((f) => /^iaris-\d+\.(dump|sql\.gz)$/.test(f)).sort((a, b) => b.slice(6, 18).localeCompare(a.slice(6, 18))).slice(KEEP);
+    for (const f of old) unlinkSync(join(BACKUP_DIR, f));
+    console.log(`✓ cópia do banco em nuvem: ${file} (${tables.length} tabelas, ${rows} linhas, ${(size / 1024 / 1024).toFixed(1)} MB)`);
+  } catch (e) {
+    try { (await import("node:fs")).unlinkSync(file); } catch { /* sem arquivo */ }
+    throw e;
+  } finally {
+    await c.end();
+  }
 }
 
 const [cmd, arg] = process.argv.slice(2);
