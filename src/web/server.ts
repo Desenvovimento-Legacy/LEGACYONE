@@ -15,6 +15,7 @@ import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
 import { balanceSheet, incomeStatement, ledgerDetail, openItems } from "../modules/ledger/reports.js";
+import { importOpeningBalances, openingBalanceImports, previewOpeningBalances } from "../modules/ledger/opening-balances.js";
 import { addAlias, PartnerError, partnerRegistry, syncPartners } from "../modules/ledger/partners.js";
 import { PowerError, refreshPowerRequirements, registerPower } from "../modules/onboarding/powers.js";
 import {
@@ -628,6 +629,10 @@ export function createWebServer(deps: WebDeps) {
           json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => balanceSheet(tx, id, data)));
           return;
         }
+        if (parts[4] === "abertura") {
+          json(res, 200, { imports: await withTenant(deps.appPool, deps.tenantId, (tx) => openingBalanceImports(tx, id)) });
+          return;
+        }
         if (parts[4] === "abertos") {
           const conta = url.searchParams.get("conta");
           const ate = url.searchParams.get("ate");
@@ -738,6 +743,27 @@ export function createWebServer(deps: WebDeps) {
           }
         } catch (err) {
           if (err instanceof LedgerError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // POST /api/empresa/:id/contabil/abertura/previa|lancar {arquivo{name,data}} — saldos de abertura do balancete do escritório anterior (PDF).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "contabil" && parts[4] === "abertura" && (parts[5] === "previa" || parts[5] === "lancar")) {
+        if (guard(parts[5] === "lancar" ? "aprovar" : "conferir")) return;
+        const body = (await readJson(req, 12 * 1024 * 1024)) as { arquivo?: { name?: string; data?: string } };
+        if (!body.arquivo?.data || !body.arquivo.name) return json(res, 400, { erro: "Envie o balancete em PDF" });
+        const input = { entityId: parts[2]!, fileName: body.arquivo.name.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(body.arquivo.data, "base64") };
+        try {
+          if (parts[5] === "previa") {
+            const p = await previewOpeningBalances(deps.appPool, deps.tenantId, input);
+            json(res, 200, { periodEnd: p.balancete.periodEnd, cnpj: p.balancete.cnpj, firm: p.balancete.firm, total: p.balancete.totalDebit, lines: p.mapped });
+          } else {
+            const r = await importOpeningBalances(deps.appPool, deps.tenantId, input, actor);
+            await runAutoPosting(deps.appPool, deps.tenantId, parts[2]!);
+            json(res, 200, { created: r.created, total: r.total ?? null, accounts: r.lines.length });
+          }
+        } catch (err) {
+          if (err instanceof LedgerError) json(res, 400, { erro: err.message });
           else throw err;
         }
         return;

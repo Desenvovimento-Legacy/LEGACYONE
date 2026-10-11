@@ -56,6 +56,8 @@ describe("fechamento da competência", () => {
     await putNote("TOMADA", taken("500.00", "2026-08-12"), "500.00", "2026-08-12", "T1");
     await readEntityNfseTaxes(appPool, t, entityId);
     await applyStandardChart(appPool, t, entityId, "2026-08-01", LUAN);
+    // empresa aberta no início da contabilidade: sem saldo anterior a trazer
+    await withTenant(appPool, t, (tx) => tx.query("UPDATE entity SET activity_started_at = '2026-08-01' WHERE id = $1", [entityId]));
     await approveTakenServicesRule(appPool, t, LUAN);
 
     // Sem a regra de retenção, a nota 2 espera; sem provisão do Simples e sem extrato, não fecha.

@@ -460,7 +460,7 @@ function viewEmpresa(id) {
   });
 }
 
-var CTB_TABS = [["fech", "Fechamento"], ["bal", "Balancete"], ["bp", "Balanço"], ["dre", "DRE"], ["raz", "Razão"], ["forn", "Fornecedores em aberto"], ["cli", "Clientes em aberto"], ["parc", "Cadastro de parceiros"]];
+var CTB_TABS = [["fech", "Fechamento"], ["bal", "Balancete"], ["bp", "Balanço"], ["dre", "DRE"], ["raz", "Razão"], ["forn", "Fornecedores em aberto"], ["cli", "Clientes em aberto"], ["parc", "Cadastro de parceiros"], ["abe", "Saldos de abertura"]];
 var CTB = { entity: null, tab: "bal", raz: null };
 function monthEnd(m) { return new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).toISOString().slice(0, 10); }
 function dc(v) { var n = Number(v); return n === 0 ? '0,00' : brl(Math.abs(n).toFixed(2)) + (n > 0 ? ' D' : ' C'); }
@@ -487,7 +487,7 @@ function showCtb(id, r, tab, raz) {
       return '<tr' + (x.analytic ? '' : ' style="font-weight:600"') + '><td class="mono" style="padding-left:' + (8 + pad) + 'px"><a href="#" data-raz="' + esc(x.code) + '" data-nome="' + esc(x.name) + '">' + esc(x.code) + '</a></td><td>' + esc(x.name) + '</td><td class="num">' + dc(x.opening) + '</td><td class="num">' + brl(x.debit) + '</td><td class="num">' + brl(x.credit) + '</td><td class="num">' + dc(x.closing) + '</td></tr>';
     }).join("");
     out.innerHTML = '<div class="scroll"><table><thead><tr><th>Conta</th><th>Nome</th><th class="num">Saldo anterior</th><th class="num">Débitos</th><th class="num">Créditos</th><th class="num">Saldo atual</th></tr></thead><tbody>' + tb + '</tbody></table></div>' +
-      '<div class="empty">Débitos ' + brl(r.trial.totals.debit) + ' · Créditos ' + brl(r.trial.totals.credit) + (r.trial.totals.balanced ? ' · <span class="ok">débitos = créditos ✓</span>' : ' · <span class="bad">não fecha</span>') + '. Clique na conta para abrir o razão. Contabilidade a partir de ' + d(r.chartFrom) + '; saldos anteriores vêm do escritório anterior (a implantar).</div>';
+      '<div class="empty">Débitos ' + brl(r.trial.totals.debit) + ' · Créditos ' + brl(r.trial.totals.credit) + (r.trial.totals.balanced ? ' · <span class="ok">débitos = créditos ✓</span>' : ' · <span class="bad">não fecha</span>') + '. Clique na conta para abrir o razão. Contabilidade a partir de ' + d(r.chartFrom) + '; o saldo anterior ao início vem do balancete do escritório anterior (aba Saldos de abertura).</div>';
     wireRaz();
     return;
   }
@@ -501,7 +501,7 @@ function showCtb(id, r, tab, raz) {
         return '<tr' + st + '><td style="padding-left:' + (8 + l.level * 16) + 'px">' + esc(l.label) + '</td><td class="' + cls(l.value) + '">' + brl(l.value) + '</td><td class="' + cls(y.value) + '">' + brl(y.value) + '</td></tr>';
       }).join("");
       out.innerHTML = '<div class="scroll"><table><thead><tr><th>Demonstração do resultado</th><th class="num">' + r.month.slice(5, 7) + '/' + r.month.slice(0, 4) + '</th><th class="num">Acumulado ' + d(x.ytdFrom) + ' a ' + d(x.to) + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-        '<div class="empty">Montada direto do razão (grupos 3 e 4 do plano). Sem saldo de abertura do escritório anterior, o acumulado começa no início da contabilidade.</div>';
+        '<div class="empty">Montada direto do razão (grupos 3 e 4 do plano). Com os saldos de abertura do escritório anterior, o acumulado inclui o resultado do ano antes do início na IARIS.</div>';
     }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
     return;
   }
@@ -566,8 +566,13 @@ function showCtb(id, r, tab, raz) {
         '<div class="scroll"><table><tbody>' + x.assets.map(row).join("") + '</tbody></table></div>' +
         '<div class="scroll"><table><tbody>' + x.liabilities.map(row).join("") + '</tbody></table></div></div>' +
         '<div class="empty">Balanço em ' + d(x.date) + ' · ' + (x.totals.balanced ? '<span class="ok">ativo = passivo + PL ✓</span>' : '<span class="bad">diferença ' + brl(x.totals.diff) + '</span>') +
-        '. Saldos desde ' + d(x.from) + ' (início da contabilidade na IARIS); saldos de abertura do escritório anterior ainda não implantados, por isso bancos, clientes e fornecedores mostram só o movimento desde então.</div>';
+        '. Contabilidade na IARIS desde ' + d(x.from) + '; o que vem de antes entra pelos saldos de abertura do escritório anterior.</div>';
     }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    return;
+  }
+  if (tab === "abe") {
+    out.innerHTML = '<div class="empty">Carregando…</div>';
+    getJson("/api/empresa/" + id + "/contabil/abertura").then(function (x) { renderOpening(id, r, out, x); }).catch(function (e) { out.innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
     return;
   }
   if (tab === "parc") {
@@ -608,6 +613,50 @@ function renderClosing(id, r, out, x) {
     if (why.length < 5) { toast("Escreva o motivo da reabertura."); return; }
     rb.disabled = true;
     post("/api/empresa/" + id + "/contabil/reabrir", "aprovar", { mes: r.month, motivo: why }).then(function (y) { toast("Competência reaberta." + (y.posted ? " " + y.posted + " lançamento(s) que esperavam entraram." : "")); showCtb(id, r, "fech"); }).catch(function (e) { toast(e.message); rb.disabled = false; });
+  });
+}
+
+var OB_METHOD = { CONTA_BANCARIA: "conta do banco", CODIGO_E_NOME: "código e nome", NOME: "mesmo nome", PAPEL: "clientes/fornecedores", NOME_EQUIVALENTE: "nome equivalente", NOME_SEMELHANTE: "nome parecido — revisar" };
+function obTable(lines) {
+  var rows = lines.filter(function (l) { return Number(l.curr) !== 0; }).map(function (l) {
+    return '<tr><td class="mono">' + esc(l.code) + '</td><td>' + esc(l.name) + '<div class="mut" style="font-size:11px">' + esc((l.path || []).join(" › ")) + '</div></td><td class="num">' + dc(l.curr) + '</td>' +
+      '<td>' + (l.account ? '<span class="mono">' + esc(l.account) + '</span> ' + esc(l.accountName || "") : '<span class="bad">sem conta no plano</span>') + '</td>' +
+      '<td>' + (l.method ? '<span class="' + (l.method === "NOME_SEMELHANTE" ? "st wr" : "st") + '">' + esc(OB_METHOD[l.method] || l.method) + '</span>' : '') + '</td></tr>';
+  }).join("");
+  return '<div class="scroll"><table><thead><tr><th>Cód.</th><th>Conta no balancete anterior</th><th class="num">Saldo</th><th>Conta no plano da empresa</th><th>De/para</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+function renderOpening(id, r, out, x) {
+  var cur = x.imports.filter(function (i) { return !i.reversed; })[0];
+  var head = cur
+    ? '<div class="empty"><span class="st ok">saldos de abertura lançados</span> · balancete em ' + d(cur.period_end) + (cur.source_firm ? ' · ' + esc(cur.source_firm) : '') + ' · arquivo ' + esc(cur.file_name) + ' · ' + brl(cur.total_debit) + ' · por ' + esc(cur.created_by) + ' em ' + dt(cur.created_at) +
+      '. Os saldos herdados ficam como <b>herdados, não validados</b> (responsabilidade do escritório anterior) até a conferência com extratos e composições.</div>' + obTable(cur.lines)
+    : '<div class="empty">Envie o <b>balancete do escritório anterior</b> (PDF do Domínio) com os saldos do dia anterior ao início na IARIS (' + d(r.chartFrom) + '). A IARIS lê cada conta, confere as somas, propõe o de/para para o plano da empresa e mostra a prévia antes de lançar. Nunca cria contrapartida para fechar.</div>' +
+      '<div class="form-row only-confirmar" style="margin:6px 0"><input type="file" id="ob-file" accept="application/pdf,.pdf"><button class="ghost" id="ob-prev">Ver prévia</button></div><div id="ob-out"></div>';
+  out.innerHTML = head;
+  var file = null;
+  var read = function (cb) {
+    var f = $("ob-file").files[0]; if (!f) { toast("Escolha o PDF do balancete."); return; }
+    if (f.size > 8 * 1024 * 1024) { toast("Arquivo acima de 8 MB."); return; }
+    var fr = new FileReader(); fr.onload = function () { file = { name: f.name, data: String(fr.result).split(",")[1] || "" }; cb(); }; fr.readAsDataURL(f);
+  };
+  var pb = $("ob-prev");
+  if (pb) pb.addEventListener("click", function () {
+    read(function () {
+      $("ob-out").innerHTML = '<div class="empty">Lendo o balancete…</div>';
+      post("/api/empresa/" + id + "/contabil/abertura/previa", "conferir", { arquivo: file }).then(function (p) {
+        var miss = p.lines.filter(function (l) { return !l.account && Number(l.curr) !== 0; }).length;
+        var sim = p.lines.filter(function (l) { return l.method === "NOME_SEMELHANTE"; }).length;
+        $("ob-out").innerHTML = '<div class="empty">Balancete em ' + d(p.periodEnd) + (p.firm ? ' · ' + esc(p.firm) : '') + ' · ' + p.lines.length + ' contas analíticas' + (sim ? ' · <span class="wr">' + sim + ' de/para por nome parecido</span>' : '') + (miss ? ' · <span class="bad">' + miss + ' sem conta no plano</span>' : '') + '</div>' + obTable(p.lines) +
+          (miss ? '<div class="empty bad">Crie no plano as contas que faltam (ou ajuste o nome) e veja a prévia de novo.</div>'
+            : '<div class="form-row only-aprovar" style="margin:6px 0"><button class="warn" id="ob-go">Lançar saldos de abertura</button></div>');
+        var go = $("ob-go");
+        if (go) go.addEventListener("click", function () {
+          if (!window.confirm("Lançar os saldos de abertura deste balancete? Fica na auditoria em seu nome; corrigir exige estorno.")) return;
+          go.disabled = true;
+          post("/api/empresa/" + id + "/contabil/abertura/lancar", "aprovar", { arquivo: file }).then(function (y) { toast("Saldos de abertura lançados (" + y.accounts + " contas)."); showCtb(id, r, "abe"); }).catch(function (e) { toast(e.message); go.disabled = false; });
+        });
+      }).catch(function (e) { $("ob-out").innerHTML = '<div class="empty bad">' + esc(e.message) + '</div>'; });
+    });
   });
 }
 

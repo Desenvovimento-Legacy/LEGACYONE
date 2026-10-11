@@ -89,6 +89,29 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
     checks.push({ key: "anteriores", label: "Competências anteriores fechadas", status: before.length ? "PENDENTE" : "OK", blocking: true,
       detail: before.length ? `Feche antes: ${before.map((m) => mm(m)).join(", ")}` : "Em ordem" });
 
+    // 1b. Saldos de abertura no primeiro mês (empresa que já existia antes do início no IARIS)
+    if (month === start.slice(0, 7)) {
+      const ob = await tx.query<{ period_end: string; n: number; reversed: boolean }>(
+        `SELECT i.period_end::text, jsonb_array_length(i.lines)::int AS n,
+                EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = i.entry_id) AS reversed
+           FROM opening_balance_import i WHERE i.entity_id = $1 ORDER BY i.created_at DESC LIMIT 1`,
+        [entityId],
+      );
+      const ent = await tx.query<{ d: string | null }>("SELECT activity_started_at::text AS d FROM entity WHERE id = $1", [entityId]);
+      const opened = ent.rows[0]?.d ?? null;
+      const imp = ob.rows[0] && !ob.rows[0].reversed ? ob.rows[0] : null;
+      if (imp) {
+        checks.push({ key: "abertura", label: "Saldos de abertura", status: "OK", blocking: true,
+          detail: `Balancete do escritório anterior em ${imp.period_end.split("-").reverse().join("/")} lançado (${imp.n} contas, saldos herdados a conferir)` });
+      } else if (opened && opened >= start) {
+        checks.push({ key: "abertura", label: "Saldos de abertura", status: "NAO_SE_APLICA", blocking: false, detail: "Empresa aberta no início da contabilidade: sem saldo anterior" });
+      } else {
+        const eve = new Date(new Date(`${start}T00:00:00Z`).getTime() - 86_400_000).toISOString().slice(0, 10);
+        checks.push({ key: "abertura", label: "Saldos de abertura", status: "PENDENTE", blocking: true,
+          detail: `Envie o balancete do escritório anterior em ${eve.split("-").reverse().join("/")} (Contabilidade → Saldos de abertura)` });
+      }
+    }
+
     // 2. Partidas dobradas
     const tb = await trialBalance(tx, entityId, from, to);
     checks.push({ key: "partidas", label: "Débitos = créditos", status: tb.totals.balanced ? "OK" : "PENDENTE", blocking: true,
