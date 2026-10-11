@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { Dec } from "../../shared/decimal.js";
 import { chartConfig, type DreGroup } from "./chart-config.js";
+import { EFFECTIVE_DATE, OPENING_RULE } from "./ledger.js";
 
 /**
  * Relatórios do One Ledger (só leitura): razão por conta, contas em aberto por
@@ -45,14 +46,14 @@ export async function ledgerDetail(tx: PoolClient, entityId: string, account: st
   const opening = await tx.query<{ v: string | null }>(
     `SELECT sum(l.debit - l.credit)::text AS v
        FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id JOIN chart_account c ON c.id = l.account_id ${PARTNER_JOIN}
-      WHERE l.entity_id = $1 AND (c.code = $2 OR c.code LIKE $3) AND e.entry_date < $4
+      WHERE l.entity_id = $1 AND (c.code = $2 OR c.code LIKE $3) AND ${EFFECTIVE_DATE} < $4
         AND ($5::text IS NULL OR coalesce(l.dimensions->>'parceiro_doc', CASE nd.role WHEN 'TOMADA' THEN nd.provider_doc WHEN 'PRESTADA' THEN nd.taker_doc END) = $5)`,
     [entityId, account, like, from, partnerDoc],
   );
   const { rows } = await tx.query<{ date: string; entry_id: string; history: string; line_history: string | null; code: string; origin: string; debit: string; credit: string; partner_doc: string | null; partner: string | null }>(
     `SELECT e.entry_date::text AS date, e.id AS entry_id, e.history, l.history AS line_history, c.code, e.origin, l.debit::text, l.credit::text, ${PARTNER_COLS}
        FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id JOIN chart_account c ON c.id = l.account_id ${PARTNER_JOIN}
-      WHERE l.entity_id = $1 AND (c.code = $2 OR c.code LIKE $3) AND e.entry_date BETWEEN $4 AND $5
+      WHERE l.entity_id = $1 AND (c.code = $2 OR c.code LIKE $3) AND ${EFFECTIVE_DATE} BETWEEN $4 AND $5
       ORDER BY e.entry_date, e.created_at, l.seq`,
     [entityId, account, like, from, to],
   );
@@ -119,7 +120,7 @@ async function movement(tx: PoolClient, entityId: string, from: string, to: stri
   const { rows } = await tx.query<{ code: string; d: string; c: string }>(
     `SELECT c.code, sum(l.debit)::text AS d, sum(l.credit)::text AS c
        FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id JOIN chart_account c ON c.id = l.account_id
-      WHERE l.entity_id = $1 AND e.entry_date BETWEEN $2 AND $3 GROUP BY c.code`,
+      WHERE l.entity_id = $1 AND ${EFFECTIVE_DATE} BETWEEN $2 AND $3 GROUP BY c.code`,
     [entityId, from, to],
   );
   // saldo do período com sinal credor positivo (receita +, despesa −)
@@ -166,7 +167,9 @@ export async function incomeStatement(tx: PoolClient, entityId: string, month: s
   const to = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
   const yearFrom = `${month.slice(0, 4)}-01-01`;
   const start = await tx.query<{ d: string | null }>("SELECT min(valid_from)::text AS d FROM chart_account WHERE entity_id = $1 AND source <> 'BANCO'", [entityId]);
-  const ytdFrom = [yearFrom, start.rows[0]?.d ?? yearFrom].sort().pop()!;
+  // Com saldos de abertura herdados no ano (inclui o resultado acumulado do escritório anterior), o acumulado é do ano todo.
+  const opening = await tx.query(`SELECT 1 FROM journal_entry e WHERE e.entity_id = $1 AND e.rule_ref = $2 AND ${EFFECTIVE_DATE} BETWEEN $3 AND $4 LIMIT 1`, [entityId, OPENING_RULE, yearFrom, to]);
+  const ytdFrom = opening.rowCount ? yearFrom : [yearFrom, start.rows[0]?.d ?? yearFrom].sort().pop()!;
   const cfg = await chartConfig(tx, entityId);
   return {
     month, from, to, ytdFrom,

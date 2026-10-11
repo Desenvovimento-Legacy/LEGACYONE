@@ -335,6 +335,9 @@ export const EventContracts = {
   ACCOUNTING_RULES_APPROVED: {
     1: z.object({ rule_set: z.string(), approved_by: z.string() }),
   },
+  OPENING_BALANCES_IMPORTED: {
+    1: z.object({ entity_id: z.uuid(), import_id: z.uuid(), entry_id: z.uuid(), period_end: z.string(), accounts: z.number().int(), total: z.string(), by_similarity: z.number().int() }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

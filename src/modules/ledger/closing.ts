@@ -8,7 +8,7 @@ import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { pendingMovements } from "./auto-posting.js";
 import { chartConfig } from "./chart-config.js";
-import { LedgerError, lockedCompetences, setPeriodLock, trialBalance } from "./ledger.js";
+import { EFFECTIVE_DATE, LedgerError, lockedCompetences, setPeriodLock, trialBalance } from "./ledger.js";
 
 /**
  * Fechamento contábil da competência (Case ACCOUNTING_CLOSING).
@@ -150,7 +150,7 @@ export async function closingStatus(pool: Pool, tenantId: string, entityId: stri
                                (SELECT max(t.posted_on) FROM bank_transaction t WHERE t.bank_account_id = b.id))::text) AS last,
               (SELECT coalesce(sum(t.amount), 0)::text FROM bank_transaction t WHERE t.bank_account_id = b.id AND t.posted_on BETWEEN $2 AND $3) AS mov,
               (SELECT coalesce(sum(l.debit - l.credit), 0)::text FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id
-                WHERE l.account_id = b.ledger_account_id AND e.entry_date BETWEEN $2 AND $3) AS ledger
+                WHERE l.account_id = b.ledger_account_id AND ${EFFECTIVE_DATE} BETWEEN $2 AND $3) AS ledger
          FROM bank_account b LEFT JOIN chart_account c ON c.id = b.ledger_account_id
         WHERE b.entity_id = $1 ORDER BY b.label`,
       [entityId, from, to],

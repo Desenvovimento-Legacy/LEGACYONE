@@ -22,6 +22,15 @@ export class LedgerError extends Error {}
 
 export type Origin = "BANCO" | "FISCAL" | "FOLHA" | "TRIBUTOS" | "MIGRACAO" | "MANUAL";
 
+/** Regra do lançamento de saldos de abertura herdados (implantação). */
+export const OPENING_RULE = "saldo-abertura";
+/**
+ * Data contábil do lançamento nos relatórios (alias e = journal_entry): o de
+ * saldos de abertura vale como saldo da véspera do início (não é movimento do
+ * primeiro mês); os demais, a própria data.
+ */
+export const EFFECTIVE_DATE = `(CASE WHEN e.rule_ref = '${"saldo-abertura"}' THEN e.entry_date - 1 ELSE e.entry_date END)`;
+
 export interface EntryLine {
   account: string;
   debit?: string;
@@ -366,9 +375,9 @@ export async function trialBalance(tx: PoolClient, entityId: string, from: strin
   );
   const mov = await tx.query<{ code: string; opening: string; debit: string; credit: string }>(
     `SELECT a.code,
-            coalesce(sum(l.debit - l.credit) FILTER (WHERE e.entry_date < $2), 0)::text AS opening,
-            coalesce(sum(l.debit) FILTER (WHERE e.entry_date BETWEEN $2 AND $3), 0)::text AS debit,
-            coalesce(sum(l.credit) FILTER (WHERE e.entry_date BETWEEN $2 AND $3), 0)::text AS credit
+            coalesce(sum(l.debit - l.credit) FILTER (WHERE ${EFFECTIVE_DATE} < $2), 0)::text AS opening,
+            coalesce(sum(l.debit) FILTER (WHERE ${EFFECTIVE_DATE} BETWEEN $2 AND $3), 0)::text AS debit,
+            coalesce(sum(l.credit) FILTER (WHERE ${EFFECTIVE_DATE} BETWEEN $2 AND $3), 0)::text AS credit
        FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id JOIN chart_account a ON a.id = l.account_id
       WHERE l.entity_id = $1 AND e.entry_date <= $3
       GROUP BY a.code`,
