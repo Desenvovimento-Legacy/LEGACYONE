@@ -162,7 +162,7 @@ describe("plano de contas padrão do escritório (modelo do Domínio)", () => {
     const pend = (await pendingMovements(appPool, t, entityId)).map((p) => [p.amount, p.reason]);
     expect(pend).toEqual([
       ["-1000.00", "Saída sem DARF, regra ou documento correspondente"],
-      ["-500.00", "Saída sem DARF, regra ou documento correspondente"],
+      ["-500.00", "Pagamento a sócio (FULANO SOCIO): pró-labore, distribuição de lucros ou empréstimo — decisão de pessoa"],
       ["-300.00", "Pagamento a ADVOGADOS ASSOCIADOS LTDA: tem NFS-e no período ainda não lançada"],
     ]);
     await withTenant(appPool, t, async (tx) => {

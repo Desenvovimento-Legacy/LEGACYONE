@@ -54,6 +54,9 @@ export const bankText = (memo: string | null | undefined) =>
 export const nameKey = (name: string | null): string | null => significant(name).find((w) => w.length >= 5) ?? null;
 const significant = (name: string | null) => words(name).filter((w) => w.length >= 4 && !GENERIC.has(w) && !/^\d+$/.test(w));
 
+/** CPF, ou nome de MEI que começa pelo número do CNPJ ("63.011.228 MARIA ..."). */
+const isPersonName = (doc: string, name: string | null) => doc.length === 11 || /^\s*\d{2}\.?\d{3}\.?\d{3}\s/.test(name ?? "");
+
 // ------------------------------------------------------------------ cadastro automático
 
 /** Registra os parceiros que aparecem nas NFS-e da empresa (idempotente). */
@@ -105,7 +108,15 @@ export async function loadPartnerIndex(tx: PoolClient, entityId: string): Promis
     [entityId],
   );
   // Nome: primeira palavra que identifica (≥ 5 letras, fora das genéricas) e que nenhum outro parceiro da empresa usa.
-  const firstSig = rows.map((r) => significant(r.name).find((w) => w.length >= 5) ?? null);
+  // Pessoa física ou MEI (CPF ou nome que começa pelo CNPJ): prenome se repete muito (MARIA, JOAO…),
+  // então a chave é prenome + sobrenome seguidos.
+  const firstSig = rows.map((r) => {
+    if (isPersonName(r.doc, r.name)) {
+      const w = words(r.name).filter((x) => !/\d/.test(x) && !GENERIC.has(x));
+      return w.length >= 2 ? `${w[0]} ${w[1]}` : null;
+    }
+    return significant(r.name).find((w) => w.length >= 5) ?? null;
+  });
   const count = new Map<string, number>();
   for (const k of firstSig) if (k) count.set(k, (count.get(k) ?? 0) + 1);
   return {

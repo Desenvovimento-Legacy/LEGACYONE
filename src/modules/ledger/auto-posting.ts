@@ -783,6 +783,11 @@ async function bankPass(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
       }
       notes.push({ why: "Pagamento sem nota: o plano não tem o grupo Outras Despesas Operacionais", hypotheses: [] });
     }
+    // Pagamento a sócio não vira despesa sozinho: pró-labore, lucros ou empréstimo é decisão de pessoa.
+    if (out && mentionsAny(memo, socios)) {
+      const name = socios.find((n) => mentionsAny(memo, [n]));
+      notes.splice(0, notes.length, { why: `Pagamento a sócio (${name}): pró-labore, distribuição de lucros ou empréstimo — decisão de pessoa`, hypotheses: [] });
+    }
     s.pending++;
     pending.push({
       ...m,

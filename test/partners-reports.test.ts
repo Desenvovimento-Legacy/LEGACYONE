@@ -143,3 +143,20 @@ describe("cadastro de parceiros, razão, DRE e contas em aberto", () => {
     expect(await withTenant(appPool, t, (tx) => addAlias(tx, entityId, cliId, "pix recebido Safe On", LUAN))).toBe("SAFE ON");
   });
 });
+
+describe("reconhecimento pelo nome de pessoa física ou MEI", () => {
+  it("prenome comum não basta: exige prenome + sobrenome", async () => {
+    const t = await newTenant();
+    const { entityId } = await newEntity(t, CNPJ_MATRIZ);
+    await withTenant(appPool, t, async (tx) => {
+      await tx.query(
+        `INSERT INTO partner (id, tenant_id, entity_id, doc, role, name, source, first_seen)
+         VALUES ($1, current_tenant(), $2, '63011228000190', 'FORNECEDOR', '63.011.228 MARIA CRISTINA ESSER HLADCZUK SILVA', 'NFSE_TOMADA', '2026-07-01')`,
+        [newId(), entityId],
+      );
+      const idx = await loadPartnerIndex(tx, entityId);
+      expect(identifyPartner(idx, "PAGAMENTOS A FORNECEDORES JOAO MARIA FAGUNDES", "FORNECEDOR")).toBeNull();
+      expect(identifyPartner(idx, "PIX ENVIADO MARIA CRISTINA E H SILVA", "FORNECEDOR")).toMatchObject({ doc: "63011228000190", via: "NOME" });
+    });
+  });
+});
