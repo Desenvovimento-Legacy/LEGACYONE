@@ -570,15 +570,17 @@ function mentionsAny(memo: string, names: string[]): boolean {
   return names.some((n) => t.includes(` ${n} `));
 }
 
-/** Fornecedor tem NFS-e tomada perto da data ainda não lançada? Então o pagamento espera a nota. */
+/** Fornecedor tem NFS-e tomada válida (não cancelada, com valor, depois do início do plano) perto da data ainda não lançada? Então o pagamento espera a nota. */
 async function partnerHasNotes(ctx: Ctx, doc: string, date: string): Promise<boolean> {
   const r = await ctx.tx.query(
-    `SELECT 1 FROM nfse_document d WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND d.provider_doc = $2
-        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $3 AND $4
+    `SELECT 1 FROM nfse_document d WHERE d.entity_id = $1 AND d.role = 'TOMADA' AND d.provider_doc = $2 AND d.service_value > 0
+        AND (d.issued_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN greatest($3::date, $5::date) AND $4
         AND NOT EXISTS (SELECT 1 FROM journal_entry e WHERE e.idempotency_key = 'nfse-tomada:' || d.id::text
                          AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = e.id))
+        AND NOT EXISTS (SELECT 1 FROM nfse_document c WHERE c.entity_id = d.entity_id AND c.role = 'EVENTO' AND c.access_key = d.access_key
+                         AND (c.event_type ILIKE '%101101%' OR c.event_type ILIKE '%105102%' OR c.event_type ILIKE '%cancel%'))
       LIMIT 1`,
-    [ctx.entityId, doc, addDays(date, -120), addDays(date, 60)],
+    [ctx.entityId, doc, addDays(date, -120), addDays(date, 60), ctx.start],
   );
   return Boolean(r.rowCount);
 }
