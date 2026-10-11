@@ -152,10 +152,21 @@ export async function mapLeaves(tx: PoolClient, entityId: string, leaves: Balanc
   )).rows;
   const cfg = await chartConfig(tx, entityId);
   const under = (a: Account, root: string | undefined) => Boolean(root) && (a.code === root || a.code.startsWith(`${root}.`));
+  const parentOf = new Map(all.map((a) => [a.code, a.parent_code]));
+  const ancestors = (code: string) => {
+    const out: string[] = [];
+    for (let p = parentOf.get(code) ?? null; p; p = parentOf.get(p) ?? null) out.push(key(nameOf.get(p) ?? ""));
+    return out;
+  };
   const out: Mapped[] = [];
   for (const l of leaves) {
     const k = key(l.name);
     const pathKey = l.path.map(key).join(" > ");
+    const leafGroup = /^ATIVO/.test(pathKey) ? "1" : /PATRIMONIO|PASSIVO/.test(pathKey) ? "2" : /RECEITA/.test(pathKey) ? "3" : /CUSTO|DESPESA/.test(pathKey) ? "4" : null;
+    const inGroup = (a: Account) => !leafGroup || a.code.split(".")[0] === leafGroup;
+    // contexto: quantos grupos do balancete (ex.: DESPESAS ADMINISTRATIVAS) aparecem entre os pais da conta do plano
+    const context = (a: Account) => { const anc = ancestors(a.code); return l.path.filter((p) => anc.includes(key(p))).length; };
+    const byContext = (c: Account[]) => [...c].sort((x, y) => context(y) - context(x) || x.code.localeCompare(y.code));
     const ok = (a: Account, method: MapMethod, note?: string): Mapped => ({ ...l, account: a.code, accountName: a.name, method, status: "INHERITED_NOT_VALIDATED", ...(note ? { note } : {}) });
     let m: Mapped | null = null;
 
@@ -178,13 +189,17 @@ export async function mapLeaves(tx: PoolClient, entityId: string, leaves: Balanc
       }
     }
     // 2. Código reduzido e nome iguais
-    m ??= ((a) => (a ? ok(a, "CODIGO_E_NOME") : null))(acc.find((a) => a.short_code === l.code && key(a.name) === k));
-    // 3. Nome igual (único; empate: o de mesmo grupo pai)
+    m ??= ((a) => (a ? ok(a, "CODIGO_E_NOME") : null))(acc.find((a) => a.short_code === l.code && key(a.name) === k && inGroup(a)));
+    // 3. Nome igual no mesmo grupo de natureza (empate: o de mesmo contexto no plano)
     if (!m) {
-      const c = acc.filter((a) => key(a.name) === k);
-      const parentKey = l.path.length ? key(l.path[l.path.length - 1]!) : null;
-      const pick = c.length === 1 ? c[0] : c.find((a) => a.parent_code && key(nameOf.get(a.parent_code) ?? "") === parentKey);
-      if (pick) m = ok(pick, "NOME");
+      const c = acc.filter((a) => key(a.name) === k && inGroup(a));
+      if (c.length) m = ok(byContext(c)[0]!, "NOME");
+    }
+    // 3b. Mesmo código reduzido, mesmo grupo e nome parecido (ex.: HONORÁRIOS CONTÁBEIS × SERVS. DE CONTABILIDADE)
+    if (!m) {
+      const t = tokens(l.name);
+      const a = acc.find((x) => x.short_code === l.code && inGroup(x) && tokens(x.name).some((w) => t.some((y) => same(w, y))));
+      if (a) m = ok(a, "CODIGO_E_NOME", "mesmo código reduzido, nome parecido");
     }
     // 4. Papel
     if (!m) {
@@ -196,17 +211,15 @@ export async function mapLeaves(tx: PoolClient, entityId: string, leaves: Balanc
     // 5/6. Mesmas palavras; senão a mais parecida (empate: menor código), no mesmo grupo de natureza
     if (!m) {
       const t = tokens(l.name);
-      const group = (code: string) => code.split(".")[0];
-      const leafGroup = /^ATIVO/.test(pathKey) ? "1" : /PATRIMONIO|PASSIVO/.test(pathKey) ? "2" : /RECEITA/.test(pathKey) ? "3" : /CUSTO|DESPESA/.test(pathKey) ? "4" : null;
       const scored = acc
-        .filter((a) => !leafGroup || group(a.code) === leafGroup)
+        .filter(inGroup)
         .map((a) => {
           const at = tokens(a.name);
           const hit = t.filter((w) => at.some((x) => same(w, x))).length;
-          return { a, hit, score: t.length ? hit / t.length : 0, extra: at.length - hit, equal: hit === t.length && at.length === t.length };
+          return { a, hit, score: t.length ? hit / t.length : 0, extra: at.length - hit, equal: hit === t.length && at.length === t.length, ctx: context(a) };
         })
         .filter((x) => x.score >= 0.6)
-        .sort((x, y) => Number(y.equal) - Number(x.equal) || y.score - x.score || x.extra - y.extra || x.a.code.localeCompare(y.a.code));
+        .sort((x, y) => Number(y.equal) - Number(x.equal) || y.score - x.score || y.ctx - x.ctx || x.extra - y.extra || x.a.code.localeCompare(y.a.code));
       const best = scored[0];
       if (best) m = ok(best.a, best.equal ? "NOME_EQUIVALENTE" : "NOME_SEMELHANTE", best.equal ? undefined : "de/para por semelhança de nome: revisar");
     }
