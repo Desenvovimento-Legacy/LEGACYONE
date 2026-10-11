@@ -53,7 +53,8 @@ const signed = (v: string, side: string) => (side === "C" ? Dec.of(money(v)).mul
 const brDate = (d: string) => d.split("/").reverse().join("-");
 
 export async function pdfText(bytes: Uint8Array): Promise<string> {
-  const doc = await getDocumentProxy(bytes);
+  // pdf.js recusa Buffer: cópia em Uint8Array puro
+  const doc = await getDocumentProxy(new Uint8Array(bytes));
   const { text } = await extractText(doc, { mergePages: true });
   return Array.isArray(text) ? text.join("\n") : text;
 }
