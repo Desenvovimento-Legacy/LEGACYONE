@@ -71,8 +71,8 @@ export function monthsLabel(months: string[]): string {
     const r = runs[runs.length - 1];
     if (r && next(r[1]) === m) r[1] = m; else runs.push([m, m]);
   }
-  const part = ([a, b]: [string, string]) => (a === b ? my(a) : next(a) === b ? `${my(a)}, ${my(b)}` : `${my(a)} a ${my(b)}`);
-  const list = runs.map(part);
+  // dois meses seguidos ficam como dois itens ("07/2026 e 08/2026"); três ou mais viram intervalo
+  const list = runs.flatMap(([a, b]) => (a === b ? [my(a)] : next(a) === b ? [my(a), my(b)] : [`${my(a)} a ${my(b)}`]));
   return list.length > 1 ? `${list.slice(0, -1).join(", ")} e ${list[list.length - 1]}` : (list[0] ?? "");
 }
 
@@ -220,11 +220,14 @@ function partnerPaymentItems(movs: Mov[]): RequestItem[] {
     if (!m || Math.abs(Number(p.amount)) < 1) continue;
     by.set(m[1]!, [...(by.get(m[1]!) ?? []), p]);
   }
-  return [...by.entries()].map(([name, ps]) => {
+  return [...by.entries()].map(([key, ps]) => {
+    // nome completo como aparece no banco ("JOAO MARIA FAGUNDES FILHO"), se começar pelo nome do sócio
+    const full = counterparty(ps[0]!.memo, ps[0]!.payee);
+    const name = full.startsWith(key) ? full : key;
     const list = ps.map((p) => `${brl(Math.abs(Number(p.amount)))} em ${dm(p.posted_on)}`);
     const total = ps.reduce((a, p) => a + Math.abs(Number(p.amount)), 0);
     return {
-      key: `socio:${name}:${ps.map((p) => p.id).sort().join(",")}`, kind: "EXPLICACAO" as const, month: ps[0]!.posted_on.slice(0, 7),
+      key: `socio:${key}:${ps.map((p) => p.id).sort().join(",")}`, kind: "EXPLICACAO" as const, month: ps[0]!.posted_on.slice(0, 7),
       months: [...new Set(ps.map((p) => p.posted_on.slice(0, 7)))], amount: total.toFixed(2),
       text: ps.length === 1
         ? `Pagamento de ${list[0]} para ${clean(name)}: é reembolso de despesa (envie os comprovantes), pró-labore, distribuição de lucros ou empréstimo?`

@@ -43,7 +43,7 @@ describe("agente de Relacionamento: um pedido consolidado ao cliente", () => {
       ["EXPLICACAO", "2026-07"],
       ["PENDENCIA", null],
     ]);
-    expect(items[1]!.text).toMatch(/de 07\/2026, 08\/2026/);
+    expect(items[1]!.text).toMatch(/de 07\/2026 e 08\/2026/);
     expect(items[2]!.text).toMatch(/^Pagamentos para JOAO SOCIO \(R\$\s?1\.000,00 em 09\/07; R\$\s?200,00 em 12\/07 — total R\$\s?1\.200,00\)/);
     expect(items[3]!.text).toMatch(/R\$\s?830,00 em 05\/07 — MARIA DAS GRACAS$/);
 
@@ -65,7 +65,7 @@ describe("agente de Relacionamento: um pedido consolidado ao cliente", () => {
     expect(r2).toMatchObject({ version: 2, changed: true });
     await withTenant(appPool, t, async (tx) => {
       const v = await clientRequestView(tx, entityId);
-      expect(v.request!.message).toMatch(/^Olá! Para concluirmos a contabilidade da ALPHA INDÚSTRIA LTDA de 07\/2026, 08\/2026, precisamos de:/);
+      expect(v.request!.message).toMatch(/^Olá! Para concluirmos a contabilidade da ALPHA INDÚSTRIA LTDA de 07\/2026 e 08\/2026, precisamos de:/);
       expect(v.request!.message).toMatch(/\*Extratos bancários\*\n• Extrato da conta .* de 08\/2026/);
       expect(v.request!.message).toMatch(/\*Cadastro, acessos e outros documentos\*\n• Enviar o contrato social/);
       expect(v.lastSent).toMatchObject({ version: 1, channel: "WHATSAPP" });
@@ -80,8 +80,12 @@ describe("agente de Relacionamento: um pedido consolidado ao cliente", () => {
 
   it("textos para o cliente: meses em intervalo e nome corrompido do XML corrigido", () => {
     expect(monthsLabel(["2026-01", "2026-02", "2026-03", "2026-04", "2026-06", "2026-07", "2026-09"])).toBe("01/2026 a 04/2026, 06/2026, 07/2026 e 09/2026");
-    expect(monthsLabel(["2025-12", "2026-01"])).toBe("12/2025, 01/2026");
+    expect(monthsLabel(["2025-12", "2026-01"])).toBe("12/2025 e 01/2026");
     expect(fixMojibake("LAB. DE AN\u00C3\u0081LISES CL\u00C3\u008DNICAS")).toBe("LAB. DE ANÁLISES CLÍNICAS");
+    // o 0x8D do "Í" se perdeu no caminho (Windows-1252 não tem): "CLÃNICAS"
+    expect(fixMojibake("LAB. DE AN\u00C3\u0081LISES CL\u00C3NICAS")).toBe("LAB. DE ANÁLISES CLÍNICAS");
+    expect(fixMojibake("ADMINISTRA\u00C3\u0087\u00C3\u0083O")).toBe("ADMINISTRAÇÃO");
+    expect(fixMojibake("CONSTRUÇÃO LTDA")).toBe("CONSTRUÇÃO LTDA");
     expect(fixMojibake("MAESTRO LOCADORA DE VEÍCULOS")).toBe("MAESTRO LOCADORA DE VEÍCULOS");
   });
 });
