@@ -18,11 +18,16 @@ import { Dec } from "../../shared/decimal.js";
  *                                são o tributo do prestador: não contam e a nota fica a conferir.
  * ISS retido: tpRetISSQN 2 (tomador) ou 3 (intermediário) → vISSQN.
  *
- * Prova: quando a nota traz vTotalRet, a soma lida tem de bater com ele; se não
- * bater, a nota fica DIVERGENTE (os valores lidos não são "corrigidos").
+ * Prova: quando a nota traz vTotalRet, a soma lida tem de bater com ele. Se não
+ * bater, o valor líquido (vLiq = vServ − descontos − retenções) decide:
+ *   líquido confirma a soma lida      → OK (o vTotalRet da nota está errado; comum quando o
+ *                                        emissor põe ali o PIS/COFINS ou o ISS do próprio prestador)
+ *   líquido confirma o vTotalRet e a diferença é PIS + COFINS com alíquota de retenção
+ *                                      → PIS e COFINS retidos (código da nota inconsistente)
+ *   senão                              → DIVERGENTE (os valores lidos não são "corrigidos").
  */
 
-export const NFSE_TAX_PARSER = "nfse-trib-2";
+export const NFSE_TAX_PARSER = "nfse-trib-3";
 
 export type TaxReadCheck = "OK" | "DIVERGENTE" | "SEM_TOTAL";
 
@@ -146,13 +151,36 @@ export function readNfseTaxes(xml: string): NfseTaxes | null {
   } else {
     csrf = Dec.of(csllField);
   }
+  // Retenção provada pelo líquido: serviço − descontos − líquido.
+  const serv = num(obj(dv.vServPrest).vServ);
+  const liq = num(vals.vLiq);
+  const byNet = serv !== null && liq !== null
+    ? Dec.of(serv).sub(z(num(desc.vDescIncond))).sub(z(num(desc.vDescCond))).sub(liq)
+    : null;
+  const pcRate = () => {
+    const b = num(pc.vBCPisCofins) ?? serv ?? "0";
+    const near = (v: string, rate: string) => {
+      const d = Dec.of(v).sub(Dec.of(b).mul(rate).round(2));
+      return d.cmp("0.01") <= 0 && d.cmp("-0.01") >= 0;
+    };
+    return near(pisDue, "0.0065") && near(cofinsDue, "0.03");
+  };
+  if (totalRead !== null && byNet !== null && Dec.of(irrf).add(cp).add(csrf).add(issWithheld).cmp(totalRead) !== 0
+      && byNet.cmp(totalRead) === 0 && !pisCofins.isZero()
+      && Dec.of(irrf).add(cp).add(csrf).add(issWithheld).add(pisCofins).cmp(totalRead) === 0 && pcRate()) {
+    csrf = csrf.add(pisCofins);
+    notes.push("O valor líquido confirma PIS e COFINS retidos com alíquota de retenção (0,65% e 3%), apesar do código da nota");
+  }
   const federal = Dec.of(irrf).add(cp).add(csrf);
   const totalCalc = federal.add(issWithheld);
 
   let check: TaxReadCheck;
   if (totalRead !== null) {
     check = totalCalc.cmp(totalRead) === 0 ? "OK" : "DIVERGENTE";
-    if (check === "DIVERGENTE") notes.push(`Total retido na nota R$ ${brl(totalRead)} · soma lida R$ ${brl(totalCalc.toFixed(2))}`);
+    if (check === "DIVERGENTE" && byNet !== null && byNet.cmp(totalCalc) === 0) {
+      check = "OK";
+      notes.push(`A nota informa R$ ${brl(totalRead)} como total retido, mas o valor líquido confirma R$ ${brl(totalCalc.toFixed(2))} retidos: vale o líquido`);
+    } else if (check === "DIVERGENTE") notes.push(`Total retido na nota R$ ${brl(totalRead)} · soma lida R$ ${brl(totalCalc.toFixed(2))}`);
   } else {
     check = totalCalc.isZero() ? "OK" : "SEM_TOTAL";
   }
