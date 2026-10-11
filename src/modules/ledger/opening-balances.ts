@@ -107,14 +107,17 @@ export function parseBalancete(text: string): Balancete {
     if (!r.kids.length) leaves.push({ ...lines[i]!, path });
     else for (const k of r.kids) collect(k, [...path, lines[i]!.name]);
   };
-  for (let i = 0; i < lines.length; i = parse(i).end + 1) collect(i, []);
+  const roots: number[] = [];
+  for (let i = 0; i < lines.length; i = parse(i).end + 1) { roots.push(i); collect(i, []); }
 
   const deb = leaves.reduce((s, l) => (Dec.of(l.curr).gt("0") ? s.add(l.curr) : s), Dec.ZERO);
+  // "CONTAS DEVEDORAS" do resumo = soma dos grupos de natureza devedora (ativo, custos e despesas)
+  const rootsDebit = roots.reduce((s, i) => (Dec.of(lines[i]!.curr).gt("0") ? s.add(lines[i]!.curr) : s), Dec.ZERO);
   const net = leaves.reduce((s, l) => s.add(l.curr), Dec.ZERO);
   if (!net.isZero()) throw new OpeningBalanceError(`Contas analíticas do balancete não fecham: diferença de ${net.toFixed(2)}`);
   const summary = new RegExp(String.raw`CONTAS DEVEDORAS\s.*?(${N})D\s*$`, "m").exec(text);
-  if (summary && Dec.of(money(summary[1]!)).cmp(deb) !== 0) {
-    throw new OpeningBalanceError(`Soma das contas devedoras (${deb.toFixed(2)}) diferente do resumo do balancete (${money(summary[1]!)})`);
+  if (summary && Dec.of(money(summary[1]!)).cmp(rootsDebit) !== 0) {
+    throw new OpeningBalanceError(`Soma dos grupos devedores (${rootsDebit.toFixed(2)}) diferente do resumo do balancete (${money(summary[1]!)})`);
   }
   return { cnpj, periodStart: per ? brDate(per[1]!) : null, periodEnd: per ? brDate(per[2]!) : null, firm, lines, leaves, totalDebit: deb.toFixed(2) };
 }
