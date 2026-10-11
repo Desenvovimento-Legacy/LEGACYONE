@@ -55,9 +55,14 @@ Produção (PC do escritório) usa o banco em nuvem: `IARIS_DB_TARGET=cloud` no 
 faz as URLs virem do cofre (`CLOUD_*`). Migração no PC: `pnpm db:migrate` (já vai
 para a nuvem). Testes continuam no Postgres local.
 
+No PC, o `pnpm.exe` pode ser barrado pelo Device Guard do Windows: use `node --env-file-if-exists=.env
+--import tsx <arquivo.ts>` (ex.: `src/shared/db/migrate.ts`). A tarefa agendada "IARIS no ar"
+(`scripts/windows/garantir-iaris.ps1`) reabre o sistema se ele cair; para atualizar o código basta
+encerrar o processo `src/web/server.ts` (o lançador o reabre).
+
 **Toda alteração vai para o GitHub** (`origin/main`, Desenvovimento-Legacy/LEGACYONE):
 com typecheck e testes passando, commit e push na mesma hora — nunca deixar
-trabalho só local. Depois, no PC do escritório: `git pull` e `pnpm db:migrate`.
+trabalho só local. Depois, no PC do escritório: `git pull` e a migração (`node --env-file-if-exists=.env --import tsx src/shared/db/migrate.ts`).
 
 Idioma do código: identificadores em inglês; comentários, mensagens de erro e
 documentação em português.
