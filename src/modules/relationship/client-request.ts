@@ -8,7 +8,9 @@ import { newId } from "../../shared/ids.js";
 import { pendingMovements } from "../ledger/auto-posting.js";
 import { chartConfig } from "../ledger/chart-config.js";
 import { lockedCompetences } from "../ledger/ledger.js";
-import { partnerRegistry } from "../ledger/partners.js";
+import { bankText, partnerRegistry } from "../ledger/partners.js";
+import { resolvePendingItem } from "../../platform/pending/pending.js";
+import { fixMojibake } from "../../shared/text.js";
 
 /**
  * Agente de Relacionamento (One Relationship): o que falta do cliente vira UM
@@ -27,7 +29,7 @@ import { partnerRegistry } from "../ledger/partners.js";
  */
 
 export type ItemKind = "BALANCETE" | "EXTRATO" | "NOTA_FISCAL" | "COMPROVANTE" | "EXPLICACAO" | "PENDENCIA";
-export interface RequestItem { key: string; kind: ItemKind; text: string; month: string | null; amount?: string; date?: string }
+export interface RequestItem { key: string; kind: ItemKind; text: string; month: string | null; months?: string[]; amount?: string; date?: string }
 
 const AGENT: Actor = { kind: "AGENT", id: "relationship" };
 const PRODUCER = { kind: "agent" as const, name: "relationship", version: "0.1.0" };
@@ -37,15 +39,42 @@ const SECTIONS: [ItemKind, string][] = [
   ["NOTA_FISCAL", "Notas fiscais que costumam vir e não chegaram"],
   ["COMPROVANTE", "Comprovantes ou notas de pagamentos"],
   ["EXPLICACAO", "Esclarecimentos"],
-  ["PENDENCIA", "Outras pendências"],
+  ["PENDENCIA", "Cadastro, acessos e outros documentos"],
 ];
+
+/** Pendências do onboarding que pertencem a uma seção do pedido (as demais vão em "Cadastro, acessos..."). */
+const PENDING_KIND: Record<string, ItemKind> = {
+  PREV_TRIAL_BALANCE: "BALANCETE", PREV_LEDGER_CHART: "BALANCETE", PREV_BALANCE_COMPOSITION: "BALANCETE", BANK_ACCOUNTS: "EXTRATO",
+};
 
 const brl = (v: string | number) => Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const dmy = (d: string) => d.split("-").reverse().join("/");
 const dm = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 const my = (m: string) => `${m.slice(5, 7)}/${m.slice(0, 4)}`;
 const monthEnd = (m: string) => new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).toISOString().slice(0, 10);
-const clean = (s: string | null) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, 70);
+const clean = (s: string | null) => fixMojibake(s).replace(/\s+/g, " ").trim().slice(0, 70);
+/** Nome do parceiro para o cliente: sem o número do CNPJ do MEI na frente e sem texto corrompido. */
+const partnerName = (name: string | null, doc: string) => clean(fixMojibake(name).replace(/^\s*\d{2}\.?\d{3}\.?\d{3}\s+/, "")) || doc;
+/** Histórico do banco legível: só o nome da contraparte (sem "PAGAMENTOS A FORNECEDORES", CPF, datas). */
+const EXTRA_BANK_WORDS = new Set(["PAGAMENTOS", "DES", "REM", "ESTATICO", "DINAMICO", "FILIAL", "RECEBIMENTO", "RECEBIMENTOS"]);
+function counterparty(memo: string | null, payee: string | null): string {
+  const t = bankText([memo, payee].filter(Boolean).join(" ")).split(" ").filter((w) => w && !EXTRA_BANK_WORDS.has(w)).join(" ");
+  return (t.length >= 3 ? t : clean([memo, payee].filter(Boolean).join(" "))).slice(0, 60);
+}
+
+/** "01/2026 a 04/2026, 06/2026" — meses seguidos viram intervalo. */
+export function monthsLabel(months: string[]): string {
+  const ms = [...new Set(months)].sort();
+  const next = (m: string) => { const y = Number(m.slice(0, 4)); const n = Number(m.slice(5, 7)); return n === 12 ? `${y + 1}-01` : `${y}-${String(n + 1).padStart(2, "0")}`; };
+  const runs: [string, string][] = [];
+  for (const m of ms) {
+    const r = runs[runs.length - 1];
+    if (r && next(r[1]) === m) r[1] = m; else runs.push([m, m]);
+  }
+  const part = ([a, b]: [string, string]) => (a === b ? my(a) : next(a) === b ? `${my(a)}, ${my(b)}` : `${my(a)} a ${my(b)}`);
+  const list = runs.map(part);
+  return list.length > 1 ? `${list.slice(0, -1).join(", ")} e ${list[list.length - 1]}` : (list[0] ?? "");
+}
 
 function monthsBetween(fromMonth: string, toMonth: string): string[] {
   const out: string[] = [];
@@ -78,17 +107,25 @@ export async function collectClientNeeds(pool: Pool, tenantId: string, entityId:
       const months = monthsBetween(start.slice(0, 7), last).filter((m) => !locked.has(`${m}-01`));
       await openingNeed(tx, entityId, start, months, items);
       await statementNeeds(tx, entityId, months, items);
-      for (const m of months) await expectedNotes(tx, entityId, m, items);
-      for (const p of movements) {
+      await expectedNotes(tx, entityId, months, items);
+      const open = movements.filter((p) => months.includes(p.posted_on.slice(0, 7)));
+      items.push(...partnerPaymentItems(open));
+      for (const p of open) {
         const it = movementItem(p);
-        if (it && (!it.month || months.includes(it.month))) items.push(it);
+        if (it) items.push(it);
       }
     }
     const pend = await tx.query<{ id: string; type: string; required_information: string }>(
       "SELECT id, type, required_information FROM pending_item WHERE entity_id = $1 AND status = 'OPEN' AND responsible_source = 'CLIENT' ORDER BY created_at",
       [entityId],
     );
-    for (const p of pend.rows) items.push({ key: `pendencia:${p.type}`, kind: "PENDENCIA", text: p.required_information, month: null });
+    const has = (prefix: string) => items.some((i) => i.key.startsWith(prefix));
+    for (const p of pend.rows) {
+      // o item automático é mais preciso (data do saldo, conta e meses que faltam)
+      if (p.type === "PREV_TRIAL_BALANCE" && has("balancete-anterior")) continue;
+      if (p.type === "BANK_ACCOUNTS" && has("extrato")) continue;
+      items.push({ key: `pendencia:${p.type}`, kind: PENDING_KIND[p.type] ?? "PENDENCIA", text: p.required_information, month: null });
+    }
   });
   // sem duplicatas pela chave
   return [...new Map(items.map((i) => [i.key, i])).values()];
@@ -122,8 +159,8 @@ async function statementNeeds(tx: PoolClient, entityId: string, months: string[]
   for (const b of banks.rows) {
     const missing = months.filter((m) => !b.first || !b.last || b.first > `${m}-01` || b.last < monthEnd(m));
     if (missing.length) {
-      items.push({ key: `extrato:${b.id}:${missing.join(",")}`, kind: "EXTRATO", month: missing[0]!,
-        text: `Extrato da conta ${b.label} de ${missing.map(my).join(", ")} (arquivo OFX do internet banking; se não tiver, PDF ou Excel)` });
+      items.push({ key: `extrato:${b.id}:${missing.join(",")}`, kind: "EXTRATO", month: missing[0]!, months: missing,
+        text: `Extrato da conta ${b.label} de ${monthsLabel(missing)} (arquivo OFX do internet banking; se não tiver, PDF ou Excel)` });
     }
   }
   // Contas de banco com saldo no razão e sem extrato nenhum (ex.: banco que veio do balancete anterior)
@@ -140,36 +177,70 @@ async function statementNeeds(tx: PoolClient, entityId: string, months: string[]
     [entityId, `${root}.%`, end],
   );
   for (const o of orphan.rows) {
-    items.push({ key: `extrato-conta:${o.code}:${months.join(",")}`, kind: "EXTRATO", month: months[0]!,
-      text: `Extrato da conta ${o.name} de ${months.map(my).join(", ")} (a conta tem saldo de ${brl(o.bal)} e ainda não recebemos extrato dela)` });
+    items.push({ key: `extrato-conta:${o.code}:${months.join(",")}`, kind: "EXTRATO", month: months[0]!, months,
+      text: `Extrato da conta ${o.name} de ${monthsLabel(months)} (a conta tem saldo de ${brl(o.bal)} e ainda não recebemos extrato dela)` });
   }
 }
 
-async function expectedNotes(tx: PoolClient, entityId: string, month: string, items: RequestItem[]) {
-  const reg = await partnerRegistry(tx, entityId, month);
-  for (const e of reg.expectedMissing) {
+async function expectedNotes(tx: PoolClient, entityId: string, months: string[], items: RequestItem[]) {
+  // um item por parceiro, com todos os meses em que a nota não veio
+  const by = new Map<string, { role: string; doc: string; name: string | null; expected: string | null; months: string[] }>();
+  for (const month of months) {
+    const reg = await partnerRegistry(tx, entityId, month);
+    for (const e of reg.expectedMissing) {
+      const k = `${e.role}:${e.doc}`;
+      const cur = by.get(k) ?? { role: e.role, doc: e.doc, name: e.name, expected: null, months: [] };
+      cur.months.push(month);
+      if (e.expected) cur.expected = String(e.expected);
+      by.set(k, cur);
+    }
+  }
+  for (const e of by.values()) {
+    const name = partnerName(e.name, e.doc);
+    const when = monthsLabel(e.months);
+    const about = e.expected ? `cerca de ${brl(e.expected)}` : "";
     if (e.role === "FORNECEDOR") {
-      items.push({ key: `nota:${e.doc}:${month}`, kind: "NOTA_FISCAL", month,
-        text: `Nota fiscal de ${e.name ?? e.doc} de ${my(month)}${e.expected ? ` (costuma vir todo mês, cerca de ${brl(e.expected)})` : ""}, se o serviço foi prestado` });
+      items.push({ key: `nota:${e.doc}:${e.months.join(",")}`, kind: "NOTA_FISCAL", month: e.months[0]!, months: e.months,
+        text: `Nota fiscal de ${name} de ${when}${about ? ` (costuma vir todo mês, ${about})` : ""}, se o serviço foi prestado` });
     } else {
-      items.push({ key: `faturamento:${e.doc}:${month}`, kind: "EXPLICACAO", month,
-        text: `Não encontramos nota emitida para ${e.name ?? e.doc} em ${my(month)} (costuma ter${e.expected ? `, cerca de ${brl(e.expected)}` : ""}). Não houve faturamento ou a nota foi emitida por outro sistema?` });
+      items.push({ key: `faturamento:${e.doc}:${e.months.join(",")}`, kind: "EXPLICACAO", month: e.months[0]!, months: e.months,
+        text: `Não encontramos nota emitida para ${name} em ${when} (costuma ter${about ? `, ${about}` : ""}). Não houve faturamento ou a nota foi emitida por outro sistema?` });
     }
   }
 }
 
+type Mov = { id: string; posted_on: string; amount: string; memo: string | null; payee: string | null; reason: string };
+const SOCIO_RE = /Pagamento a sócio \(([^)]+)\)/;
+
+/** Pagamentos a sócio: um item por sócio, com todos os pagamentos do período. */
+function partnerPaymentItems(movs: Mov[]): RequestItem[] {
+  const by = new Map<string, Mov[]>();
+  for (const p of movs) {
+    const m = SOCIO_RE.exec(p.reason);
+    if (!m || Math.abs(Number(p.amount)) < 1) continue;
+    by.set(m[1]!, [...(by.get(m[1]!) ?? []), p]);
+  }
+  return [...by.entries()].map(([name, ps]) => {
+    const list = ps.map((p) => `${brl(Math.abs(Number(p.amount)))} em ${dm(p.posted_on)}`);
+    const total = ps.reduce((a, p) => a + Math.abs(Number(p.amount)), 0);
+    return {
+      key: `socio:${name}:${ps.map((p) => p.id).sort().join(",")}`, kind: "EXPLICACAO" as const, month: ps[0]!.posted_on.slice(0, 7),
+      months: [...new Set(ps.map((p) => p.posted_on.slice(0, 7)))], amount: total.toFixed(2),
+      text: ps.length === 1
+        ? `Pagamento de ${list[0]} para ${clean(name)}: é reembolso de despesa (envie os comprovantes), pró-labore, distribuição de lucros ou empréstimo?`
+        : `Pagamentos para ${clean(name)} (${list.join("; ")} — total ${brl(total)}): são reembolso de despesa (envie os comprovantes), pró-labore, distribuição de lucros ou empréstimo? Se forem de naturezas diferentes, diga qual é qual.`,
+    };
+  });
+}
+
 /** Movimento sem lançamento → o que pedir ao cliente (nulo = assunto interno do escritório). */
-function movementItem(p: { id: string; posted_on: string; amount: string; memo: string | null; payee: string | null; reason: string }): RequestItem | null {
+function movementItem(p: Mov): RequestItem | null {
   const v = Number(p.amount);
   if (Math.abs(v) < 1) return null;
-  const memo = clean([p.memo, p.payee].filter(Boolean).join(" "));
+  const memo = counterparty(p.memo, p.payee);
   const base = { month: p.posted_on.slice(0, 7), amount: Math.abs(v).toFixed(2), date: p.posted_on };
   const r = p.reason;
-  const socio = /Pagamento a sócio \(([^)]+)\)/.exec(r);
-  if (socio) {
-    return { ...base, key: `mov:${p.id}`, kind: "EXPLICACAO",
-      text: `Pagamento de ${brl(-v)} em ${dm(p.posted_on)} para ${memo}: é reembolso de despesa (envie os comprovantes), pró-labore, distribuição de lucros ou empréstimo?` };
-  }
+  if (SOCIO_RE.test(r)) return null; // agrupado por sócio em partnerPaymentItems
   if (/Transferência entre contas/.test(r)) {
     return { ...base, key: `mov:${p.id}`, kind: "EXTRATO", text: `Extrato da outra conta da empresa que recebeu ou enviou ${brl(Math.abs(v))} em ${dm(p.posted_on)} (${memo})` };
   }
@@ -183,8 +254,8 @@ function movementItem(p: { id: string; posted_on: string; amount: string; memo: 
 
 export function buildMessage(company: string, office: string, items: RequestItem[]): string {
   if (!items.length) return `Olá! Por aqui está tudo em dia com a ${company}: no momento não precisamos de nenhum documento. Obrigado!\n${office}`;
-  const months = [...new Set(items.map((i) => i.month).filter((m): m is string => Boolean(m)))].sort().map(my);
-  const parts = [`Olá! Para concluirmos a contabilidade da ${company}${months.length ? ` de ${months.join(", ")}` : ""}, precisamos de:`];
+  const months = items.flatMap((i) => i.months ?? (i.month ? [i.month] : []));
+  const parts = [`Olá! Para concluirmos a contabilidade da ${company}${months.length ? ` de ${monthsLabel(months)}` : ""}, precisamos de:`];
   for (const [kind, title] of SECTIONS) {
     const list = items.filter((i) => i.kind === kind);
     if (!list.length) continue;
@@ -194,11 +265,44 @@ export function buildMessage(company: string, office: string, items: RequestItem
   return parts.join("\n");
 }
 
+/**
+ * Pendências do onboarding que a própria IARIS vê resolvidas pelos dados que chegaram
+ * (Pending Engine: documento recebido → pendência resolvida, sem pessoa conferir).
+ */
+export async function settleClientPendings(tx: PoolClient, entityId: string, actor: Actor = AGENT): Promise<number> {
+  const open = await tx.query<{ id: string; type: string }>(
+    "SELECT id, type FROM pending_item WHERE entity_id = $1 AND status = 'OPEN' AND type IN ('PREV_TRIAL_BALANCE', 'BANK_ACCOUNTS')",
+    [entityId],
+  );
+  let n = 0;
+  for (const p of open.rows) {
+    let resolution: string | null = null;
+    if (p.type === "PREV_TRIAL_BALANCE") {
+      const r = await tx.query<{ file_name: string; period_end: string }>(
+        `SELECT i.file_name, i.period_end::text FROM opening_balance_import i
+          WHERE i.entity_id = $1 AND NOT EXISTS (SELECT 1 FROM journal_entry x WHERE x.reverses_id = i.entry_id) ORDER BY i.created_at DESC LIMIT 1`,
+        [entityId],
+      );
+      if (r.rows[0]) resolution = `Balancete recebido (${r.rows[0].file_name}) e saldos de ${dmy(r.rows[0].period_end)} lançados na abertura`;
+    } else {
+      const r = await tx.query<{ n: number; banks: string }>(
+        `SELECT count(DISTINCT b.id)::int AS n, string_agg(DISTINCT b.label, ', ') AS banks FROM bank_account b
+          WHERE b.entity_id = $1 AND EXISTS (SELECT 1 FROM bank_transaction t WHERE t.bank_account_id = b.id)`,
+        [entityId],
+      );
+      if (r.rows[0]?.n) resolution = `Bancos conhecidos pelos extratos recebidos (${r.rows[0].banks}); meses que faltam seguem no pedido ao cliente`;
+    }
+    if (resolution) { await resolvePendingItem(tx, { id: p.id, resolution }, actor); n++; }
+  }
+  return n;
+}
+
 const fingerprintOf = (items: RequestItem[]) =>
   createHash("sha256").update(JSON.stringify([...items].sort((a, b) => a.key.localeCompare(b.key)).map((i) => [i.key, i.text]))).digest("hex");
 
 /** Prepara (ou mantém) o pedido consolidado da empresa. Idempotente: só cria versão quando o que falta muda. */
 export async function prepareClientRequest(pool: Pool, tenantId: string, entityId: string, today: string, actor: Actor = AGENT) {
+  await withTenant(pool, tenantId, (tx) => settleClientPendings(tx, entityId, actor));
   const items = await collectClientNeeds(pool, tenantId, entityId, today);
   const fp = fingerprintOf(items);
   return withTenant(pool, tenantId, async (tx) => {
