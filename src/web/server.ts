@@ -10,7 +10,7 @@ import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "..
 import { PGDAS_PDF_PARSER } from "../integrations/integra-contador/pgdas-pdf.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
-import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
+import { IssDueError, readEntityNfseTaxes, refreshWithholdings, setMunicipalIssDue, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
@@ -488,6 +488,20 @@ export function createWebServer(deps: WebDeps) {
         const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
         await preparePgdasDrafts(deps.appPool, deps.tenantId, parts[2]!, today);
         json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => pgdasDraftView(tx, parts[2]!)), integraConfigured: Boolean(deps.integra) });
+        return;
+      }
+      // POST /api/iss-vencimento — pessoa informa o vencimento do ISS retido de um município (com o fundamento).
+      if (req.method === "POST" && url.pathname === "/api/iss-vencimento") {
+        if (guard("aprovar")) return;
+        const body = (await readJson(req)) as { municipio?: string; nome?: string; dia?: number; ajuste?: string; fundamento?: string };
+        const adjust = body.ajuste === "PREVIOUS_BUSINESS_DAY" || body.ajuste === "NONE" ? body.ajuste : "NEXT_BUSINESS_DAY";
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        try {
+          json(res, 200, await setMunicipalIssDue(deps.appPool, deps.tenantId, { ibge: String(body.municipio ?? ""), name: String(body.nome ?? ""), day: Number(body.dia), adjust, legalBasis: String(body.fundamento ?? "") }, actor, today));
+        } catch (err) {
+          if (err instanceof IssDueError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
       // POST /api/pgdas/:draftId/conferir — 1 consulta cobrada: a Receita calcula SEM transmitir.

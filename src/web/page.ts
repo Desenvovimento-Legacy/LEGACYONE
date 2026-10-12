@@ -894,7 +894,7 @@ function loadRetencoes(id) {
     var fed = r.rows.map(function (w) {
       var pay = w.payment ? (w.payment.collectedOn ? d(w.payment.collectedOn) : "") + '<div class="mut" style="font-size:11px">código ' + esc(w.payment.codes.join(", ")) + '</div>' : '<span class="mut">—</span>';
       var dif = w.difference && Number(w.difference) !== 0 ? '<div class="bad" style="font-size:11px">diferença ' + brl(w.difference) + '</div>' : '';
-      return '<tr><td>' + mm(w.competence) + (w.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td>' + (w.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL") + '</td><td class="num">' + brl(w.withheld) + '<div class="mut" style="font-size:11px">' + w.notes + ' nota(s)</div></td><td class="num">' + (w.paid !== null ? brl(w.paid) : '<span class="mut">—</span>') + dif + '</td><td>' + (w.due ? d(w.due) : '<span class="mut">—</span>') + (w.dueReason ? '<div class="mut" style="font-size:11px">' + esc(w.dueReason) + '</div>' : '') + '</td><td>' + pay + '</td><td>' + (WS[w.status] || esc(w.status)) + '</td></tr>';
+      return '<tr><td>' + mm(w.competence) + (w.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td>' + (w.tax === "IRRF" ? "IRRF" : w.tax === "CSRF" ? "PIS/COFINS/CSLL" : "ISS · " + esc(w.cityName || w.city || "")) + '</td><td class="num">' + brl(w.withheld) + '<div class="mut" style="font-size:11px">' + w.notes + ' nota(s)</div></td><td class="num">' + (w.paid !== null ? brl(w.paid) : '<span class="mut">—</span>') + dif + '</td><td>' + (w.due ? d(w.due) : '<span class="mut">—</span>') + (w.dueReason ? '<div class="mut" style="font-size:11px">' + esc(w.dueReason) + '</div>' : '') + '</td><td>' + pay + '</td><td>' + (WS[w.status] || esc(w.status)) + '</td></tr>';
     }).join("");
     var tk = r.taken.slice(0, 13).map(function (m) {
       var iss = Number(m.iss) ? brl(m.iss) + '<div class="mut" style="font-size:11px">' + m.issByCity.map(function (c) { return esc(c.city); }).join(", ") + '</div>' : '<span class="mut">—</span>';
@@ -902,13 +902,29 @@ function loadRetencoes(id) {
       var link = m.withRetention || m.divergent ? '<a href="#" data-ret="' + m.competence.slice(0, 7) + '">ver notas</a>' : '';
       return '<tr><td>' + mm(m.competence) + '</td><td class="num">' + m.notes + '</td><td class="num">' + brl(m.services) + '</td><td class="num">' + (Number(m.irrf) ? brl(m.irrf) : '—') + '</td><td class="num">' + (Number(m.csrf) ? brl(m.csrf) : '—') + '</td><td class="num">' + (Number(m.cp) ? brl(m.cp) : '—') + '</td><td class="num">' + iss + '</td><td>' + flags + link + '</td></tr>';
     }).join("");
-    box.innerHTML = '<h2>Retenções nas NFS-e tomadas</h2>' +
-      '<h3 style="font-size:13px;margin:6px 0">IRRF e PIS/COFINS/CSLL retidos × DARF pago</h3>' +
+    var miss = (r.issMissingDue || []).map(function (m) {
+      return '<div class="form-row only-aprovar" style="margin:4px 0;background:var(--amber-bg);padding:8px;border-radius:6px"><b>ISS retido em ' + esc(m.name) + '</b>' +
+        '<label>vence no dia<input id="iss-day-' + m.ibge + '" inputmode="numeric" style="width:50px"></label>' +
+        '<label>se não for dia útil<select id="iss-adj-' + m.ibge + '"><option value="NEXT_BUSINESS_DAY">prorroga</option><option value="PREVIOUS_BUSINESS_DAY">antecipa</option><option value="NONE">não muda</option></select></label>' +
+        '<label>fundamento<input id="iss-law-' + m.ibge + '" placeholder="ex.: Lei Complementar municipal nº …, art. …" style="width:280px"></label>' +
+        '<button class="warn" data-iss="' + m.ibge + '" data-name="' + esc(m.name) + '">Registrar prazo</button></div>';
+    }).join("");
+    box.innerHTML = '<h2>Retenções nas NFS-e tomadas</h2>' + (miss ? '<div style="margin-bottom:8px"><div class="mut" style="font-size:12px">Cada município tem o próprio vencimento do ISS retido. Informe uma vez (vale para todas as empresas) e a IARIS acompanha o prazo e procura o recolhimento no extrato:</div>' + miss + '</div>' : '') +
+      '<h3 style="font-size:13px;margin:6px 0">IRRF, PIS/COFINS/CSLL e ISS retidos × recolhimento</h3>' +
       '<div class="scroll"><table><thead><tr><th>Competência</th><th>Tributo</th><th class="num">Retido nas notas</th><th class="num">Recolhido</th><th>Vencimento</th><th>Pagamento</th><th>Situação</th></tr></thead><tbody>' + (fed || '<tr><td colspan="7" class="empty">Nenhuma retenção federal nas notas tomadas.</td></tr>') + '</tbody></table></div>' +
       '<h3 style="font-size:13px;margin:12px 0 6px">Notas tomadas por mês</h3>' +
       '<div class="scroll"><table><thead><tr><th>Mês</th><th class="num">Notas</th><th class="num">Serviços</th><th class="num">IRRF</th><th class="num">PIS/COFINS/CSLL</th><th class="num">INSS</th><th class="num">ISS retido</th><th></th></tr></thead><tbody>' + tk + '</tbody></table></div>' +
       '<div id="ret-notas"></div>' +
-      '<div class="empty">Competência pelo mês de emissão da nota (o recolhimento segue a data do pagamento ao prestador; com o extrato, a IARIS passa a usar a data do pagamento). Só NFS-e do Emissor Nacional. ISS retido: guia municipal ainda sem fonte. Pagamentos até ' + (r.dataUntil ? d(r.dataUntil) : "—") + '.</div>';
+      '<div class="empty">Competência pelo mês de emissão da nota (o recolhimento segue a data do pagamento ao prestador; com o extrato, a IARIS passa a usar a data do pagamento). ISS retido: a guia é emitida no portal da prefeitura; a IARIS acompanha prazo e procura o recolhimento no extrato. Pagamentos federais até ' + (r.dataUntil ? d(r.dataUntil) : "—") + '.</div>';
+    box.querySelectorAll("[data-iss]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var g = b.getAttribute("data-iss");
+        post("/api/iss-vencimento", "aprovar", { municipio: g, nome: b.getAttribute("data-name"), dia: Number($("iss-day-" + g).value), ajuste: $("iss-adj-" + g).value, fundamento: $("iss-law-" + g).value }).then(function (x) {
+          toast("Prazo registrado. " + x.changed + " situação(ões) atualizada(s).");
+          return loadRetencoes(id);
+        }).catch(function (e) { toast(e.message); });
+      });
+    });
     box.querySelectorAll("[data-ret]").forEach(function (a) {
       a.addEventListener("click", function (ev) { ev.preventDefault(); loadRetNotas(id, a.getAttribute("data-ret")); });
     });

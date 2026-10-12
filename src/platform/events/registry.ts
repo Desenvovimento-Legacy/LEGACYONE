@@ -250,6 +250,18 @@ export const EventContracts = {
       paid: z.string().nullable(),
       due: z.iso.date().nullable(),
     }),
+    2: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      tax: z.string().regex(/^(IRRF|CSRF|ISS:\d{7})$/),
+      from: z.string().nullable(),
+      to: z.string(),
+      withheld: z.string(),
+      paid: z.string().nullable(),
+      due: z.iso.date().nullable(),
+      city: z.string().nullable(),
+      city_name: z.string().nullable(),
+    }),
   },
   OBLIGATION_RULES_APPROVED: {
     1: z.object({

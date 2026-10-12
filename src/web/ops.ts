@@ -137,7 +137,8 @@ export function describeEvent(type: string, p: Record<string, unknown>): string 
         PAGAMENTO_NAO_IDENTIFICADO: "recolhimento ainda não identificado", PAGO: "recolhido", PAGO_EM_ATRASO: "recolhido após o vencimento",
         PAGO_DIVERGENTE: "recolhido valor diferente do retido", PAGO_SEM_NOTA: "recolhido sem NFS-e com retenção",
       };
-      return `${p.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL"} retido ${pa}: ${WS[String(p.to)] ?? String(p.to)}`;
+      const tax = p.tax === "IRRF" ? "IRRF" : p.tax === "CSRF" ? "PIS/COFINS/CSLL" : `ISS de ${String(p.city_name ?? p.city ?? "município")}`;
+      return `${tax} retido ${pa}: ${WS[String(p.to)] ?? String(p.to)}`;
     }
     case "POWER_OF_ATTORNEY_REGISTERED":
       return `Acesso à ${p.name} registrado: ${({ PROCURACAO: "procuração", GOVBR: "via gov.br", CERTIFICADO: "certificado digital", SENHA_PORTAL: "senha do portal" } as Record<string, string>)[String(p.method ?? "PROCURACAO")]}${p.valid_to ? `, válido até ${fmtDate(String(p.valid_to))}` : ""}`;
@@ -351,7 +352,7 @@ export async function humanQueue(tx: PoolClient) {
   const brlFmt = (v: string | null) => Number(v ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const withholdings = (await withholdingsNeedingAttention(tx)).map((w) => {
     const pa = `${w.competence.slice(5, 7)}/${w.competence.slice(0, 4)}`;
-    const name = w.tax === "IRRF" ? "IRRF" : "PIS/COFINS/CSLL";
+    const name = w.tax === "IRRF" ? "IRRF" : w.tax === "CSRF" ? "PIS/COFINS/CSLL" : `ISS (IBGE ${w.tax.slice(4)})`;
     return {
       kind: "withholding",
       id: `${w.entity_id}:${w.competence}:${w.tax}`,

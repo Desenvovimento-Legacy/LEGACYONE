@@ -8,6 +8,8 @@ import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
 import { loadCalendar, type DueAdjust } from "../regulatory/calendar.js";
+import { openPendingItem, resolvePendingItem } from "../../platform/pending/pending.js";
+import { normalize } from "../../shared/text.js";
 
 /**
  * Agente Fiscal — retenções nas NFS-e.
@@ -26,8 +28,13 @@ import { loadCalendar, type DueAdjust } from "../regulatory/calendar.js";
  *   PAGO_DIVERGENTE             recolhido valor diferente do retido nas notas
  *   PAGO_SEM_NOTA               recolhimento sem retenção nas NFS-e recebidas
  *
- * ISS e contribuição previdenciária retidos aparecem para conferência; o
- * recolhimento municipal ainda não tem fonte. Só lê o banco: nenhuma consulta externa.
+ * ISS retido (tomador): por município de incidência. O prazo é o que uma pessoa
+ * informou para o município (lei municipal, municipal_iss_due); o recolhimento é
+ * procurado no extrato (saída do mesmo valor, histórico de tributo municipal,
+ * entre o 1º dia do mês seguinte e 45 dias depois do vencimento). Sem prazo
+ * informado: PRAZO_A_APROVAR e pendência do escritório para aquele município.
+ * Contribuição previdenciária retida aparece para conferência.
+ * Só lê o banco: nenhuma consulta externa.
  */
 
 const PRODUCER: Producer = { kind: "agent", name: "fiscal", version: "0.1.0" };
@@ -48,7 +55,8 @@ export const WITHHOLDING_CODES: Record<"IRRF" | "CSRF", Record<string, string>> 
   },
 };
 
-export type WithholdingTax = "IRRF" | "CSRF";
+/** IRRF, PIS/COFINS/CSLL (CSRF) ou ISS retido de um município ("ISS:<IBGE>"). */
+export type WithholdingTax = "IRRF" | "CSRF" | `ISS:${string}`;
 export type WithholdingStatus =
   | "PRAZO_A_APROVAR" | "A_VENCER" | "ABAIXO_DO_MINIMO" | "PAGAMENTO_NAO_IDENTIFICADO"
   | "PAGO" | "PAGO_EM_ATRASO" | "PAGO_DIVERGENTE" | "PAGO_SEM_NOTA";
@@ -148,6 +156,9 @@ export interface WithholdingRow {
   notes: number;
   payment: { documents: string[]; collectedOn: string | null; codes: string[] } | null;
   responsibility: "ANTERIOR" | "LEGACY" | null;
+  /** ISS: município de incidência */
+  city?: string | null;
+  cityName?: string | null;
 }
 
 export interface TakenMonth {
@@ -199,6 +210,57 @@ const nextMonth = (comp: string) => {
   return d.toISOString().slice(0, 7);
 };
 
+/** Histórico de pagamento de tributo municipal no extrato. */
+const MUNICIPAL_TAX_RE = /\b(ISS|ISSQN|PREF|PREFEITURA|MUNICIPIO|MUNICIPAL|DAM|DAMS|TRIBUTO MUNICIPAL|SEC FAZENDA|SEFIN)\b/;
+const clip = (s: string | null) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+const lastDay = (ym: string) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).getUTCDate();
+const addDaysIso = (iso: string, n: number) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayDiff = (a: string, b: string) => (Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000;
+
+export interface MunicipalIssDue { ibge: string; name: string; day: number; adjust: DueAdjust; legalBasis: string; validFrom: string; createdBy: string }
+
+/** Prazos do ISS retido informados pelo escritório, o mais recente primeiro. */
+export async function municipalIssDue(tx: PoolClient): Promise<MunicipalIssDue[]> {
+  const { rows } = await tx.query<{ municipio_ibge: string; municipio_name: string; day: number; adjust: DueAdjust; legal_basis: string; valid_from: string; created_by: string }>(
+    "SELECT municipio_ibge, municipio_name, day, adjust, legal_basis, valid_from::text, created_by FROM municipal_iss_due ORDER BY valid_from DESC, created_at DESC",
+  );
+  return rows.map((r) => ({ ibge: r.municipio_ibge, name: r.municipio_name, day: r.day, adjust: r.adjust, legalBasis: r.legal_basis, validFrom: r.valid_from, createdBy: r.created_by }));
+}
+
+export class IssDueError extends Error {}
+
+/**
+ * Pessoa informa o vencimento do ISS retido de um município (lei municipal).
+ * Vale para todas as empresas do escritório; resolve as pendências e refaz as situações.
+ */
+export async function setMunicipalIssDue(
+  pool: Pool, tenantId: string,
+  input: { ibge: string; name: string; day: number; adjust: DueAdjust; legalBasis: string; validFrom?: string },
+  actor: Actor, today: string,
+) {
+  if (actor.kind !== "USER") throw new IssDueError("O prazo do ISS do município é informado por uma pessoa (com o fundamento)");
+  if (!/^\d{7}$/.test(input.ibge)) throw new IssDueError("Código IBGE do município com 7 dígitos");
+  if (!Number.isInteger(input.day) || input.day < 1 || input.day > 31) throw new IssDueError("Dia do vencimento entre 1 e 31");
+  if ((input.legalBasis ?? "").trim().length < 3) throw new IssDueError("Informe o fundamento (lei ou decreto municipal)");
+  const validFrom = input.validFrom ?? "2000-01-01";
+  const entities = await withTenant(pool, tenantId, async (tx) => {
+    const id = newId();
+    await tx.query(
+      `INSERT INTO municipal_iss_due (id, tenant_id, municipio_ibge, municipio_name, day, adjust, legal_basis, valid_from, created_by)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (tenant_id, municipio_ibge, valid_from) DO NOTHING`,
+      [id, input.ibge, input.name.trim(), input.day, input.adjust, input.legalBasis.trim(), validFrom, actor.id],
+    );
+    await audit(tx, { actor, action: "fiscal.iss_due_set", resourceType: "municipal_iss_due", resourceId: id, data: { ...input, validFrom } });
+    const pend = await tx.query<{ id: string }>("SELECT id FROM pending_item WHERE status = 'OPEN' AND type = $1", [`ISS_DUE_${input.ibge}`]);
+    for (const p of pend.rows) await resolvePendingItem(tx, { id: p.id, resolution: `Vencimento informado: dia ${input.day} (${input.legalBasis.trim()})` }, actor);
+    return (await tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM nfse_tax WHERE role = 'TOMADA' AND incidence_city = $1 AND iss_withheld > 0", [input.ibge])).rows;
+  });
+  let changed = 0;
+  for (const e of entities) changed += (await refreshWithholdings(pool, tenantId, e.id, today)).changed;
+  return { entities: entities.length, changed };
+}
+
 const CANCELLED = `SELECT DISTINCT access_key FROM nfse_document
                     WHERE entity_id = $1 AND role = 'EVENTO' AND access_key IS NOT NULL
                       AND (event_type ILIKE '%101101%' OR event_type ILIKE '%105102%' OR event_type ILIKE '%cancel%')`;
@@ -231,13 +293,13 @@ export async function withholdingsOverview(tx: PoolClient, entityId: string, tod
       GROUP BY 1 ORDER BY 1 DESC`,
     [entityId, NFSE_TAX_PARSER],
   );
-  const cities = await tx.query<{ competence: string; city: string; value: string; notes: number }>(
+  const cities = await tx.query<{ competence: string; city: string; code: string | null; value: string; notes: number }>(
     `WITH cancelled AS (${CANCELLED})
-     SELECT t.competence::text, coalesce(t.incidence_city_name, t.incidence_city, '—') AS city, sum(t.iss_withheld)::text AS value, count(*)::int AS notes
+     SELECT t.competence::text, coalesce(t.incidence_city_name, t.incidence_city, '—') AS city, t.incidence_city AS code, sum(t.iss_withheld)::text AS value, count(*)::int AS notes
        FROM nfse_tax t JOIN nfse_document d ON d.id = t.nfse_id
       WHERE t.entity_id = $1 AND t.role = 'TOMADA' AND t.parser = $2 AND t.iss_withheld > 0
         AND (d.access_key IS NULL OR d.access_key NOT IN (SELECT access_key FROM cancelled))
-      GROUP BY 1, 2 ORDER BY 1, 2`,
+      GROUP BY 1, 2, 3 ORDER BY 1, 2`,
     [entityId, NFSE_TAX_PARSER],
   );
   const codes = [...Object.keys(WITHHOLDING_CODES.IRRF), ...Object.keys(WITHHOLDING_CODES.CSRF)];
@@ -310,7 +372,55 @@ export async function withholdingsOverview(tx: PoolClient, entityId: string, tod
       });
     }
   }
-  return { rows, taken, dataUntil: data_until, dueApproved: Boolean(dueSpec) };
+  // ISS retido, por município de incidência
+  const issRules = await municipalIssDue(tx);
+  const debits = await tx.query<{ id: string; posted_on: string; amount: string; memo: string | null }>(
+    `SELECT t.id, t.posted_on::text, (-t.amount)::text AS amount, concat_ws(' ', t.memo, t.payee) AS memo
+       FROM bank_transaction t WHERE t.entity_id = $1 AND t.amount < 0`,
+    [entityId],
+  );
+  const used = new Set<string>();
+  const missingDue = new Map<string, string>();
+  for (const c of cities.rows.filter((x) => x.code && /^\d{7}$/.test(x.code)).sort((a, b) => a.competence.localeCompare(b.competence))) {
+    if (c.competence >= current) continue;
+    const withheld = Dec.of(c.value);
+    const rule = issRules.find((r) => r.ibge === c.code && r.validFrom <= `${nextMonth(c.competence)}-01`);
+    const cityName = rule?.name ?? c.city;
+    let due: string | null = null;
+    let dueReason: string | null = null;
+    if (rule) {
+      const day = Math.min(rule.day, lastDay(nextMonth(c.competence)));
+      const a = cal.adjust(`${nextMonth(c.competence)}-${String(day).padStart(2, "0")}`, rule.adjust);
+      due = a.due;
+      dueReason = a.reason;
+    }
+    const from = `${nextMonth(c.competence)}-01`;
+    const until = due ? addDaysIso(due, 45) : addDaysIso(from, 75);
+    const name = normalize(cityName);
+    const pay = debits.rows
+      .filter((t) => !used.has(t.id) && t.posted_on >= from && t.posted_on <= until && Dec.of(t.amount).cmp(withheld) === 0
+        && (MUNICIPAL_TAX_RE.test(normalize(t.memo)) || (name.length >= 4 && normalize(t.memo).includes(name))))
+      .sort((a, b) => Math.abs(dayDiff(a.posted_on, due ?? from)) - Math.abs(dayDiff(b.posted_on, due ?? from)))[0];
+    if (pay) used.add(pay.id);
+    let status: WithholdingStatus;
+    if (pay) status = due && pay.posted_on > due ? "PAGO_EM_ATRASO" : "PAGO";
+    else if (!rule) status = "PRAZO_A_APROVAR";
+    else if (due && today <= due) status = "A_VENCER";
+    else status = "PAGAMENTO_NAO_IDENTIFICADO";
+    const responsibility = start ? (c.competence < `${start.slice(0, 7)}-01` ? "ANTERIOR" : "LEGACY") : null;
+    if (!rule && responsibility !== "ANTERIOR") missingDue.set(c.code!, cityName);
+    rows.push({
+      competence: c.competence, tax: `ISS:${c.code}`, status, withheld: withheld.toFixed(2), paid: pay ? Dec.of(pay.amount).toFixed(2) : null,
+      difference: pay ? "0.00" : null, due, dueReason, notes: c.notes,
+      payment: pay ? { documents: [`extrato:${pay.id}`], collectedOn: pay.posted_on, codes: [clip(pay.memo)] } : null,
+      responsibility, city: c.code, cityName,
+    });
+  }
+  rows.sort((a, b) => b.competence.localeCompare(a.competence));
+  return {
+    rows, taken, dataUntil: data_until, dueApproved: Boolean(dueSpec),
+    issMissingDue: [...missingDue.entries()].map(([ibge, name]) => ({ ibge, name })),
+  };
 }
 
 /** Notas tomadas com retenção (para conferir), da competência pedida. */
@@ -347,7 +457,14 @@ export async function takenNotes(tx: PoolClient, entityId: string, competence: s
 /** Grava a situação de cada retenção quando ela muda e emite WITHHOLDING_STATUS_CHANGED. */
 export async function refreshWithholdings(pool: Pool, tenantId: string, entityId: string, today: string) {
   return withTenant(pool, tenantId, async (tx) => {
-    const { rows } = await withholdingsOverview(tx, entityId, today);
+    const { rows, issMissingDue } = await withholdingsOverview(tx, entityId, today);
+    for (const m of issMissingDue) {
+      await openPendingItem(tx, {
+        type: `ISS_DUE_${m.ibge}`, entityId, responsibleSource: "OFFICE",
+        requiredInformation: `Informe o dia de vencimento do ISS retido em ${m.name} (IBGE ${m.ibge}) e o fundamento (lei ou decreto municipal), na tela da empresa, em Retenções`,
+        impact: "Sem o prazo, a IARIS mostra o ISS retido mas não acompanha vencimento nem recolhimento",
+      }, FISCAL_AGENT);
+    }
     let changed = 0;
     for (const w of rows) {
       const last = await tx.query<{ id: string; status: string; withheld: string; paid: string | null; due_on: string | null }>(
@@ -371,7 +488,7 @@ export async function refreshWithholdings(pool: Pool, tenantId: string, entityId
       changed++;
       await appendEvent(tx, {
         type: "WITHHOLDING_STATUS_CHANGED",
-        schemaVersion: 1,
+        schemaVersion: 2,
         producer: PRODUCER,
         idempotencyKey: `retencao:${entityId}:${w.competence.slice(0, 7)}:${w.tax}:${fingerprint}`,
         entityId,
@@ -385,6 +502,8 @@ export async function refreshWithholdings(pool: Pool, tenantId: string, entityId
           withheld: w.withheld,
           paid: w.paid,
           due: w.due,
+          city: w.city ?? null,
+          city_name: w.cityName ?? null,
         },
       });
     }
