@@ -8,7 +8,6 @@ import { agentName, DEPARTMENTS, PIPELINE_STAGES, PROCESSES, SHARED_AGENTS, type
 import { formatCnpj } from "../shared/br/documents.js";
 import { accessMap, entityFacts, nextDueDates, type DueSpec } from "../modules/onboarding/plan.js";
 import { loadCalendar } from "../modules/regulatory/calendar.js";
-import { cienciaQueue } from "../modules/documents/documents.js";
 import { openRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 
 /**
@@ -320,17 +319,8 @@ export async function humanQueue(tx: PoolClient) {
           since: (r0.since ?? new Date()).toISOString(),
         }]
       : [];
-  const ciencia = (await cienciaQueue(tx)).map((c) => ({
-    kind: "ciencia",
-    id: c.entity_id,
-    type: "NFE_CIENCIA",
-    entityId: c.entity_id,
-    entity: c.entity,
-    caseId: null,
-    title: `${c.n} NF-e de entrada aguardando ciência da operação`,
-    impact: `Total ${Number(c.total ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}. Sem a ciência, a SEFAZ entrega só o resumo; com ela, o XML completo.`,
-    since: (c.oldest ?? new Date()).toISOString(),
-  }));
+  // Ciência da operação é do cliente (destinatário), não do escritório: não entra na fila humana;
+  // as NF-e que seguem só em resumo vão no pedido ao cliente (agente de Relacionamento).
   const divergences = new Map((await openRevenueExceptions(tx)).map((d) => [d.case_id, d]));
   const guides = (await guidesNeedingAttention(tx)).map((g) => {
     const pa = `${g.competence.slice(5, 7)}/${g.competence.slice(0, 4)}`;
@@ -454,7 +444,6 @@ export async function humanQueue(tx: PoolClient) {
   });
   return [
     ...catalog,
-    ...ciencia,
     ...links,
     ...guides,
     ...withholdings,

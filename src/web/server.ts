@@ -48,7 +48,7 @@ import { CteDistribution, SefazDistribution } from "../integrations/sefaz/dist-d
 import { fiscalXmlList, ingestFiles, rereadUnrecognized, scanInbox } from "../modules/documents/xml-intake.js";
 import { dirname, join } from "node:path";
 import { setStartingNsu, syncAllDfe, syncEntityDfe, type DfeSyncDeps } from "../modules/documents/dfe-sync.js";
-import { approveCiencia, dfeStatus, documentsList } from "../modules/documents/documents.js";
+import { dfeStatus, documentsList } from "../modules/documents/documents.js";
 import { AdnDistribution } from "../integrations/nfse/adn.js";
 import { nfseList, nfseStatus, syncAllNfse, syncEntityNfse, type NfseSyncDeps } from "../modules/documents/nfse-sync.js";
 import { approveCase, approveRules, defineContractedServices, HumanActionError } from "../modules/onboarding/complete.js";
@@ -1117,8 +1117,8 @@ export function createWebServer(deps: WebDeps) {
       }
       // POST /api/empresa/:id/ciencia/aprovar — decisão humana: ciência da operação das NF-e que aguardam.
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "ciencia" && parts[4] === "aprovar") {
-        if (guard("aprovar")) return;
-        json(res, 200, await approveCiencia(deps.appPool, deps.tenantId, parts[2]!, actor));
+        // política do escritório: a ciência da operação é dada pelo próprio cliente (destinatário)
+        json(res, 409, { erro: "A ciência da operação é dada pelo cliente. As NF-e só em resumo vão no pedido ao cliente." });
         return;
       }
 

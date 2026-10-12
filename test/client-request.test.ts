@@ -88,4 +88,20 @@ describe("agente de Relacionamento: um pedido consolidado ao cliente", () => {
     expect(fixMojibake("CONSTRUÇÃO LTDA")).toBe("CONSTRUÇÃO LTDA");
     expect(fixMojibake("MAESTRO LOCADORA DE VEÍCULOS")).toBe("MAESTRO LOCADORA DE VEÍCULOS");
   });
+
+  it("NF-e de compra só em resumo há mais de 2 dias: pede ao cliente a ciência (o escritório não dá ciência)", async () => {
+    const t = await newTenant();
+    const { entityId } = await newEntity(t, CNPJ_MATRIZ);
+    const key = "31261044555666000177550010000012341000012345";
+    await withTenant(appPool, t, (tx) =>
+      tx.query(
+        `INSERT INTO dfe_document (id, tenant_id, entity_id, nsu, kind, schema_name, access_key, issuer_doc, issuer_name, issued_at, total, situation, xml, sha256, received_at)
+         VALUES ($1, current_tenant(), $2, '000000000000001', 'RES_NFE', 'resNFe_v1.01.xsd', $3, '44555666000177', 'DISTRIBUIDORA TESTE', '2026-10-01T10:00:00-03:00', 750.82, '1', '<x/>', '\\x00', '2026-10-02T10:00:00-03:00')`,
+        [newId(), entityId, key],
+      ));
+    const items = await collectClientNeeds(appPool, t, entityId, "2026-10-12");
+    expect(items.filter((i) => i.kind === "CIENCIA").map((i) => i.text)).toEqual([expect.stringMatching(/^DISTRIBUIDORA TESTE: NF-e nº 1234, total R\$\s?750,82$/)]);
+    // recebida há menos de 2 dias: ainda não pede
+    expect((await collectClientNeeds(appPool, t, entityId, "2026-10-03")).some((i) => i.kind === "CIENCIA")).toBe(false);
+  });
 });

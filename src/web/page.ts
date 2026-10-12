@@ -1113,7 +1113,7 @@ function viewDocumentos(entityId) {
     }).join("");
     var docs = r.documents.map(function (x) {
       var what = x.kind === "EVENTO" || x.kind === "RES_EVENTO" ? esc(x.eventDesc || ("evento " + (x.eventType || ""))) : esc(KIND[x.kind] || x.kind) + (x.situation === "3" ? ' <span class="bad">cancelada</span>' : x.situation === "2" ? ' <span class="bad">denegada</span>' : '');
-      var ci = x.kind !== "RES_NFE" ? "" : x.hasFull ? '<span class="ok">XML completo</span>' : x.ciencia ? '<span class="wr">' + esc(CI[x.ciencia] || x.ciencia) + '</span>' : x.situation === "1" ? '<span class="wr">aguarda sua ciência</span>' : '';
+      var ci = x.kind !== "RES_NFE" ? "" : x.hasFull ? '<span class="ok">XML completo</span>' : x.ciencia ? '<span class="wr">' + esc(CI[x.ciencia] || x.ciencia) + '</span>' : x.situation === "1" ? '<span class="wr">aguarda a ciência do cliente</span>' : '';
       return '<tr><td>' + (x.issuedAt ? dt(x.issuedAt) : "—") + '</td><td>' + esc(x.entity) + '</td><td><b>' + esc(x.issuerName || "—") + '</b><div class="mut mono" style="font-size:11px">' + esc(x.issuerDoc || "") + '</div></td><td>' + what + '<div>' + ci + '</div></td><td class="num">' + (x.total ? brl(x.total) : "—") + '</td><td class="mono" style="font-size:11px">' + esc(x.accessKey || "") + '</td></tr>';
     }).join("");
     var sc = r.schedule || { slots: [], last: [] };

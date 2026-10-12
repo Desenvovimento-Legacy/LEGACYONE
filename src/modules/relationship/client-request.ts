@@ -11,6 +11,7 @@ import { lockedCompetences } from "../ledger/ledger.js";
 import { bankText, partnerRegistry } from "../ledger/partners.js";
 import { resolvePendingItem } from "../../platform/pending/pending.js";
 import { fixMojibake } from "../../shared/text.js";
+import { Dec } from "../../shared/decimal.js";
 
 /**
  * Agente de Relacionamento (One Relationship): o que falta do cliente vira UM
@@ -22,13 +23,14 @@ import { fixMojibake } from "../../shared/text.js";
  *   movimentos do extrato sem documento: comprovante ou nota (saídas),
  *   explicação (entradas, pagamentos a sócio);
  *   notas de fornecedores recorrentes que não chegaram no mês;
+ *   NF-e de compra só em resumo há mais de 2 dias (a ciência da operação é do cliente);
  *   pendências abertas a cargo do cliente.
  * Meses em aberto: do início da contabilidade ao último mês completo, sem os já fechados.
  * Cada mudança no que falta gera nova versão; enviar é decisão de pessoa (o
  * texto vai pelo canal do escritório) e fica no histórico.
  */
 
-export type ItemKind = "BALANCETE" | "EXTRATO" | "NOTA_FISCAL" | "COMPROVANTE" | "EXPLICACAO" | "PENDENCIA";
+export type ItemKind = "BALANCETE" | "EXTRATO" | "NOTA_FISCAL" | "CIENCIA" | "COMPROVANTE" | "EXPLICACAO" | "PENDENCIA";
 export interface RequestItem { key: string; kind: ItemKind; text: string; month: string | null; months?: string[]; amount?: string; date?: string }
 
 const AGENT: Actor = { kind: "AGENT", id: "relationship" };
@@ -37,6 +39,7 @@ const SECTIONS: [ItemKind, string][] = [
   ["BALANCETE", "Documentos do escritório anterior"],
   ["EXTRATO", "Extratos bancários"],
   ["NOTA_FISCAL", "Notas fiscais que costumam vir e não chegaram"],
+  ["CIENCIA", "NF-e de compra que chegaram só em resumo (dar ciência da operação ou enviar o XML)"],
   ["COMPROVANTE", "Comprovantes ou notas de pagamentos"],
   ["EXPLICACAO", "Esclarecimentos"],
   ["PENDENCIA", "Cadastro, acessos e outros documentos"],
@@ -115,6 +118,7 @@ export async function collectClientNeeds(pool: Pool, tenantId: string, entityId:
         if (it) items.push(it);
       }
     }
+    await cienciaNeeds(tx, entityId, today, items);
     const pend = await tx.query<{ id: string; type: string; required_information: string }>(
       "SELECT id, type, required_information FROM pending_item WHERE entity_id = $1 AND status = 'OPEN' AND responsible_source = 'CLIENT' ORDER BY created_at",
       [entityId],
@@ -206,6 +210,29 @@ async function expectedNotes(tx: PoolClient, entityId: string, months: string[],
       items.push({ key: `faturamento:${e.doc}:${e.months.join(",")}`, kind: "EXPLICACAO", month: e.months[0]!, months: e.months,
         text: `Não encontramos nota emitida para ${name} em ${when} (costuma ter${about ? `, ${about}` : ""}). Não houve faturamento ou a nota foi emitida por outro sistema?` });
     }
+  }
+}
+
+/**
+ * NF-e de compra autorizadas que a SEFAZ entregou só em resumo há mais de 2 dias: a ciência da
+ * operação é do cliente (destinatário). Com ela, a próxima busca traz o XML completo sozinha.
+ */
+async function cienciaNeeds(tx: PoolClient, entityId: string, today: string, items: RequestItem[]) {
+  const r = await tx.query<{ issuer: string; n: number; total: string; keys: string[]; first: string; numbers: string[] }>(
+    `SELECT coalesce(r.issuer_name, r.issuer_doc, '—') AS issuer, count(*)::int AS n, sum(r.total)::text AS total,
+            array_agg(r.access_key ORDER BY r.access_key) AS keys, min(r.issued_at)::date::text AS first,
+            array_agg(substr(r.access_key, 26, 9)::int::text ORDER BY r.issued_at) AS numbers
+       FROM dfe_document r
+      WHERE r.entity_id = $1 AND r.kind = 'RES_NFE' AND r.situation = '1' AND r.access_key IS NOT NULL
+        AND r.received_at < ($2::date - 2)
+        AND NOT EXISTS (SELECT 1 FROM dfe_document f WHERE f.entity_id = r.entity_id AND f.kind = 'NFE' AND f.access_key = r.access_key)
+        AND NOT EXISTS (SELECT 1 FROM fiscal_xml x WHERE x.entity_id = r.entity_id AND x.access_key = r.access_key)
+      GROUP BY 1 ORDER BY 1`,
+    [entityId, today],
+  );
+  for (const g of r.rows) {
+    items.push({ key: `ciencia:${g.keys.join(",")}`, kind: "CIENCIA", month: g.first.slice(0, 7), amount: Dec.of(g.total).toFixed(2),
+      text: `${clean(g.issuer)}: ${g.n === 1 ? "NF-e nº" : `${g.n} NF-e (nº`} ${g.numbers.slice(0, 6).join(", ")}${g.numbers.length > 6 ? "…" : ""}${g.n === 1 ? "" : ")"}, total ${brl(g.total)}` });
   }
 }
 

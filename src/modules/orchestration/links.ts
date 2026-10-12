@@ -130,9 +130,9 @@ export const LINKS: Link<LinkDeps>[] = [
   },
   {
     id: "relacionamento-pedido",
-    on: ["ACCOUNTING_BATCH_POSTED", "BANK_STATEMENT_RECEIVED", "NFSE_BATCH_RECEIVED", "PENDING_ITEM_CREATED", "OPENING_BALANCES_IMPORTED", "CHART_OF_ACCOUNTS_DEFINED", "ACCOUNTING_CLOSING_COMPLETED", "ACCOUNTING_RULES_APPROVED"],
+    on: ["ACCOUNTING_BATCH_POSTED", "BANK_STATEMENT_RECEIVED", "NFSE_BATCH_RECEIVED", "DFE_BATCH_RECEIVED", "PENDING_ITEM_CREATED", "OPENING_BALANCES_IMPORTED", "CHART_OF_ACCOUNTS_DEFINED", "ACCOUNTING_CLOSING_COMPLETED", "ACCOUNTING_RULES_APPROVED"],
     agent: "relationship",
-    does: "Junta num pedido só ao cliente o que falta: extratos, comprovantes, notas esperadas e esclarecimentos",
+    does: "Junta num pedido só ao cliente o que falta: extratos, comprovantes, notas esperadas, ciência das NF-e em resumo e esclarecimentos",
     when: (e) => Boolean(e.entity_id),
     run: async ({ pool, tenantId, entityId, deps }) => {
       const r = await prepareClientRequest(pool, tenantId, entityId!, today(deps));

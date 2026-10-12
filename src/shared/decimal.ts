@@ -43,6 +43,7 @@ export class Dec {
   gt(o: Dec | string) { return this.cmp(o) > 0; }
   lte(o: Dec | string) { return this.cmp(o) <= 0; }
   isZero() { return this.raw === 0n; }
+  abs(): Dec { return this.raw < 0n ? new Dec(-this.raw) : this; }
   static min(a: Dec, b: Dec) { return a.cmp(b) <= 0 ? a : b; }
   static max(a: Dec, b: Dec) { return a.cmp(b) >= 0 ? a : b; }
 
