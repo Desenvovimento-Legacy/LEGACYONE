@@ -51,6 +51,18 @@ export const BANK_STANDARD_RULE = "extrato-padrao@1";
  * pagamento passa a baixar Fornecedores.
  */
 export const NO_NOTE_RULE = "sem-nota@1";
+/**
+ * Classificação do extrato (instrução do responsável técnico, 12/10/2026):
+ *  1. tudo que é do sócio (pagamento ou recebimento que cita o sócio) vai em
+ *     ADIANTAMENTO A SÓCIOS (conta criada no ativo circulante se não existir);
+ *  2. pessoa/MEI/PJ com conta própria no plano (conta com o nome dela): o
+ *     movimento vai nessa conta;
+ *  3. pagamento a fornecedor maior que as notas em aberto dele: as notas são
+ *     quitadas e a diferença (até 20% do valor das notas) vai em juros e multas.
+ */
+export const CLASSIFY_RULE = "classificacao-extrato@1";
+/** Diferença máxima (fração das notas em aberto) tratada como juros e multas. */
+export const OVERPAY_TOLERANCE = "0.20";
 const PRODUCER: Producer = { kind: "engine", name: "ledger", version: "0.1.0" };
 export const LEDGER_ENGINE: Actor = { kind: "AGENT", id: "ledger" };
 
@@ -89,7 +101,9 @@ export function federalItemAccount(code: string | null, description: string | nu
 
 interface Ctx {
   tx: PoolClient; entityId: string; start: string; actor: Actor; partners?: PartnerIndex; locked: Set<string>;
-  revenueRule: boolean; bankStdRule: boolean; noNoteRule: boolean; cfg: ChartConfig; acc: (r: Role) => string;
+  revenueRule: boolean; bankStdRule: boolean; noNoteRule: boolean; classifyRule: boolean; cfg: ChartConfig; acc: (r: Role) => string;
+  /** Contas com nome de pessoa/empresa (regra de classificação), carregadas uma vez. */
+  named?: { code: string; words: string[]; name: string }[];
   /** 1ª passada do extrato: baixas parciais esperam, para os valores exatos casarem antes. */
   deferPartial?: boolean;
 }
@@ -108,7 +122,7 @@ const compOf = (date: string) => `${date.slice(0, 7)}-01`;
 async function makeCtx(tx: PoolClient, entityId: string, start: string, actor: Actor): Promise<Ctx> {
   const cfg = await chartConfig(tx, entityId);
   return { tx, entityId, start, actor, locked: await lockedCompetences(tx, entityId), revenueRule: await ruleApproved(tx, REVENUE_RETENTIONS_RULE),
-    bankStdRule: await ruleApproved(tx, BANK_STANDARD_RULE), noNoteRule: await ruleApproved(tx, NO_NOTE_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
+    bankStdRule: await ruleApproved(tx, BANK_STANDARD_RULE), noNoteRule: await ruleApproved(tx, NO_NOTE_RULE), classifyRule: await ruleApproved(tx, CLASSIFY_RULE), cfg, acc: (r) => roleAccount(cfg, r) };
 }
 
 async function ruleApproved(tx: PoolClient, ruleSet: string): Promise<boolean> {
@@ -380,7 +394,8 @@ async function nfseExpenses(ctx: Ctx, s: Stats, pending: PendingTaken[]) {
 interface OpenNote { id: string; number: string | null; name: string | null; doc: string | null; issued: string; net: string }
 type Why = { why: string; hypotheses: string[]; soft?: boolean; partnerDoc?: string; partnerName?: string | null };
 /** `parts`: baixa parcial — quanto do movimento vai para cada nota (FIFO); sem `parts`, cada nota é quitada pelo saldo. */
-type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean; parts?: { note: OpenNote; amount: string }[] } | Why | null;
+/** `extra`: pago a maior que as notas (juros e multas, regra de classificação). */
+type NoteMatch = { notes: OpenNote[]; who: IdentifiedPartner | null; grouped: boolean; parts?: { note: OpenNote; amount: string }[]; extra?: string } | Why | null;
 
 /**
  * NFS-e (tomadas ou emitidas) já contabilizadas, ainda sem quitação no extrato, de 120 dias antes a 60 dias
@@ -462,6 +477,10 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
       rest = rest.sub(take);
     }
     return { notes: parts.map((p) => p.note), who, grouped: true, parts };
+  }
+  // pago a maior que as notas do fornecedor: diferença pequena é juros e multas (regra de classificação)
+  if (role === "TOMADA" && ctx.classifyRule && mine.length && open.cmp(value) < 0 && Dec.of(value).sub(open).cmp(open.mul(OVERPAY_TOLERANCE)) <= 0) {
+    return { notes: mine, who, grouped: mine.length > 1, extra: Dec.of(value).sub(open).toFixed(2) };
   }
   return mine.length
     ? { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc}: valor não fecha com as notas em aberto (${mine.length} nota(s), ${brl(open.toFixed(2))})`, hypotheses: mine.slice(0, 5).map(label) }
@@ -596,6 +615,56 @@ async function bankKey(ctx: Ctx, txId: string): Promise<string> {
   return n ? `banco:${txId}:r${n}` : `banco:${txId}`;
 }
 
+/** ADIANTAMENTO A SÓCIOS: a conta do plano com esse nome ou, sem ela, criada em Outros Créditos (ou no Ativo Circulante). */
+async function partnerAdvanceAccount(ctx: Ctx): Promise<string | null> {
+  const accs = await ctx.tx.query<{ code: string; name: string; analytic: boolean; parent_code: string | null }>(
+    "SELECT DISTINCT ON (code) code, name, analytic, parent_code FROM chart_account WHERE entity_id = $1 AND valid_to IS NULL ORDER BY code, valid_from DESC",
+    [ctx.entityId],
+  );
+  const n = (x: string) => normalize(x).replace(/[^A-Z ]/g, " ").replace(/\s+/g, " ").trim();
+  const hit = accs.rows.find((a) => a.analytic && /\bADIANT\w*\b.*\bSOCIO/.test(n(a.name)));
+  if (hit) return hit.code;
+  const byCode = new Map(accs.rows.map((a) => [a.code, a]));
+  const underCurrent = (a: { parent_code: string | null }) => {
+    for (let p = a.parent_code; p; p = byCode.get(p)?.parent_code ?? null) if (n(byCode.get(p)?.name ?? "") === "ATIVO CIRCULANTE") return true;
+    return false;
+  };
+  const group = accs.rows.find((a) => !a.analytic && ["OUTROS CREDITOS", "CREDITOS DIVERSOS", "OUTRAS CONTAS A RECEBER", "DEMAIS CREDITOS", "ADIANTAMENTOS"].includes(n(a.name)) && underCurrent(a))
+    ?? accs.rows.find((a) => !a.analytic && n(a.name) === "ATIVO CIRCULANTE");
+  if (!group) return null;
+  const a = await addAccount(ctx.tx, { entityId: ctx.entityId, parent: group.code, name: "ADIANTAMENTO A SÓCIOS", validFrom: ctx.start, source: "PADRAO_ESCRITORIO" }, ctx.actor);
+  return a.code;
+}
+
+const NAME_STOP = new Set(["LTDA", "ME", "EPP", "EIRELI", "SA", "SLU", "DE", "DA", "DO", "DOS", "DAS", "E", "CIA", "MEI", "FORNECEDOR", "FORNECEDORES", "CLIENTE", "CLIENTES",
+  "A", "PAGAR", "RECEBER", "CONTA", "CONTAS", "ADIANTAMENTO", "ADIANTAMENTOS", "EMPRESTIMO", "EMPRESTIMOS"]);
+/**
+ * Contas analíticas com nome de pessoa ou empresa (ex.: fornecedor com conta
+ * própria vinda do plano do escritório anterior) que o histórico do banco cita:
+ * os dois primeiros nomes da conta (sem LTDA, ME, DE...) aparecem no histórico.
+ * Fora: contas de banco/aplicação e contas de resultado.
+ */
+async function namedAccounts(ctx: Ctx, memo: string): Promise<{ code: string; name: string }[]> {
+  if (!ctx.named) {
+    const r = await ctx.tx.query<{ code: string; name: string }>(
+      `SELECT DISTINCT ON (c.code) c.code, c.name FROM chart_account c
+        WHERE c.entity_id = $1 AND c.valid_to IS NULL AND c.analytic AND c.nature IN ('ATIVO', 'PASSIVO')
+          AND NOT EXISTS (SELECT 1 FROM bank_account b WHERE b.ledger_account_id = c.id)
+        ORDER BY c.code, c.valid_from DESC`,
+      [ctx.entityId],
+    );
+    const roots = [ctx.cfg.roles.BANCOS, ctx.cfg.roles.APLICACOES].filter(Boolean) as string[];
+    const roleCodes = new Set(Object.values(ctx.cfg.roles).filter(Boolean) as string[]);
+    ctx.named = r.rows
+      .filter((a) => !roleCodes.has(a.code) && !roots.some((p) => a.code === p || a.code.startsWith(`${p}.`)))
+      .filter((a) => !/\b(A RECOLHER|A PAGAR|A RECUPERAR|A COMPENSAR|PROVISAO|DEPRECIACAO|CAIXA)\b/.test(normalize(a.name)))
+      .map((a) => ({ code: a.code, name: a.name, words: normalize(a.name).replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !NAME_STOP.has(w) && !/\d/.test(w)) }))
+      .filter((a) => a.words.length >= 2);
+  }
+  const t = ` ${normalize(memo).replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ")} `;
+  return ctx.named.filter((a) => t.includes(` ${a.words[0]} `) && t.includes(` ${a.words[1]} `)).map((a) => ({ code: a.code, name: a.name }));
+}
+
 /** Conta analítica Outras Despesas Operacionais; sem ela, criada no grupo de mesmo nome, no padrão do plano. */
 async function otherExpensesAccount(ctx: Ctx): Promise<string | null> {
   if (ctx.cfg.roles.OUTRAS_DESPESAS) return ctx.cfg.roles.OUTRAS_DESPESAS;
@@ -709,14 +778,19 @@ async function bankPass(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         const ns = tp.notes;
         const ps = settle(tp);
         const partial = ps.some(isPartial);
-        const r = await post(ctx, s, { ...base, confidence: "1",
-          history: partial
+        const extra = tp.extra && Dec.of(tp.extra).gt("0") ? tp.extra : null;
+        const r = await post(ctx, s, { ...base, confidence: "1", rule: extra ? CLASSIFY_RULE : undefined,
+          history: (partial
             ? `Pagamento parcial a ${ns[0]!.name ?? "fornecedor"} (NFS-e nº ${nums(ps)}) — ${memo}`
             : ns.length === 1
               ? `Pagamento da NFS-e nº ${ns[0]!.number ?? "—"} (${ns[0]!.name ?? "fornecedor"}) — ${memo}`
-              : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`,
+              : `Pagamento de ${ns.length} NFS-e de ${ns[0]!.name ?? "fornecedor"} (nº ${ns.map((n) => n.number ?? "—").join(", ")}) — ${memo}`) + (extra ? ` · juros e multas ${brl(extra)}` : ""),
           evidence: [...base.evidence, ...ns.map((n) => ({ kind: "nfse_document", id: n.id }))],
-          lines: [...ps.map((p): EntryLine => ({ account: ctx.acc("FORNECEDORES"), debit: p.amount, history: `NFS-e nº ${p.note.number ?? "—"}${isPartial(p) ? " (parcial)" : ""}`, dimensions: partner(p.note.doc, p.note.name) })), { account: m.account_code, credit: value }] });
+          lines: [
+            ...ps.map((p): EntryLine => ({ account: ctx.acc("FORNECEDORES"), debit: p.amount, history: `NFS-e nº ${p.note.number ?? "—"}${isPartial(p) ? " (parcial)" : ""}`, dimensions: partner(p.note.doc, p.note.name) })),
+            ...(extra ? [{ account: ctx.acc("JUROS_MORA"), debit: extra, history: "Juros e multas (pago a maior que as notas)", dimensions: partner(ns[0]!.doc, ns[0]!.name) } as EntryLine] : []),
+            { account: m.account_code, credit: value },
+          ] });
         if (r) for (const p of ps) await link(m.id, r.id, isPartial(p) ? "NFSE_TOMADA_PARCIAL" : "NFSE_TOMADA", p.note.id, p.amount);
         if (ns[0]!.doc && (!tp.who || tp.who.via === "NOME") && !tp.grouped) await learnAlias(ctx.tx, ctx.entityId, ns[0]!.doc, "FORNECEDOR", memo, m.id, m.posted_on, ctx.actor);
         continue;
@@ -769,6 +843,32 @@ async function bankPass(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         if (r) await link(m.id, r.id, "REGRA", BANK_STANDARD_RULE);
         continue;
       }
+    }
+    // Regra de classificação: sócio → adiantamento a sócios; pessoa/empresa com conta própria → a conta dela
+    if (ctx.classifyRule && !kind && mentionsAny(memo, socios) && !NOT_EXPENSE.test(normalize(memo))) {
+      const name = socios.find((n) => mentionsAny(memo, [n]))!;
+      const acc = await partnerAdvanceAccount(ctx);
+      if (acc) {
+        const lines: EntryLine[] = out
+          ? [{ account: acc, debit: value, dimensions: { socio: name } }, { account: m.account_code, credit: value }]
+          : [{ account: m.account_code, debit: value }, { account: acc, credit: value, dimensions: { socio: name } }];
+        const r = await post(ctx, s, { ...base, history: `${out ? "Adiantamento ao sócio" : "Devolução de adiantamento pelo sócio"} ${name} — ${memo}`, rule: `${CLASSIFY_RULE}:socio`, confidence: "1", lines });
+        if (r) await link(m.id, r.id, "REGRA", `${CLASSIFY_RULE}:socio`);
+        continue;
+      }
+    }
+    if (ctx.classifyRule && !kind && !NOT_EXPENSE.test(normalize(memo))) {
+      const named = await namedAccounts(ctx, memo);
+      if (named.length === 1) {
+        const a = named[0]!;
+        const lines: EntryLine[] = out
+          ? [{ account: a.code, debit: value }, { account: m.account_code, credit: value }]
+          : [{ account: m.account_code, debit: value }, { account: a.code, credit: value }];
+        const r = await post(ctx, s, { ...base, history: `${out ? "Pagamento a" : "Recebimento de"} ${a.name} (conta própria no plano) — ${memo}`, rule: `${CLASSIFY_RULE}:conta-nome`, confidence: "1", lines });
+        if (r) await link(m.id, r.id, "REGRA", `${CLASSIFY_RULE}:conta-nome`);
+        continue;
+      }
+      if (named.length > 1) notes.push({ why: `O histórico serve para mais de uma conta com nome no plano`, hypotheses: named.map((n) => `${n.code} ${n.name}`) });
     }
     // Pagamento sem nota fiscal → Outras Despesas Operacionais (regra aprovada)
     if (out && ctx.noNoteRule && !kind && notes.every((n) => n.soft) && !NOT_EXPENSE.test(normalize(memo)) && !mentionsAny(memo, socios)) {
@@ -955,7 +1055,7 @@ export async function classifySupplier(
 /** Aprovação de regra de contabilização (decisão de pessoa); em seguida contabiliza as empresas. */
 export async function approveAccountingRule(pool: Pool, tenantId: string, ruleSet: string, actor: Actor) {
   if (actor.kind !== "USER") throw new LedgerError("Só uma pessoa aprova regra de contabilização");
-  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE, BANK_STANDARD_RULE, NO_NOTE_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
+  if (![TAKEN_SERVICES_RULE, REVENUE_RETENTIONS_RULE, BANK_STANDARD_RULE, NO_NOTE_RULE, CLASSIFY_RULE].includes(ruleSet)) throw new LedgerError("Regra de contabilização desconhecida");
   await withTenant(pool, tenantId, async (tx) => {
     const ins = await tx.query(
       "INSERT INTO accounting_rule_approval (id, tenant_id, rule_set, approved_by) VALUES ($1, current_tenant(), $2, $3) ON CONFLICT DO NOTHING",
