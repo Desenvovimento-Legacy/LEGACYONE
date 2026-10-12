@@ -58,11 +58,15 @@ export const NO_NOTE_RULE = "sem-nota@1";
  *  2. pessoa/MEI/PJ com conta própria no plano (conta com o nome dela): o
  *     movimento vai nessa conta;
  *  3. pagamento a fornecedor maior que as notas em aberto dele: as notas são
- *     quitadas e a diferença (até 20% do valor das notas) vai em juros e multas.
+ *     quitadas e a diferença (até 20% do valor das notas) vai em juros e multas;
+ *  4. entrada de até R$ 1,00 sem nota nem regra (PIX de teste de conta) vai em
+ *     OUTRAS RECEITAS (conta criada no grupo de outras receitas se não existir).
  */
 export const CLASSIFY_RULE = "classificacao-extrato@1";
 /** Diferença máxima (fração das notas em aberto) tratada como juros e multas. */
 export const OVERPAY_TOLERANCE = "0.20";
+/** Entrada até este valor, sem nota nem regra, vai em outras receitas. */
+export const SMALL_INFLOW = "1.00";
 const PRODUCER: Producer = { kind: "engine", name: "ledger", version: "0.1.0" };
 export const LEDGER_ENGINE: Actor = { kind: "AGENT", id: "ledger" };
 
@@ -643,6 +647,27 @@ async function partnerAdvanceAccount(ctx: Ctx): Promise<string | null> {
   return a.code;
 }
 
+/** OUTRAS RECEITAS (analítica) do plano; sem ela, criada no grupo de outras receitas, ao lado das contas que já existem nele. */
+async function otherRevenueAccount(ctx: Ctx): Promise<string | null> {
+  const accs = await ctx.tx.query<{ code: string; name: string; analytic: boolean; parent_code: string | null; nature: string }>(
+    "SELECT DISTINCT ON (code) code, name, analytic, parent_code, nature FROM chart_account WHERE entity_id = $1 AND valid_to IS NULL ORDER BY code, valid_from DESC",
+    [ctx.entityId],
+  );
+  const n = (x: string) => normalize(x).replace(/[^A-Z ]/g, " ").replace(/\s+/g, " ").trim();
+  const rev = accs.rows.filter((a) => a.nature === "RECEITA");
+  const hit = rev.find((a) => a.analytic && ["OUTRAS RECEITAS", "OUTRAS RECEITAS OPERACIONAIS", "RECEITAS DIVERSAS"].includes(n(a.name)));
+  if (hit) return hit.code;
+  const group = ["OUTRAS RECEITAS OPERACIONAIS", "OUTRAS RECEITAS", "RECEITAS FINANCEIRAS"]
+    .map((g) => rev.filter((a) => !a.analytic && n(a.name) === g).sort((a, b) => b.code.length - a.code.length)[0])
+    .find(Boolean);
+  if (!group) return null;
+  // no nível das contas que já existem no grupo (pai da primeira analítica dele); senão, no próprio grupo
+  const sibling = rev.find((a) => a.analytic && a.code.startsWith(`${group.code}.`));
+  const parent = sibling?.parent_code ?? group.code;
+  const a = await addAccount(ctx.tx, { entityId: ctx.entityId, parent, name: "OUTRAS RECEITAS", validFrom: ctx.start, source: "PADRAO_ESCRITORIO" }, ctx.actor);
+  return a.code;
+}
+
 const NAME_STOP = new Set(["LTDA", "ME", "EPP", "EIRELI", "SA", "SLU", "DE", "DA", "DO", "DOS", "DAS", "E", "CIA", "MEI", "FORNECEDOR", "FORNECEDORES", "CLIENTE", "CLIENTES",
   "A", "PAGAR", "RECEBER", "CONTA", "CONTAS", "ADIANTAMENTO", "ADIANTAMENTOS", "EMPRESTIMO", "EMPRESTIMOS"]);
 /**
@@ -876,6 +901,16 @@ async function bankPass(ctx: Ctx, s: Stats, pending: PendingMovement[]) {
         continue;
       }
       if (named.length > 1) notes.push({ why: `O histórico serve para mais de uma conta com nome no plano`, hypotheses: named.map((n) => `${n.code} ${n.name}`) });
+    }
+    // Entrada mínima (PIX de teste de conta) → outras receitas
+    if (ctx.classifyRule && !out && !kind && Dec.of(value).cmp(SMALL_INFLOW) <= 0 && !mentionsAny(memo, socios)) {
+      const acc = await otherRevenueAccount(ctx);
+      if (acc) {
+        const r = await post(ctx, s, { ...base, history: `Outras receitas (entrada de ${brl(value)} sem documento) — ${memo}`, rule: `${CLASSIFY_RULE}:entrada-minima`, confidence: "1",
+          lines: [{ account: m.account_code, debit: value }, { account: acc, credit: value }] });
+        if (r) await link(m.id, r.id, "REGRA", `${CLASSIFY_RULE}:entrada-minima`);
+        continue;
+      }
     }
     // Pagamento sem nota fiscal → Outras Despesas Operacionais (regra aprovada)
     if (out && ctx.noNoteRule && !kind && notes.every((n) => n.soft) && !NOT_EXPENSE.test(normalize(memo)) && !mentionsAny(memo, socios)) {

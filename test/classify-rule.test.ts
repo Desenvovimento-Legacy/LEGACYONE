@@ -45,11 +45,12 @@ describe("classificação do extrato (regra do responsável técnico)", () => {
       ["2", "20260705", "-4400,98", "PAGAMENTOS A FORNECEDORES DANIELLE DE BARROS SANTOS 067.060.569-79"],
       ["3", "20260720", "-1032,50", `SISPAG FORNECEDOR ${DELTA}`], // nota de 1.000 paga com 32,50 de juros/multa
       ["4", "20260722", "-5000,00", `SISPAG FORNECEDOR ${DELTA}`], // muito acima: não é juros, fica pendente
+      ["5", "20260725", "0,01", "PIX RECEBIDO REM: LINKANA"], // PIX de teste de conta: outras receitas
     ]), "latin1") }, LUAN);
 
     // sem a regra: tudo espera
     await runAutoPosting(appPool, t, entityId);
-    expect((await pendingMovements(appPool, t, entityId)).length).toBe(4);
+    expect((await pendingMovements(appPool, t, entityId)).length).toBe(5);
     await expect(approveAccountingRule(appPool, t, CLASSIFY_RULE, { kind: "AGENT", id: "ledger" })).rejects.toThrow(/pessoa/);
     await approveAccountingRule(appPool, t, CLASSIFY_RULE, LUAN);
 
@@ -62,7 +63,8 @@ describe("classificação do extrato (regra do responsável técnico)", () => {
           WHERE e.entity_id = $1 AND e.origin = 'BANCO' GROUP BY e.id, e.history, e.entry_date ORDER BY e.entry_date`,
         [entityId],
       );
-      expect(e.rows).toHaveLength(3);
+      expect(e.rows).toHaveLength(4);
+      expect(e.rows[3]!.lines.find((l) => l.credit === "0.01")).toMatchObject({ name: "OUTRAS RECEITAS" });
       expect(e.rows[0]!.history).toMatch(/^Adiantamento ao sócio JOAO MARIA/);
       expect(e.rows[0]!.lines[0]).toMatchObject({ name: "ADIANTAMENTO A SÓCIOS", debit: "15000.00" });
       expect(e.rows[0]!.lines[0]!.code.startsWith("1.1.4.")).toBe(true); // criada em Outros Créditos
