@@ -143,7 +143,13 @@ export function identifyPartner(index: PartnerIndex, memo: string, role: Partner
     ["NOME", (p) => p.key !== null && text.includes(` ${p.key} `)],
   ];
   for (const [via, test] of levels) {
-    const hits = list.filter(test);
+    let hits = list.filter(test);
+    // pelo nome: prenome + sobrenome citados vence uma palavra solta ("DANIELLE BARROS" × "SANTOS")
+    if (via === "NOME" && hits.length > 1) {
+      const size = (p: IndexedPartner) => (p.key ?? "").split(" ").length;
+      const max = Math.max(...hits.map(size));
+      hits = hits.filter((h) => size(h) === max);
+    }
     if (hits.length === 1) return { id: hits[0]!.id, doc: hits[0]!.doc, name: hits[0]!.name, via };
     if (hits.length > 1) return { ambiguous: hits.map((h) => h.name ?? h.doc) };
   }

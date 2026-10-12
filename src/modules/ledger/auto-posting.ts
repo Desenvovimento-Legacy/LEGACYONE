@@ -446,7 +446,10 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
   const label = (n: OpenNote) => `NFS-e ${n.number ?? "—"} de ${n.issued} (${n.name ?? "—"}) ${brl(n.net)}`;
   const kind = role === "TOMADA" ? "tomadas" : "emitidas";
   const byValue = all.filter((n) => Dec.of(n.net).cmp(value) === 0);
-  if (byValue.length) {
+  // parceiro reconhecido pelo CNPJ/apelido sem nota dele com esse valor: a nota de mesmo valor de outro
+  // parceiro não serve (nunca força); segue pelas notas do próprio parceiro (regra de classificação)
+  const trustWho = Boolean(ctx.classifyRule && who && who.via !== "NOME" && !byValue.some((n) => n.doc === who.doc));
+  if (byValue.length && !trustWho) {
     if (who) {
       const mine = byValue.filter((n) => n.doc === who.doc);
       // mesmo parceiro, mesmo valor: quita a nota mais antiga em aberto (FIFO)
@@ -481,6 +484,10 @@ async function matchNotes(ctx: Ctx, m: Movement, role: "TOMADA" | "PRESTADA"): P
   // pago a maior que as notas do fornecedor: diferença pequena é juros e multas (regra de classificação)
   if (role === "TOMADA" && ctx.classifyRule && mine.length && open.cmp(value) < 0 && Dec.of(value).sub(open).cmp(open.mul(OVERPAY_TOLERANCE)) <= 0) {
     return { notes: mine, who, grouped: mine.length > 1, extra: Dec.of(value).sub(open).toFixed(2) };
+  }
+  // pago muito acima das notas em aberto e sem outra nota dele a lançar: pagamento sem nota (regra de classificação)
+  if (role === "TOMADA" && ctx.classifyRule && mine.length && open.cmp(value) < 0 && !(await partnerHasNotes(ctx, who.doc, m.posted_on))) {
+    return { why: `Pagamento a ${who.name ?? who.doc} acima das notas em aberto (${brl(open.toFixed(2))}): tratado como pagamento sem nota`, hypotheses: [], soft: true, partnerDoc: who.doc, partnerName: who.name };
   }
   return mine.length
     ? { why: `${role === "TOMADA" ? "Pagamento a" : "Recebimento de"} ${who.name ?? who.doc}: valor não fecha com as notas em aberto (${mine.length} nota(s), ${brl(open.toFixed(2))})`, hypotheses: mine.slice(0, 5).map(label) }
