@@ -11,6 +11,7 @@ import { PGDAS_PDF_PARSER } from "../integrations/integra-contador/pgdas-pdf.js"
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
 import { runAutoPayments } from "../modules/federal/auto-payments.js";
+import { resolvePendingItem } from "../platform/pending/pending.js";
 import { GuideDispatchError, IssDueError, readEntityNfseTaxes, refreshWithholdings, registerGuideSent, setMunicipalIssDue, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
@@ -513,6 +514,20 @@ export function createWebServer(deps: WebDeps) {
           if (err instanceof GuideDispatchError) json(res, 409, { erro: err.message });
           else throw err;
         }
+        return;
+      }
+      // POST /api/pendencia/:id/resolver — pessoa dá a pendência do escritório por resolvida ou dispensada (com o motivo).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "pendencia" && parts[3] === "resolver") {
+        if (guard("confirmar")) return;
+        const b = (await readJson(req)) as { motivo?: string; dispensar?: boolean };
+        const why = String(b.motivo ?? "").trim();
+        if (why.length < 3) return json(res, 400, { erro: "Escreva o motivo (fica na auditoria)" });
+        await withTenant(deps.appPool, deps.tenantId, async (tx) => {
+          const p = await tx.query("SELECT 1 FROM pending_item WHERE id = $1 AND status = 'OPEN' AND responsible_source = 'OFFICE'", [parts[2]]);
+          if (!p.rowCount) return;
+          await resolvePendingItem(tx, { id: parts[2]!, resolution: why, waived: Boolean(b.dispensar) }, actor);
+        });
+        json(res, 200, { ok: true });
         return;
       }
       // POST /api/iss-vencimento — pessoa informa o vencimento do ISS retido de um município (com o fundamento).

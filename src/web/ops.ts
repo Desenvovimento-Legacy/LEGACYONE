@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { guidesNeedingAttention } from "../modules/tax/guides.js";
-import { withholdingsNeedingAttention } from "../modules/fiscal/withholdings.js";
+import { withholdingsNeedingAttention, ISS_DUE_HINTS } from "../modules/fiscal/withholdings.js";
 import { powersExpiringSoon } from "../modules/onboarding/powers.js";
 import { EVENT_LABEL, LINKS } from "../modules/orchestration/links.js";
 import { MAX_ATTEMPTS } from "../platform/orchestrator/orchestrator.js";
@@ -472,6 +472,8 @@ export async function humanQueue(tx: PoolClient) {
       title: p.required_information,
       impact: p.impact,
       since: p.created_at.toISOString(),
+      // ISS retido: município e proposta de prazo (fonte oficial), para registrar ali mesmo
+      iss: p.type.startsWith("ISS_DUE_") ? { ibge: p.type.slice(8), name: (/retido em (.+?) \(IBGE/.exec(p.required_information)?.[1]) ?? p.type.slice(8), hint: ISS_DUE_HINTS[p.type.slice(8)] ?? null } : null,
     })),
     ...review.rows.map((c) => ({
       kind: "approve",

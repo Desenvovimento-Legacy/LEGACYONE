@@ -32,7 +32,7 @@ describe("ISS retido nas NFS-e tomadas", () => {
     await withTenant(appPool, t, async (tx) => {
       const o = await withholdingsOverview(tx, entityId, "2026-01-05");
       expect(o.rows).toEqual([expect.objectContaining({ competence: "2025-12-01", tax: "ISS:3550308", status: "PRAZO_A_APROVAR", withheld: "25.00", due: null })]);
-      expect(o.issMissingDue).toEqual([{ ibge: "3550308", name: "3550308" }]);
+      expect(o.issMissingDue).toEqual([{ ibge: "3550308", name: "3550308", hint: expect.objectContaining({ day: 10 }) }]);
       const p = await tx.query("SELECT type, responsible_source FROM pending_item WHERE entity_id = $1 AND status = 'OPEN'", [entityId]);
       expect(p.rows).toEqual([{ type: "ISS_DUE_3550308", responsible_source: "OFFICE" }]);
     });

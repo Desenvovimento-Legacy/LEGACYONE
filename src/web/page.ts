@@ -254,8 +254,43 @@ function queueItemHtml(q) {
   if (q.kind === "approve") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><button class="warn" data-act="approve" data-id="' + q.id + '">Aprovar conclusão</button></div></div>';
   }
-  return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p></div>';
+  if (q.kind === "pending" && q.iss) {
+    var h = q.iss.hint || {};
+    var g = q.iss.ibge;
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p>' + (q.iss.hint ? '<p class="mut" style="font-size:12px">Proposta pela fonte oficial: ' + esc(h.basis) + '. Confira e registre.</p>' : '<p class="mut" style="font-size:12px">Veja o vencimento na guia (DAM) que vocês emitem para esse município ou no código tributário municipal.</p>') +
+      '<div class="form-row only-aprovar" style="gap:6px"><label>dia<input id="iss-day-' + g + '" inputmode="numeric" style="width:50px" value="' + (h.day || "") + '"></label>' +
+      '<label>dia não útil<select id="iss-adj-' + g + '"><option value="PREVIOUS_BUSINESS_DAY"' + (h.adjust === "PREVIOUS_BUSINESS_DAY" ? " selected" : "") + '>antecipa</option><option value="NEXT_BUSINESS_DAY"' + (h.adjust === "NEXT_BUSINESS_DAY" ? " selected" : "") + '>prorroga</option><option value="NONE"' + (h.adjust === "NONE" ? " selected" : "") + '>não muda</option></select></label>' +
+      '<input id="iss-law-' + g + '" placeholder="fundamento (lei/decreto municipal)" style="width:300px" value="' + esc(h.basis || "") + '">' +
+      '<button class="warn" data-issq="' + g + '" data-name="' + esc(q.iss.name) + '">Registrar prazo</button></div></div>';
+  }
+  var gap = /^DFE_NSU_GAP_/.test(q.type);
+  var alert = /^SIMPLES_(SUBLIMIT|LIMIT)_EXCESS_/.test(q.type);
+  var acts = q.kind === "pending" ? '<div class="form-row only-confirmar" style="gap:8px">' +
+    (gap ? '<a class="nav" style="display:inline-flex" href="#/documentos">Enviar os XML (Documentos)</a><button class="ghost" data-pres="' + q.id + '" data-why="Não há XML do outro sistema para esse intervalo" data-waive="1">Dispensar: não há esses XML</button>'
+      : alert ? '<button class="warn" data-pres="' + q.id + '" data-why="Ciente: cliente orientado sobre o sublimite/limite do Simples">Ciente: cliente orientado</button>'
+      : '<button class="ghost" data-pres="' + q.id + '">Marcar como resolvida</button>') + '</div>' : '';
+  return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p>' + acts + '</div>';
 }
+document.addEventListener("click", function (ev) {
+  var t = ev.target && ev.target.closest ? ev.target : null;
+  if (!t) return;
+  var pr = t.closest("[data-pres]");
+  if (pr) {
+    var why = pr.getAttribute("data-why") || window.prompt("Como foi resolvida? (fica na auditoria)");
+    if (!why) return;
+    pr.disabled = true;
+    post("/api/pendencia/" + pr.getAttribute("data-pres") + "/resolver", "confirmar", { motivo: why, dispensar: pr.getAttribute("data-waive") === "1" })
+      .then(function () { toast("Pendência resolvida."); route(); }).catch(function (e) { toast(e.message); pr.disabled = false; });
+    return;
+  }
+  var iq = t.closest("[data-issq]");
+  if (iq) {
+    var g = iq.getAttribute("data-issq");
+    iq.disabled = true;
+    post("/api/iss-vencimento", "aprovar", { municipio: g, nome: iq.getAttribute("data-name"), dia: Number($("iss-day-" + g).value), ajuste: $("iss-adj-" + g).value, fundamento: $("iss-law-" + g).value })
+      .then(function (x) { toast("Prazo registrado. " + x.changed + " situação(ões) atualizada(s)."); route(); }).catch(function (e) { toast(e.message); iq.disabled = false; });
+  }
+});
 
 function eventsHtml(evs) {
   if (!evs.length) return '<div class="empty">Nenhum evento ainda.</div>';
@@ -936,9 +971,9 @@ function loadRetencoes(id) {
     }).join("");
     var miss = (r.issMissingDue || []).map(function (m) {
       return '<div class="form-row only-aprovar" style="margin:4px 0;background:var(--amber-bg);padding:8px;border-radius:6px"><b>ISS retido em ' + esc(m.name) + '</b>' +
-        '<label>vence no dia<input id="iss-day-' + m.ibge + '" inputmode="numeric" style="width:50px"></label>' +
-        '<label>se não for dia útil<select id="iss-adj-' + m.ibge + '"><option value="NEXT_BUSINESS_DAY">prorroga</option><option value="PREVIOUS_BUSINESS_DAY">antecipa</option><option value="NONE">não muda</option></select></label>' +
-        '<label>fundamento<input id="iss-law-' + m.ibge + '" placeholder="ex.: Lei Complementar municipal nº …, art. …" style="width:280px"></label>' +
+        '<label>vence no dia<input id="iss-day-' + m.ibge + '" inputmode="numeric" style="width:50px" value="' + (m.hint ? m.hint.day : "") + '"></label>' +
+        '<label>se não for dia útil<select id="iss-adj-' + m.ibge + '"><option value="PREVIOUS_BUSINESS_DAY">antecipa</option><option value="NEXT_BUSINESS_DAY"' + (m.hint && m.hint.adjust === "NEXT_BUSINESS_DAY" ? " selected" : "") + '>prorroga</option><option value="NONE">não muda</option></select></label>' +
+        '<label>fundamento<input id="iss-law-' + m.ibge + '" placeholder="ex.: Lei Complementar municipal nº …, art. …" style="width:280px" value="' + esc(m.hint ? m.hint.basis : "") + '"></label>' +
         '<button class="warn" data-iss="' + m.ibge + '" data-name="' + esc(m.name) + '">Registrar prazo</button></div>';
     }).join("");
     box.innerHTML = '<h2>Retenções nas NFS-e tomadas</h2>' + (miss ? '<div style="margin-bottom:8px"><div class="mut" style="font-size:12px">Cada município tem o próprio vencimento do ISS retido. Informe uma vez (vale para todas as empresas) e a IARIS acompanha o prazo e procura o recolhimento no extrato:</div>' + miss + '</div>' : '') +

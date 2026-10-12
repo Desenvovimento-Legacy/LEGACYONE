@@ -232,6 +232,14 @@ export async function municipalIssDue(tx: PoolClient): Promise<MunicipalIssDue[]
 
 export class IssDueError extends Error {}
 
+/**
+ * Proposta de prazo do ISS retido já pesquisada (fonte oficial do município).
+ * Só preenche o formulário: quem registra o prazo continua sendo a pessoa.
+ */
+export const ISS_DUE_HINTS: Record<string, { day: number; adjust: DueAdjust; basis: string }> = {
+  "3550308": { day: 10, adjust: "PREVIOUS_BUSINESS_DAY", basis: "Prefeitura de São Paulo: ISS retido vence no dia 10 do mês seguinte (IN SF/SUREM nº 08/2011)" },
+};
+
 export class GuideDispatchError extends Error {}
 
 /**
@@ -468,7 +476,7 @@ export async function withholdingsOverview(tx: PoolClient, entityId: string, tod
   rows.sort((a, b) => b.competence.localeCompare(a.competence));
   return {
     rows, taken, dataUntil: data_until, dueApproved: Boolean(dueSpec), paymentsCheckedAt: checked ? checked.toISOString() : null,
-    issMissingDue: [...missingDue.entries()].map(([ibge, name]) => ({ ibge, name })),
+    issMissingDue: [...missingDue.entries()].map(([ibge, name]) => ({ ibge, name, hint: ISS_DUE_HINTS[ibge] ?? null })),
   };
 }
 
