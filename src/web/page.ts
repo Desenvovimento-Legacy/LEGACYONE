@@ -765,7 +765,12 @@ function loadContabil(id, mes) {
     var banks = r.bank.map(function (b) {
       return '<tr><td>' + esc(b.label) + '</td><td class="mono">' + esc(b.ledger_code || "—") + '</td><td class="num">' + b.transactions + '</td><td>' + (b.first_on ? d(b.first_on) + ' a ' + d(b.last_on) : '—') + '</td><td class="num">' + (b.balance !== null ? brl(b.balance) + '<div class="mut" style="font-size:11px">' + (b.balance_date ? d(b.balance_date) : "") + '</div>' : '—') + '</td></tr>';
     }).join("");
-    h += '<div class="form-row only-confirmar" style="margin:4px 0 10px"><label>Extrato bancário (OFX)<input type="file" id="ctb-ofx" accept=".ofx,.OFX"></label><button class="ghost" data-act="ofx">Enviar extrato</button></div>';
+    var accOpts = r.bank.map(function (b) { return '<option value="' + b.id + '">' + esc(b.label) + '</option>'; }).join("");
+    h += '<div class="form-row only-confirmar" style="margin:4px 0 4px"><label>Extrato bancário (OFX, Excel, CSV ou PDF)<input type="file" id="ctb-ofx" accept=".ofx,.OFX,.xlsx,.csv,.pdf"></label>' +
+      '<label>conta<select id="ctb-acc"><option value="">a do arquivo</option>' + accOpts + '<option value="nova">outra (informar)</option></select></label>' +
+      '<span id="ctb-new" style="display:none;gap:6px"><input id="ctb-bk" placeholder="banco (ex.: 341)" style="width:110px"><input id="ctb-ag" placeholder="agência" style="width:90px"><input id="ctb-cc" placeholder="conta" style="width:120px"></span>' +
+      '<button class="ghost" data-act="ofx">Enviar extrato</button></div>' +
+      '<div class="mut" style="font-size:12px;margin-bottom:10px">PDF só entra quando o saldo fecha com os movimentos. Excel e CSV sem banco/conta no arquivo: escolha a conta. O mesmo período enviado em dois formatos não duplica.</div>';
     h += '<div class="scroll"><table><thead><tr><th>Conta bancária</th><th>Conta contábil</th><th class="num">Movimentos</th><th>Período</th><th class="num">Saldo no extrato</th></tr></thead><tbody>' + (banks || '<tr><td colspan="5" class="empty">Nenhum extrato recebido.</td></tr>') + '</tbody></table></div>';
     if (r.pending.length) {
       var opts = r.accounts.map(function (a) { return '<option value="' + esc(a.code) + '">' + esc(a.code + " " + a.name) + '</option>'; }).join("");
@@ -827,17 +832,21 @@ function loadContabil(id, mes) {
     }
     var bo = box.querySelector("[data-act=ofx]");
     if (bo) bo.addEventListener("click", function () {
-      var f = $("ctb-ofx").files[0]; if (!f) { toast("Escolha o arquivo OFX."); return; }
+      var f = $("ctb-ofx").files[0]; if (!f) { toast("Escolha o arquivo do extrato."); return; }
       if (f.size > 10 * 1024 * 1024) { toast("Extrato acima de 10 MB."); return; }
+      var sel = $("ctb-acc").value;
+      var extra = sel === "nova" ? { banco: $("ctb-bk").value.trim(), agencia: $("ctb-ag").value.trim(), numero: $("ctb-cc").value.trim() } : sel ? { conta: sel } : {};
       var fr = new FileReader();
       fr.onload = function () {
-        post("/api/empresa/" + id + "/extrato", "confirmar", { name: f.name, data: String(fr.result).split(",")[1] || "" }).then(function (x) {
+        post("/api/empresa/" + id + "/extrato", "confirmar", Object.assign({ name: f.name, data: String(fr.result).split(",")[1] || "" }, extra)).then(function (x) {
           toast(x.status === "REPETIDO" ? "Esse extrato já tinha sido enviado." : x.account + ": " + x.transactions + " movimento(s) novo(s)" + (x.duplicated ? ", " + x.duplicated + " já existiam" : "") + ".");
           return loadContabil(id);
         }).catch(function (e) { toast(e.message); });
       };
       fr.readAsDataURL(f);
     });
+    var ca = $("ctb-acc");
+    if (ca) ca.addEventListener("change", function () { $("ctb-new").style.display = ca.value === "nova" ? "inline-flex" : "none"; });
     var bra = box.querySelector("[data-act=br-aprovar]");
     if (bra) bra.addEventListener("click", function () {
       if (!window.confirm("Aprovar as regras padrão de extrato (aplicação, resgate, rendimento e tarifa)? Vale para todas as empresas e fica na auditoria em seu nome.")) return;

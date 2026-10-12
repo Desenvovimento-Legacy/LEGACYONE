@@ -901,13 +901,14 @@ export function createWebServer(deps: WebDeps) {
         }
         return;
       }
-      // POST /api/empresa/:id/extrato — extrato OFX enviado pela tela.
+      // POST /api/empresa/:id/extrato — extrato (OFX, Excel, CSV ou PDF) enviado pela tela; conta opcional quando o arquivo não diz.
       if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "extrato") {
         if (guard("confirmar")) return;
-        const body = (await readJson(req, 15 * 1024 * 1024)) as { name?: string; data?: string };
+        const body = (await readJson(req, 15 * 1024 * 1024)) as { name?: string; data?: string; conta?: string; banco?: string; agencia?: string; numero?: string };
         if (typeof body.name !== "string" || typeof body.data !== "string") return json(res, 400, { erro: "Arquivo não recebido" });
+        const account = body.conta ? { id: body.conta } : body.banco && body.numero ? { bank: body.banco, branch: body.agencia ?? "", number: body.numero } : undefined;
         try {
-          const r = await importBankStatement(deps.appPool, deps.tenantId, parts[2]!, { name: body.name.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(body.data, "base64") }, actor);
+          const r = await importBankStatement(deps.appPool, deps.tenantId, parts[2]!, { name: body.name.replace(/[\\/]/g, "_").slice(0, 200), bytes: Buffer.from(body.data, "base64") }, actor, { account });
           const chain = await deps.orchestrate?.();
           json(res, 200, { ...r, chain });
         } catch (err) {
