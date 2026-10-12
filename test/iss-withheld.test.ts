@@ -46,7 +46,7 @@ describe("ISS retido nas NFS-e tomadas", () => {
       // 10/01/2026 é sábado: prorroga para segunda, 12/01
       expect(o.rows[0]).toMatchObject({ status: "A_VENCER", due: "2026-01-12", cityName: "São Paulo" });
       expect((await tx.query("SELECT count(*)::int AS n FROM pending_item WHERE entity_id = $1 AND status = 'OPEN'", [entityId])).rows[0].n).toBe(0);
-      expect((await withholdingsOverview(tx, entityId, "2026-01-20")).rows[0]!.status).toBe("PAGAMENTO_NAO_IDENTIFICADO");
+      expect((await withholdingsOverview(tx, entityId, "2026-01-20")).rows[0]!.status).toBe("GUIA_NAO_ENVIADA");
     });
 
     // o recolhimento aparece no extrato (mesmo valor, histórico de tributo municipal)

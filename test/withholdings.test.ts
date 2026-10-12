@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { readNfseTaxes } from "../src/integrations/nfse/nfse-taxes.js";
-import { readEntityNfseTaxes, refreshWithholdings, takenNotes, withholdingsOverview } from "../src/modules/fiscal/withholdings.js";
+import { readEntityNfseTaxes, refreshWithholdings, registerGuideSent, takenNotes, withholdingsOverview } from "../src/modules/fiscal/withholdings.js";
 import { storeExternalSnapshot } from "../src/platform/evidence/snapshot.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
@@ -134,7 +134,7 @@ describe("agente Fiscal: retenções das tomadas × DARF", () => {
     const { rows, taken } = await withTenant(appPool, t, (tx) => withholdingsOverview(tx, entityId, "2026-10-07"));
     const by = Object.fromEntries(rows.map((w) => [`${w.competence.slice(0, 7)}:${w.tax}`, w]));
     expect(by["2026-08:IRRF"]).toMatchObject({ status: "PAGO", due: "2026-09-18", dueReason: expect.stringMatching(/domingo/) });
-    expect(by["2026-08:CSRF"]).toMatchObject({ status: "PAGAMENTO_NAO_IDENTIFICADO", withheld: "2626.00", paid: null });
+    expect(by["2026-08:CSRF"]).toMatchObject({ status: "GUIA_NAO_ENVIADA", withheld: "2626.00", paid: null, guide: null });
     expect(by["2026-07:IRRF"]).toMatchObject({ status: "ABAIXO_DO_MINIMO", withheld: "7.50" });
     expect(by["2026-09:CSRF"]).toMatchObject({ status: "A_VENCER", due: "2026-10-20" });
     expect(by["2026-09:IRRF"]).toBeUndefined();
@@ -151,14 +151,23 @@ describe("agente Fiscal: retenções das tomadas × DARF", () => {
     await withTenant(appPool, t, async (tx) => {
       const q = (await humanQueue(tx)).filter((x) => x.kind === "withholding");
       expect(q.map((x) => x.title.replace(/\s/g, " "))).toEqual([
-        "PIS/COFINS/CSLL retido 08/2026 (R$ 2.626,00): recolhimento ainda não identificado (vencimento 18/09/2026)",
-        "PIS/COFINS/CSLL retido 09/2026 (R$ 93,00): recolhimento ainda não identificado (vencimento 20/10/2026)",
+        "PIS/COFINS/CSLL retido 08/2026 (R$ 2.626,00): guia não enviada ao cliente (vencimento 18/09/2026)",
+        "PIS/COFINS/CSLL retido 09/2026 (R$ 93,00): guia não enviada ao cliente (vencimento 20/10/2026)",
       ]);
       expect(JSON.stringify(q)).not.toMatch(/inadimpl/i);
       const ev = await tx.query("SELECT type, count(*)::int AS n FROM outbox WHERE type IN ('NFSE_TAXES_READ', 'WITHHOLDING_STATUS_CHANGED') GROUP BY 1 ORDER BY 1");
       expect(ev.rows).toEqual([{ type: "NFSE_TAXES_READ", n: 1 }, { type: "WITHHOLDING_STATUS_CHANGED", n: r2.withholdings + 1 }]);
       const notes = await takenNotes(tx, entityId, "2026-08-01");
       expect(notes.map((n) => n.csrf)).toEqual(["148.64", "2477.36"]);
+    });
+    // o escritório registra que enviou a guia: deixa de ser "não enviada" e passa a "enviada, pagamento não identificado"
+    await expect(registerGuideSent(appPool, t, entityId, { tax: "CSRF", competence: "2026-08-01", channel: "WHATSAPP", sentOn: "2026-09-10" }, { kind: "AGENT", id: "guides" }, "2026-10-21")).rejects.toThrow(/pessoa/);
+    await registerGuideSent(appPool, t, entityId, { tax: "CSRF", competence: "2026-08-01", channel: "WHATSAPP", sentOn: "2026-09-10", amount: "2626.00", documentNumber: "07202620000099" }, { kind: "USER", id: "luan" }, "2026-10-21");
+    await withTenant(appPool, t, async (tx) => {
+      const o = await withholdingsOverview(tx, entityId, "2026-10-21");
+      expect(o.rows.find((w) => w.competence === "2026-08-01" && w.tax === "CSRF")).toMatchObject({ status: "PAGAMENTO_NAO_IDENTIFICADO", guide: { sentOn: "2026-09-10", channel: "WHATSAPP", documentNumber: "07202620000099" } });
+      const q = (await humanQueue(tx)).filter((x) => x.kind === "withholding");
+      expect(q[0]!.title.replace(/\s/g, " ")).toBe("PIS/COFINS/CSLL retido 08/2026 (R$ 2.626,00): guia enviada em 10/09/2026 por WhatsApp, pagamento ainda não identificado (vencimento 18/09/2026)");
     });
   });
 });

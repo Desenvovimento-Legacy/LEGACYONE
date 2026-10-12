@@ -549,3 +549,18 @@ export async function dasPaymentsOutsidePgdas(tx: PoolClient, entityId: string, 
   );
   return rows;
 }
+
+/**
+ * Só os pagamentos (PagtoWeb) de um intervalo — usado pela atualização
+ * automática depois do vencimento. Cada página é autorizada e reservada no teto.
+ */
+export async function syncPaymentsWindow(
+  deps: FederalSyncDeps,
+  tenantId: string,
+  input: { entityId: string; from: string; to: string },
+  actor: Actor = FEDERAL_AGENT,
+): Promise<PaymentsSyncCount> {
+  const e = await loadEntity(deps, tenantId, input.entityId);
+  const c: Ctx = { deps, tenantId, entityId: input.entityId, cnpj: e.cnpj, caseId: null, actor };
+  return syncPayments(c, input.from, input.to);
+}

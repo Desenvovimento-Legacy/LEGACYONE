@@ -342,20 +342,32 @@ export async function humanQueue(tx: PoolClient) {
   const brlFmt = (v: string | null) => Number(v ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const withholdings = (await withholdingsNeedingAttention(tx)).map((w) => {
     const pa = `${w.competence.slice(5, 7)}/${w.competence.slice(0, 4)}`;
-    const name = w.tax === "IRRF" ? "IRRF" : w.tax === "CSRF" ? "PIS/COFINS/CSLL" : `ISS (IBGE ${w.tax.slice(4)})`;
+    const name = w.tax === "IRRF" ? "IRRF" : w.tax === "CSRF" ? "PIS/COFINS/CSLL" : `ISS de ${w.city_name ?? `IBGE ${w.tax.slice(4)}`}`;
+    const venc = w.due_on ? fmtDate(w.due_on) : "—";
+    const checked = w.checked_at ? `pagamentos consultados na Receita em ${fmtDate(w.checked_at.toISOString().slice(0, 10))}` : "pagamentos ainda não consultados na Receita";
+    const CH: Record<string, string> = { WHATSAPP: "WhatsApp", EMAIL: "e-mail", PORTAL: "portal", TELEFONE: "telefone", OUTRO: "outro canal" };
     return {
       kind: "withholding",
       id: `${w.entity_id}:${w.competence}:${w.tax}`,
-      type: w.status === "PAGO_DIVERGENTE" ? "RETENCAO_DIVERGENTE" : "RETENCAO_PAGAMENTO",
+      type: w.status === "PAGO_DIVERGENTE" ? "RETENCAO_DIVERGENTE" : w.status === "GUIA_NAO_ENVIADA" ? "GUIA_NAO_ENVIADA" : "RETENCAO_PAGAMENTO",
       entityId: w.entity_id,
       entity: w.entity,
       caseId: null,
+      tax: w.tax,
+      competence: w.competence,
+      amount: w.withheld,
+      due: w.due_on,
+      guideSent: w.status === "PAGAMENTO_NAO_IDENTIFICADO",
       title: w.status === "PAGO_DIVERGENTE"
         ? `${name} retido ${pa}: recolhido ${brlFmt(w.paid)}, retido nas notas tomadas ${brlFmt(w.withheld)}`
-        : `${name} retido ${pa} (${brlFmt(w.withheld)}): recolhimento ainda não identificado (vencimento ${w.due_on ? fmtDate(w.due_on) : "—"})`,
+        : w.status === "GUIA_NAO_ENVIADA"
+          ? `${name} retido ${pa} (${brlFmt(w.withheld)}): guia não enviada ao cliente (vencimento ${venc})`
+          : `${name} retido ${pa} (${brlFmt(w.withheld)}): guia enviada em ${w.guide ? fmtDate(w.guide.sentOn) : "—"}${w.guide ? ` por ${CH[w.guide.channel] ?? w.guide.channel}` : ""}, pagamento ainda não identificado (vencimento ${venc})`,
       impact: w.status === "PAGO_DIVERGENTE"
         ? "Pode haver nota fora do Emissor Nacional ou retenção de outra competência no mesmo DARF. Confira as notas da competência."
-        : "Retido nas NFS-e tomadas e ainda não visto nos pagamentos federais (até a última consulta). Confirme com o cliente ou atualize os pagamentos.",
+        : w.status === "GUIA_NAO_ENVIADA"
+          ? `Sem registro de guia enviada e sem pagamento (${checked}). Se a guia já foi enviada, registre o envio; senão, gere e envie.`
+          : `Enviada e ainda não paga até a última consulta (${checked}). A IARIS consulta os pagamentos sozinha depois do vencimento; se continuar, confirme com o cliente.`,
       since: w.created_at.toISOString(),
     };
   });

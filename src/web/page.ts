@@ -245,7 +245,8 @@ function queueItemHtml(q) {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Classificar movimentos</a></div></div>';
   }
   if (q.kind === "withholding") {
-    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver retenções da empresa</a></div></div>';
+    var gs = q.type === "GUIA_NAO_ENVIADA" || q.type === "RETENCAO_PAGAMENTO" ? guideForm(q.entityId, q.tax, q.competence, q.amount, q.due, q.guideSent ? "Registrar reenvio" : "Registrar guia enviada") : "";
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p>' + gs + '<div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver retenções da empresa</a></div></div>';
   }
   if (q.kind === "guide") {
     return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div><a class="nav" style="display:inline-flex" href="#/empresa/' + q.entityId + '">Ver guias da empresa</a></div></div>';
@@ -887,6 +888,25 @@ function loadContabil(id, mes) {
   }).catch(function (err) { toast(err.message); });
 }
 
+var GFN = 0;
+/** Formulário curto "guia enviada ao cliente" (canal, data, nº do documento opcional). */
+function guideForm(entityId, tax, comp, amount, due, label) {
+  var k = "gf" + (GFN++);
+  var today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+  return '<div class="form-row only-confirmar" style="margin:6px 0;gap:6px"><select id="' + k + '-ch"><option value="WHATSAPP">WhatsApp</option><option value="EMAIL">e-mail</option><option value="PORTAL">portal</option><option value="OUTRO">outro</option></select>' +
+    '<input id="' + k + '-dt" type="date" value="' + today + '" max="' + today + '"><input id="' + k + '-nr" placeholder="nº do DARF/guia (opcional)" style="width:180px">' +
+    '<button class="ghost" data-gs="' + k + '" data-e="' + entityId + '" data-t="' + esc(tax) + '" data-c="' + comp + '" data-v="' + (amount || "") + '" data-d="' + (due || "") + '">' + label + '</button></div>';
+}
+document.addEventListener("click", function (ev) {
+  var b = ev.target && ev.target.closest ? ev.target.closest("[data-gs]") : null;
+  if (!b) return;
+  var k = b.getAttribute("data-gs");
+  b.disabled = true;
+  post("/api/empresa/" + b.getAttribute("data-e") + "/guia-enviada", "confirmar", {
+    tributo: b.getAttribute("data-t"), competencia: b.getAttribute("data-c"), valor: b.getAttribute("data-v") || null, vencimento: b.getAttribute("data-d") || null,
+    canal: $(k + "-ch").value, data: $(k + "-dt").value, numero: $(k + "-nr").value.trim() || null
+  }).then(function () { toast("Envio da guia registrado. A IARIS acompanha o vencimento e procura o pagamento."); route(); }).catch(function (e) { toast(e.message); b.disabled = false; });
+});
 var WS = {
   PAGO: '<span class="st ok">recolhido</span>',
   PAGO_EM_ATRASO: '<span class="st wr">recolhido após o vencimento</span>',
@@ -895,7 +915,8 @@ var WS = {
   A_VENCER: '<span class="st">a vencer</span>',
   ABAIXO_DO_MINIMO: '<span class="mut">abaixo de R$ 10,00 · acumula</span>',
   PRAZO_A_APROVAR: '<a class="st wr" href="#/regras">prazo a aprovar</a>',
-  PAGAMENTO_NAO_IDENTIFICADO: '<span class="st bad">recolhimento ainda não identificado</span>'
+  PAGAMENTO_NAO_IDENTIFICADO: '<span class="st bad">guia enviada · pagamento ainda não identificado</span>',
+  GUIA_NAO_ENVIADA: '<span class="st bad">guia não enviada ao cliente</span>'
 };
 var SNP = { "1": "não optante", "2": "MEI", "3": "Simples" };
 function loadRetencoes(id) {
@@ -905,7 +926,7 @@ function loadRetencoes(id) {
     var fed = r.rows.map(function (w) {
       var pay = w.payment ? (w.payment.collectedOn ? d(w.payment.collectedOn) : "") + '<div class="mut" style="font-size:11px">código ' + esc(w.payment.codes.join(", ")) + '</div>' : '<span class="mut">—</span>';
       var dif = w.difference && Number(w.difference) !== 0 ? '<div class="bad" style="font-size:11px">diferença ' + brl(w.difference) + '</div>' : '';
-      return '<tr><td>' + mm(w.competence) + (w.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td>' + (w.tax === "IRRF" ? "IRRF" : w.tax === "CSRF" ? "PIS/COFINS/CSLL" : "ISS · " + esc(w.cityName || w.city || "")) + '</td><td class="num">' + brl(w.withheld) + '<div class="mut" style="font-size:11px">' + w.notes + ' nota(s)</div></td><td class="num">' + (w.paid !== null ? brl(w.paid) : '<span class="mut">—</span>') + dif + '</td><td>' + (w.due ? d(w.due) : '<span class="mut">—</span>') + (w.dueReason ? '<div class="mut" style="font-size:11px">' + esc(w.dueReason) + '</div>' : '') + '</td><td>' + pay + '</td><td>' + (WS[w.status] || esc(w.status)) + '</td></tr>';
+      return '<tr><td>' + mm(w.competence) + (w.responsibility === "ANTERIOR" ? '<div class="mut" style="font-size:11px">escritório anterior</div>' : '') + '</td><td>' + (w.tax === "IRRF" ? "IRRF" : w.tax === "CSRF" ? "PIS/COFINS/CSLL" : "ISS · " + esc(w.cityName || w.city || "")) + '</td><td class="num">' + brl(w.withheld) + '<div class="mut" style="font-size:11px">' + w.notes + ' nota(s)</div></td><td class="num">' + (w.paid !== null ? brl(w.paid) : '<span class="mut">—</span>') + dif + '</td><td>' + (w.due ? d(w.due) : '<span class="mut">—</span>') + (w.dueReason ? '<div class="mut" style="font-size:11px">' + esc(w.dueReason) + '</div>' : '') + '</td><td>' + (w.guide ? 'enviada ' + d(w.guide.sentOn) + '<div class="mut" style="font-size:11px">' + esc(w.guide.channel.toLowerCase()) + (w.guide.documentNumber ? ' · nº ' + esc(w.guide.documentNumber) : '') + '</div>' : (w.status === "A_VENCER" || w.status === "GUIA_NAO_ENVIADA" || w.status === "PAGAMENTO_NAO_IDENTIFICADO") && w.responsibility !== "ANTERIOR" ? guideForm(id, w.tax, w.competence, w.withheld, w.due, "Enviada") : '<span class="mut">—</span>') + '</td><td>' + pay + '</td><td>' + (WS[w.status] || esc(w.status)) + '</td></tr>';
     }).join("");
     var tk = r.taken.slice(0, 13).map(function (m) {
       var iss = Number(m.iss) ? brl(m.iss) + '<div class="mut" style="font-size:11px">' + m.issByCity.map(function (c) { return esc(c.city); }).join(", ") + '</div>' : '<span class="mut">—</span>';
@@ -922,11 +943,11 @@ function loadRetencoes(id) {
     }).join("");
     box.innerHTML = '<h2>Retenções nas NFS-e tomadas</h2>' + (miss ? '<div style="margin-bottom:8px"><div class="mut" style="font-size:12px">Cada município tem o próprio vencimento do ISS retido. Informe uma vez (vale para todas as empresas) e a IARIS acompanha o prazo e procura o recolhimento no extrato:</div>' + miss + '</div>' : '') +
       '<h3 style="font-size:13px;margin:6px 0">IRRF, PIS/COFINS/CSLL e ISS retidos × recolhimento</h3>' +
-      '<div class="scroll"><table><thead><tr><th>Competência</th><th>Tributo</th><th class="num">Retido nas notas</th><th class="num">Recolhido</th><th>Vencimento</th><th>Pagamento</th><th>Situação</th></tr></thead><tbody>' + (fed || '<tr><td colspan="7" class="empty">Nenhuma retenção federal nas notas tomadas.</td></tr>') + '</tbody></table></div>' +
+      '<div class="scroll"><table><thead><tr><th>Competência</th><th>Tributo</th><th class="num">Retido nas notas</th><th class="num">Recolhido</th><th>Vencimento</th><th>Guia ao cliente</th><th>Pagamento</th><th>Situação</th></tr></thead><tbody>' + (fed || '<tr><td colspan="8" class="empty">Nenhuma retenção nas notas tomadas.</td></tr>') + '</tbody></table></div>' +
       '<h3 style="font-size:13px;margin:12px 0 6px">Notas tomadas por mês</h3>' +
       '<div class="scroll"><table><thead><tr><th>Mês</th><th class="num">Notas</th><th class="num">Serviços</th><th class="num">IRRF</th><th class="num">PIS/COFINS/CSLL</th><th class="num">INSS</th><th class="num">ISS retido</th><th></th></tr></thead><tbody>' + tk + '</tbody></table></div>' +
       '<div id="ret-notas"></div>' +
-      '<div class="empty">Competência pelo mês de emissão da nota (o recolhimento segue a data do pagamento ao prestador; com o extrato, a IARIS passa a usar a data do pagamento). ISS retido: a guia é emitida no portal da prefeitura; a IARIS acompanha prazo e procura o recolhimento no extrato. Pagamentos federais até ' + (r.dataUntil ? d(r.dataUntil) : "—") + '.</div>';
+      '<div class="empty">Competência pelo mês de emissão da nota (o recolhimento segue a data do pagamento ao prestador; com o extrato, a IARIS passa a usar a data do pagamento). ISS retido: a guia é emitida no portal da prefeitura; a IARIS acompanha prazo e procura o recolhimento no extrato. Pagamentos federais consultados na Receita em ' + (r.paymentsCheckedAt ? d(r.paymentsCheckedAt.slice(0, 10)) : "—") + ' (a IARIS consulta de novo sozinha depois de cada vencimento).</div>';
     box.querySelectorAll("[data-iss]").forEach(function (b) {
       b.addEventListener("click", function () {
         var g = b.getAttribute("data-iss");

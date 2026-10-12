@@ -23,7 +23,8 @@ import { normalize } from "../../shared/text.js";
  *   PRAZO_A_APROVAR             retido; a regra de prazo ainda não foi aprovada
  *   A_VENCER                    retido; prazo ainda não chegou
  *   ABAIXO_DO_MINIMO            retido abaixo de R$ 10,00 (acumula para o mês seguinte)
- *   PAGAMENTO_NAO_IDENTIFICADO  prazo passou e o recolhimento ainda não aparece
+ *   GUIA_NAO_ENVIADA            prazo passou e não há registro de guia enviada ao cliente
+ *   PAGAMENTO_NAO_IDENTIFICADO  guia enviada, prazo passou e o recolhimento ainda não aparece
  *   PAGO / PAGO_EM_ATRASO       recolhido o mesmo valor retido nas notas
  *   PAGO_DIVERGENTE             recolhido valor diferente do retido nas notas
  *   PAGO_SEM_NOTA               recolhimento sem retenção nas NFS-e recebidas
@@ -58,7 +59,7 @@ export const WITHHOLDING_CODES: Record<"IRRF" | "CSRF", Record<string, string>> 
 /** IRRF, PIS/COFINS/CSLL (CSRF) ou ISS retido de um município ("ISS:<IBGE>"). */
 export type WithholdingTax = "IRRF" | "CSRF" | `ISS:${string}`;
 export type WithholdingStatus =
-  | "PRAZO_A_APROVAR" | "A_VENCER" | "ABAIXO_DO_MINIMO" | "PAGAMENTO_NAO_IDENTIFICADO"
+  | "PRAZO_A_APROVAR" | "A_VENCER" | "ABAIXO_DO_MINIMO" | "PAGAMENTO_NAO_IDENTIFICADO" | "GUIA_NAO_ENVIADA"
   | "PAGO" | "PAGO_EM_ATRASO" | "PAGO_DIVERGENTE" | "PAGO_SEM_NOTA";
 
 // ------------------------------------------------------------------ leitura das notas
@@ -159,6 +160,8 @@ export interface WithholdingRow {
   /** ISS: município de incidência */
   city?: string | null;
   cityName?: string | null;
+  /** última guia enviada ao cliente (o escritório gera e envia) */
+  guide?: { sentOn: string; channel: string; amount: string | null; documentNumber: string | null; sentBy: string } | null;
 }
 
 export interface TakenMonth {
@@ -228,6 +231,36 @@ export async function municipalIssDue(tx: PoolClient): Promise<MunicipalIssDue[]
 }
 
 export class IssDueError extends Error {}
+
+export class GuideDispatchError extends Error {}
+
+/**
+ * Pessoa registra que a guia (DARF, ISS) foi enviada ao cliente. O escritório
+ * gera a guia; a IARIS acompanha o vencimento e procura o pagamento.
+ */
+export async function registerGuideSent(
+  pool: Pool, tenantId: string, entityId: string,
+  input: { tax: string; competence: string; channel: "WHATSAPP" | "EMAIL" | "PORTAL" | "TELEFONE" | "OUTRO"; sentOn: string; amount?: string | null; dueOn?: string | null; documentNumber?: string | null; file?: { name: string; bytes: Buffer } | null },
+  actor: Actor, today: string,
+) {
+  if (actor.kind !== "USER") throw new GuideDispatchError("Envio de guia ao cliente é registrado por uma pessoa");
+  if (!/^(IRRF|CSRF|SIMPLES|ISS:\d{7})$/.test(input.tax)) throw new GuideDispatchError("Tributo da guia inválido");
+  if (!/^\d{4}-\d{2}-01$/.test(input.competence)) throw new GuideDispatchError("Competência deve ser AAAA-MM-01");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.sentOn) || input.sentOn > today) throw new GuideDispatchError("Data de envio inválida");
+  await withTenant(pool, tenantId, async (tx) => {
+    const id = newId();
+    const sha = input.file ? createHash("sha256").update(input.file.bytes).digest() : null;
+    await tx.query(
+      `INSERT INTO guide_dispatch (id, tenant_id, entity_id, tax, competence, amount, due_on, document_number, channel, sent_on, file_name, content, sha256, sent_by)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [id, entityId, input.tax, input.competence, input.amount ?? null, input.dueOn ?? null, input.documentNumber?.trim() || null, input.channel, input.sentOn,
+        input.file?.name.slice(0, 200) ?? null, input.file?.bytes ?? null, sha, actor.id],
+    );
+    await audit(tx, { actor, action: "guides.sent_to_client", resourceType: "guide_dispatch", resourceId: id, entityId, competence: input.competence,
+      data: { tax: input.tax, channel: input.channel, sentOn: input.sentOn, amount: input.amount ?? null, documentNumber: input.documentNumber ?? null, file: input.file?.name ?? null } });
+  });
+  return refreshWithholdings(pool, tenantId, entityId, today);
+}
 
 /**
  * Pessoa informa o vencimento do ISS retido de um município (lei municipal).
@@ -416,9 +449,25 @@ export async function withholdingsOverview(tx: PoolClient, entityId: string, tod
       responsibility, city: c.code, cityName,
     });
   }
+  // guia enviada ao cliente: separa "não enviada" de "enviada e pagamento ainda não identificado"
+  const sent = await tx.query<{ tax: string; competence: string; sent_on: string; channel: string; amount: string | null; document_number: string | null; sent_by: string }>(
+    `SELECT DISTINCT ON (tax, competence) tax, competence::text, sent_on::text, channel, amount::text, document_number, sent_by
+       FROM guide_dispatch WHERE entity_id = $1 ORDER BY tax, competence, created_at DESC`,
+    [entityId],
+  );
+  const byKey = new Map(sent.rows.map((g) => [`${g.tax}|${g.competence}`, g]));
+  for (const w of rows) {
+    const g = byKey.get(`${w.tax}|${w.competence}`);
+    w.guide = g ? { sentOn: g.sent_on, channel: g.channel, amount: g.amount, documentNumber: g.document_number, sentBy: g.sent_by } : null;
+    if (w.status === "PAGAMENTO_NAO_IDENTIFICADO" && !g) w.status = "GUIA_NAO_ENVIADA";
+  }
+  const checked = (await tx.query<{ at: Date | null }>(
+    "SELECT max(s.fetched_at) AS at FROM external_snapshot s WHERE s.entity_id = $1 AND s.request_key LIKE 'pagtoweb:pagamentos:%'",
+    [entityId],
+  )).rows[0]?.at ?? null;
   rows.sort((a, b) => b.competence.localeCompare(a.competence));
   return {
-    rows, taken, dataUntil: data_until, dueApproved: Boolean(dueSpec),
+    rows, taken, dataUntil: data_until, dueApproved: Boolean(dueSpec), paymentsCheckedAt: checked ? checked.toISOString() : null,
     issMissingDue: [...missingDue.entries()].map(([ibge, name]) => ({ ibge, name })),
   };
 }
@@ -476,7 +525,7 @@ export async function refreshWithholdings(pool: Pool, tenantId: string, entityId
       const same = prev && prev.status === w.status && Dec.of(prev.withheld).cmp(w.withheld) === 0 && prev.due_on === w.due
         && (prev.paid === null ? w.paid === null : w.paid !== null && Dec.of(prev.paid).cmp(w.paid) === 0);
       if (same) continue;
-      const details = { notes: w.notes, payment: w.payment, difference: w.difference, dueReason: w.dueReason, responsibility: w.responsibility };
+      const details = { notes: w.notes, payment: w.payment, difference: w.difference, dueReason: w.dueReason, responsibility: w.responsibility, guide: w.guide ?? null, cityName: w.cityName ?? null };
       const fingerprint = createHash("sha256").update(JSON.stringify({ s: w.status, w: w.withheld, p: w.paid, d: w.due, details, prev: prev?.id ?? null })).digest("hex");
       const ins = await tx.query(
         `INSERT INTO withholding_observation (id, tenant_id, entity_id, competence, tax, status, withheld, paid, due_on, details, fingerprint)
@@ -516,13 +565,15 @@ export async function withholdingsNeedingAttention(tx: PoolClient) {
   const { rows } = await tx.query<{
     entity_id: string; entity: string; competence: string; tax: WithholdingTax; status: WithholdingStatus;
     withheld: string; paid: string | null; due_on: string | null; created_at: Date;
+    guide: { sentOn: string; channel: string } | null; city_name: string | null; checked_at: Date | null;
   }>(
     `SELECT o.entity_id, coalesce(e.trade_name, e.legal_name) AS entity, o.competence::text, o.tax, o.status,
-            o.withheld::text, o.paid::text, o.due_on::text, o.created_at
+            o.withheld::text, o.paid::text, o.due_on::text, o.created_at, o.details->'guide' AS guide, o.details->>'cityName' AS city_name,
+            (SELECT max(s.fetched_at) FROM external_snapshot s WHERE s.entity_id = o.entity_id AND s.request_key LIKE 'pagtoweb:pagamentos:%') AS checked_at
        FROM (SELECT DISTINCT ON (entity_id, competence, tax) * FROM withholding_observation
               ORDER BY entity_id, competence, tax, created_at DESC) o
        JOIN entity e ON e.id = o.entity_id
-      WHERE o.status IN ('PAGAMENTO_NAO_IDENTIFICADO', 'PAGO_DIVERGENTE')
+      WHERE o.status IN ('PAGAMENTO_NAO_IDENTIFICADO', 'GUIA_NAO_ENVIADA', 'PAGO_DIVERGENTE')
         AND coalesce(o.details->>'responsibility', 'LEGACY') = 'LEGACY'
       ORDER BY o.competence, o.tax`,
   );

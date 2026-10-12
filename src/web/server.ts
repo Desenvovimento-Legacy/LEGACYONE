@@ -10,7 +10,8 @@ import { fetchLastDeclaration, reparseDeclarations, revenueCrossCheck } from "..
 import { PGDAS_PDF_PARSER } from "../integrations/integra-contador/pgdas-pdf.js";
 import { decideRevenueException, refreshRevenueExceptions } from "../modules/federal/revenue-exceptions.js";
 import { guidesOverview, refreshGuides } from "../modules/tax/guides.js";
-import { IssDueError, readEntityNfseTaxes, refreshWithholdings, setMunicipalIssDue, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
+import { runAutoPayments } from "../modules/federal/auto-payments.js";
+import { GuideDispatchError, IssDueError, readEntityNfseTaxes, refreshWithholdings, registerGuideSent, setMunicipalIssDue, takenNotes, withholdingsOverview } from "../modules/fiscal/withholdings.js";
 import { LINKS } from "../modules/orchestration/links.js";
 import { DEFAULT_NOTE_SLOTS, dueSlot, lastRuns, nextSlot, parseSlots, recordRun } from "../platform/scheduler/daily-slots.js";
 import { applyStandardChart, LedgerError, trialBalance } from "../modules/ledger/ledger.js";
@@ -495,6 +496,23 @@ export function createWebServer(deps: WebDeps) {
         const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
         await preparePgdasDrafts(deps.appPool, deps.tenantId, parts[2]!, today);
         json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => pgdasDraftView(tx, parts[2]!)), integraConfigured: Boolean(deps.integra) });
+        return;
+      }
+      // POST /api/empresa/:id/guia-enviada — pessoa registra a guia (DARF/ISS) enviada ao cliente.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "guia-enviada") {
+        if (guard("confirmar")) return;
+        const b = (await readJson(req, 6 * 1024 * 1024)) as { tributo?: string; competencia?: string; valor?: string | null; vencimento?: string | null; canal?: string; data?: string; numero?: string | null; arquivo?: { name: string; data: string } | null };
+        const channel = (["WHATSAPP", "EMAIL", "PORTAL", "TELEFONE", "OUTRO"].includes(String(b.canal)) ? b.canal : "OUTRO") as "WHATSAPP";
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        try {
+          json(res, 200, await registerGuideSent(deps.appPool, deps.tenantId, parts[2]!, {
+            tax: String(b.tributo ?? ""), competence: String(b.competencia ?? ""), channel, sentOn: String(b.data ?? today), amount: b.valor ?? null, dueOn: b.vencimento ?? null,
+            documentNumber: b.numero ?? null, file: b.arquivo ? { name: b.arquivo.name, bytes: Buffer.from(b.arquivo.data, "base64") } : null,
+          }, actor, today));
+        } catch (err) {
+          if (err instanceof GuideDispatchError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
       // POST /api/iss-vencimento — pessoa informa o vencimento do ISS retido de um município (com o fundamento).
@@ -1307,6 +1325,29 @@ if (isMain(import.meta.url)) {
         console.error(`[revisão] falha na conferência: ${(err as Error).message}`);
       }
     }, 5_000);
+  }
+  // Agente Receita: pagamentos na Receita (consulta cobrada) 5 dias depois de cada vencimento com guia
+  // sem pagamento identificado, uma vez por empresa, no teto diário — só com a autorização registrada.
+  if (deps.integra && process.env.IARIS_PAGAMENTOS_AUTO !== "0") {
+    const searchAgent = { kind: "AGENT" as const, id: "search" };
+    const paySlots = parseSlots(process.env.IARIS_PAGAMENTOS_HORARIO, ["08:30"]);
+    const payCheck = async () => {
+      try {
+        const due = await dueSlot(app, tenant.id, "pagamentos-receita", paySlots);
+        if (!due) return;
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        const r = await runAutoPayments({ appPool: app, integra: deps.integra!, metering: deps.metering }, tenant.id, today, searchAgent);
+        await recordRun(app, tenant.id, { job: "pagamentos-receita", slot: due, trigger: "HORARIO", actorId: searchAgent.id, result: r });
+        if (r.calls) {
+          console.log(`[receita] pagamentos atualizados: ${r.entities} empresa(s), ${r.calls} consulta(s) cobrada(s)`);
+          await deps.orchestrate?.();
+        }
+      } catch (err) {
+        console.error(`[receita] atualização de pagamentos: ${(err as Error).message}`);
+      }
+    };
+    setTimeout(payCheck, 40_000);
+    setInterval(payCheck, 5 * 60_000);
   }
   // Agente Guias: situação do DAS muda com o tempo (prazo passa); só banco, sem custo.
   const guidesTick = async () => {
