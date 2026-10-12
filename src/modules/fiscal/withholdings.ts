@@ -295,11 +295,11 @@ export async function withholdingsOverview(tx: PoolClient, entityId: string, tod
   );
   const cities = await tx.query<{ competence: string; city: string; code: string | null; value: string; notes: number }>(
     `WITH cancelled AS (${CANCELLED})
-     SELECT t.competence::text, coalesce(t.incidence_city_name, t.incidence_city, '—') AS city, t.incidence_city AS code, sum(t.iss_withheld)::text AS value, count(*)::int AS notes
+     SELECT t.competence::text, coalesce(max(t.incidence_city_name), t.incidence_city, '—') AS city, t.incidence_city AS code, sum(t.iss_withheld)::text AS value, count(*)::int AS notes
        FROM nfse_tax t JOIN nfse_document d ON d.id = t.nfse_id
       WHERE t.entity_id = $1 AND t.role = 'TOMADA' AND t.parser = $2 AND t.iss_withheld > 0
         AND (d.access_key IS NULL OR d.access_key NOT IN (SELECT access_key FROM cancelled))
-      GROUP BY 1, 2, 3 ORDER BY 1, 2`,
+      GROUP BY t.competence, t.incidence_city ORDER BY 1, 2`,
     [entityId, NFSE_TAX_PARSER],
   );
   const codes = [...Object.keys(WITHHOLDING_CODES.IRRF), ...Object.keys(WITHHOLDING_CODES.CSRF)];
