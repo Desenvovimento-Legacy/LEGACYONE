@@ -13,6 +13,7 @@ import { prepareClientRequest } from "../relationship/client-request.js";
 import { preparePgdasDrafts } from "../tax/simples/pgdas-draft.js";
 import { readEntityNfeItems } from "../fiscal/nfe-items.js";
 import { runReview } from "../review/review.js";
+import { refreshCorporate } from "../tax/corporate/corporate.js";
 
 /**
  * Vínculos entre agentes: "quando acontecer X, o agente Y faz Z".
@@ -157,8 +158,31 @@ export const LINKS: Link<LinkDeps>[] = [
     run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await preparePgdasDrafts(pool, tenantId, entityId!, today(deps))) }),
   },
   {
+    id: "lucro-tributos",
+    on: ["TAX_REGIME_DEFINED", "CORPORATE_TAX_SETUP_CHANGED", "NFSE_TAXES_READ", "NFE_ITEMS_READ", "ACCOUNTING_BATCH_POSTED", "ACCOUNTING_CLOSING_COMPLETED",
+      "ACCOUNTING_PERIOD_REOPENED", "CONTRACTED_SERVICES_DEFINED"],
+    agent: "tax",
+    does: "Calcula PIS, COFINS, IRPJ e CSLL do Lucro Presumido e do Lucro Real (e-LALUR, trava de 30%, créditos) com vencimento, quotas e código do DARF",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await refreshCorporate(pool, tenantId, entityId!, today(deps))) }),
+  },
+  {
+    id: "lucro-regras",
+    on: ["CORPORATE_TAX_RULES_APPROVED"],
+    agent: "tax",
+    does: "Recalcula as empresas do Presumido e do Real com as regras aprovadas",
+    perEntity: false,
+    run: async ({ pool, tenantId, deps }) => {
+      const ents = await withTenant(pool, tenantId, (tx) => tx.query<{ id: string }>(
+        "SELECT DISTINCT entity_id AS id FROM tax_regime_history WHERE regime IN ('LUCRO_PRESUMIDO', 'LUCRO_REAL_TRIMESTRAL', 'LUCRO_REAL_ANUAL')"));
+      let changed = 0;
+      for (const e of ents.rows) changed += (await refreshCorporate(pool, tenantId, e.id, today(deps))).changed;
+      return { changed };
+    },
+  },
+  {
     id: "revisao-independente",
-    on: ["ACCOUNTING_BATCH_POSTED", "BANK_STATEMENT_RECEIVED", "SIMPLES_CALCULATED", "WITHHOLDING_STATUS_CHANGED", "GUIDE_STATUS_CHANGED", "NFE_ITEMS_READ",
+    on: ["ACCOUNTING_BATCH_POSTED", "BANK_STATEMENT_RECEIVED", "SIMPLES_CALCULATED", "CORPORATE_TAX_CALCULATED", "WITHHOLDING_STATUS_CHANGED", "GUIDE_STATUS_CHANGED", "NFE_ITEMS_READ",
       "REVENUE_DIVERGENCE_DETECTED", "EXCEPTION_DECIDED", "ACCOUNTING_CLOSING_COMPLETED", "ACCOUNTING_PERIOD_REOPENED", "OPENING_BALANCES_IMPORTED", "DFE_BATCH_RECEIVED"],
     agent: "review",
     does: "Refaz os cruzamentos de cada mês (fiscal × contábil, banco × razão, declarado × notas, Simples × declarado, guia × pagamento, retenções) e dá a nota de cobertura e de risco",
@@ -210,4 +234,8 @@ export const EVENT_LABEL: Record<string, string> = {
   EXCEPTION_DECIDED: "Exceção decidida por pessoa",
   ACCOUNTING_PERIOD_REOPENED: "Competência contábil reaberta",
   REVIEW_COMPLETED: "Revisão independente atualizada",
+  TAX_REGIME_DEFINED: "Regime tributário informado",
+  CORPORATE_TAX_SETUP_CHANGED: "Presunção, opção do ano, e-LALUR ou créditos alterados",
+  CORPORATE_TAX_RULES_APPROVED: "Regras do Presumido e do Real aprovadas",
+  CORPORATE_TAX_CALCULATED: "Tributos do lucro calculados",
 };

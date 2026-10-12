@@ -20,6 +20,10 @@ import type { NfeHeader, NfeItem } from "../../integrations/sefaz/nfe-items.js";
 export const CFOP_RULES_VERSION = "cfop-1";
 export const CREDIT_RULES_VERSION = "creditos-1";
 
+/** CFOP de venda (receita): 51xx/61xx/71xx, 540x/640x (com ST) e 5933/6933 (serviço com ISS). */
+export const isSaleCfop = (cfop: string | null) =>
+  Boolean(cfop && (/^[567]1\d\d$/.test(cfop) || /^[56]40[1-5]$/.test(cfop) || cfop === "5933" || cfop === "6933"));
+
 export type Destination = "REVENDA" | "INDUSTRIALIZACAO" | "USO_CONSUMO";
 export interface ItemCheck { code: string; text: string }
 

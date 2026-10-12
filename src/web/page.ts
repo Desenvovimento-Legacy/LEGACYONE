@@ -263,6 +263,9 @@ function queueItemHtml(q) {
       '<input id="iss-law-' + g + '" placeholder="fundamento (lei/decreto municipal)" style="width:300px" value="' + esc(h.basis || "") + '">' +
       '<button class="warn" data-issq="' + g + '" data-name="' + esc(q.iss.name) + '">Registrar prazo</button></div></div>';
   }
+  if (q.kind === "pending" && q.type === "TAX_REGIME_UNKNOWN") {
+    return '<div class="qi">' + head + '<p>' + esc(q.impact) + '</p><div class="only-confirmar"><a class="nav" style="display:inline-flex;background:#E8A33D;color:#1B1206;font-weight:700" href="#/empresa/' + q.entityId + '">Informar o regime na empresa</a></div></div>';
+  }
   var gap = /^DFE_NSU_GAP_/.test(q.type);
   var alert = /^SIMPLES_(SUBLIMIT|LIMIT)_EXCESS_/.test(q.type);
   var acts = q.kind === "pending" ? '<div class="form-row only-confirmar" style="gap:8px">' +
@@ -464,6 +467,7 @@ function viewEmpresa(id) {
         '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
         '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="lucro"><h2>Tributos: Lucro Presumido e Lucro Real</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="pgdas"><h2>PGDAS-D pronta para transmitir</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ret"><h2>Retenções nas NFS-e tomadas</h2><div class="empty">Carregando…</div></section>' +
@@ -486,6 +490,7 @@ function viewEmpresa(id) {
     loadRevisao(id);
     loadConferencia(id);
     loadSimples(id);
+    loadLucro(id);
     loadPgdas(id);
     loadGuias(id);
     loadRetencoes(id);
@@ -1141,6 +1146,115 @@ function loadPgdas(id) {
 }
 
 var TAXN = ["IRPJ", "CSLL", "COFINS", "PIS", "CPP", "ICMS", "IPI", "ISS"];
+var LREG = { LUCRO_PRESUMIDO: "Lucro Presumido", LUCRO_REAL_TRIMESTRAL: "Lucro Real trimestral", LUCRO_REAL_ANUAL: "Lucro Real anual (estimativa)" };
+var LPAY = { PAGO: '<span class="st ok">pago</span>', PAGO_PARCIAL: '<span class="st wr">pago em parte</span>', A_VENCER: '<span class="st">a vencer</span>', SEM_SALDO: '<span class="mut">sem saldo a pagar</span>', PAGAMENTO_NAO_IDENTIFICADO: '<span class="st bad">pagamento ainda não identificado</span>' };
+var LKIND = { SERVICO_INSUMO: "Serviço utilizado como insumo", ENERGIA: "Energia elétrica", ALUGUEL_PJ: "Aluguel pago a PJ", ARRENDAMENTO: "Arrendamento mercantil", DEPRECIACAO: "Depreciação de máquinas/edificações", FRETE_VENDA: "Frete na venda", ARMAZENAGEM: "Armazenagem", DEVOLUCAO_VENDA: "Devolução de venda", OUTRO: "Outro (art. 3º)" };
+function lucroPeriod(r) {
+  if (r.period_kind === "TRIMESTRAL") return (Math.floor((Number(r.period_start.slice(5, 7)) - 1) / 3) + 1) + "º tri/" + r.period_start.slice(0, 4);
+  if (r.period_kind === "ANUAL") return "Ajuste " + r.period_start.slice(0, 4);
+  return mm(r.period_start);
+}
+function loadLucro(id) {
+  return getJson("/api/empresa/" + id + "/lucro").then(function (r) {
+    var box = $("lucro"); if (!box) return;
+    var today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+    var regs = r.regimes || [];
+    var real = regs.some(function (x) { return x.regime !== "LUCRO_PRESUMIDO"; });
+    var regTxt = regs.length ? regs.map(function (x) { return '<b>' + esc(LREG[x.regime] || x.regime) + '</b> desde ' + d(x.valid_from) + (x.valid_to ? ' até ' + d(x.valid_to) : ''); }).join(" · ") : '<span class="wr">regime do lucro não informado</span>';
+    var regForm = '<details class="only-confirmar" style="margin-top:6px"' + (regs.length ? '' : ' open') + '><summary style="cursor:pointer;font-size:13px">' + (regs.length ? 'Mudar o regime' : 'Informar o regime') + '</summary><div class="form-row" style="margin-top:6px">' +
+      '<label>Regime<select id="lu-reg"><option value="LUCRO_PRESUMIDO">Lucro Presumido</option><option value="LUCRO_REAL_TRIMESTRAL">Lucro Real trimestral</option><option value="LUCRO_REAL_ANUAL">Lucro Real anual (estimativa)</option></select></label>' +
+      '<label>A partir de<input type="month" id="lu-reg-ini" value="' + today.slice(0, 4) + '-01"></label><button class="warn" data-lu="regime">Registrar</button></div>' +
+      '<div class="empty">Opção do ano-calendário (pagamento da 1ª quota ou da 1ª estimativa). O regime anterior é encerrado no mês anterior.</div></details>';
+    if (!regs.length) { box.innerHTML = '<h2>Tributos: Lucro Presumido e Lucro Real</h2><div>' + regTxt + '</div>' + regForm; bindLucro(id, r); return; }
+    var pend = r.rulesPending.length ? '<div class="wr" style="margin:6px 0">Regras a aprovar: ' + r.rulesPending.map(esc).join(", ") + ' — <a href="#/regras">Regras e legislação</a></div>' : '';
+    var groupOpts = function (sel) { return Object.keys(r.groups).map(function (k) { return '<option value="' + k + '"' + (k === sel ? ' selected' : '') + '>' + esc(r.groups[k].label) + ' (IRPJ ' + r.groups[k].irpj + '% · CSLL ' + r.groups[k].csll + '%)</option>'; }).join(""); };
+    var presRow = function (scope, label) {
+      var cur = r.presumption.find(function (p) { return p.scope === scope && !p.valid_to; });
+      var g = cur ? r.groups[cur.grp] : null;
+      return '<tr><td>' + label + '</td><td>' + (cur ? '<b>' + esc(g ? g.label : cur.grp) + '</b><div class="mut" style="font-size:11px">desde ' + d(cur.valid_from) + ' · ' + esc(cur.reason) + ' · ' + esc(cur.set_by) + '</div>' : '<span class="wr">a confirmar</span> <span class="mut" style="font-size:12px">(sugestão pela CNAE ' + esc(r.proposal.cnae || "—") + ')</span>') + '</td>' +
+        '<td class="only-confirmar"><div class="form-row" style="gap:4px"><select id="lu-g-' + scope + '" style="max-width:260px">' + groupOpts(cur ? cur.grp : r.proposal[scope]) + '</select><input type="month" id="lu-gi-' + scope + '" value="' + (regs[0].valid_from || "").slice(0, 7) + '"><input id="lu-gm-' + scope + '" placeholder="motivo (contrato social, solução de consulta)" style="width:220px"><button class="ghost" data-lu="presuncao" data-scope="' + scope + '">Confirmar</button></div></td></tr>';
+    };
+    var opt = r.options[0];
+    var optHtml = '<div class="form-row only-confirmar" style="gap:6px;margin-top:6px"><label>Ano<input id="lu-oy" inputmode="numeric" style="width:60px" value="' + today.slice(0, 4) + '"></label>' +
+      '<label>IRPJ/CSLL trimestral<select id="lu-oq"><option value="UNICA">quota única</option><option value="TRES"' + (opt && opt.quotas === "TRES" ? " selected" : "") + '>3 quotas</option></select></label>' +
+      '<label>Receita<select id="lu-or"><option value="COMPETENCIA">competência</option><option value="CAIXA"' + (opt && opt.revenue_basis === "CAIXA" ? " selected" : "") + '>caixa</option></select></label><button class="ghost" data-lu="opcao">Registrar opção</button>' +
+      '<span class="mut" style="font-size:12px">' + (r.options.length ? r.options.map(function (o) { return o.year + ": " + (o.quotas === "TRES" ? "3 quotas" : "quota única") + ", " + o.revenue_basis.toLowerCase(); }).join(" · ") : "sem opção registrada: quota única, competência") + '</span></div>';
+    var rows = r.rows.map(function (c, i) {
+      var qs = (c.quotas || []).length > 1 ? c.quotas.map(function (q) { return q.n + 'ª ' + brl(q.amount) + ' em ' + d(q.due); }).join("<br>") : (c.due_on ? d(c.due_on) : '—');
+      var st = c.status === "CALCULADO" ? (LPAY[c.payment] || "") + (c.paid ? '<div class="mut" style="font-size:11px">' + brl(c.paid.principal) + (c.paid.collectedOn ? ' em ' + d(c.paid.collectedOn) : '') + '</div>' : '')
+        : c.status === "REGRA_PENDENTE" ? '<a class="st wr" href="#/regras">regra a aprovar</a>' : '<span class="st wr">bloqueado</span>';
+      var prov = c.details && c.details.provisional ? '<div class="wr" style="font-size:11px">provisório: mês não fechado</div>' : '';
+      return '<tr><td><a href="#" data-lum="' + i + '">' + lucroPeriod(c) + '</a></td><td>' + c.tax + '</td><td class="num">' + (c.base !== null ? brl(c.base) : '—') + '</td><td class="num">' + (c.gross !== null ? brl(c.gross) : '—') + '</td><td class="num">' + (c.deductions && Number(c.deductions) ? '−' + brl(c.deductions) : '—') + '</td><td class="num"><b>' + (c.amount !== null ? brl(c.amount) : '—') + '</b>' + prov + '</td><td class="mono">' + esc(c.darf_code || '—') + '</td><td style="font-size:12px">' + qs + '</td><td>' + st + (c.blockers.length ? '<div class="wr" style="font-size:11px">' + c.blockers.map(esc).join("<br>") + '</div>' : '') + '</td></tr>';
+    }).join("");
+    var lal = real ? '<h3 style="font-size:13px;margin:12px 0 6px">e-LALUR / e-LACS — Parte A (adições e exclusões)</h3>' +
+      '<div class="scroll"><table><thead><tr><th>Período</th><th>Tributo</th><th>Tipo</th><th>Descrição</th><th class="num">Valor</th><th>Fundamento</th><th></th></tr></thead><tbody>' +
+      (r.lalur.map(function (l) { return '<tr' + (l.cancelled ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + d(l.period_start) + ' a ' + d(l.period_end) + '</td><td>' + esc(l.tax) + '</td><td>' + (l.kind === "ADICAO" ? "adição" : "exclusão") + '</td><td>' + esc(l.description) + (l.part_b ? '<div class="mut" style="font-size:11px">Parte B: ' + esc(l.part_b) + '</div>' : '') + '</td><td class="num">' + brl(l.amount) + '</td><td style="font-size:12px">' + esc(l.legal_basis) + '</td><td>' + (l.cancelled ? '' : '<button class="ghost only-confirmar" data-lu="lalur-x" data-ref="' + l.id + '">Cancelar</button>') + '</td></tr>'; }).join("") || '<tr><td colspan="7" class="empty">Nenhum ajuste.</td></tr>') + '</tbody></table></div>' +
+      '<div class="form-row only-confirmar" style="gap:4px;margin-top:6px"><input type="date" id="lu-li"><input type="date" id="lu-lf"><select id="lu-lt"><option value="AMBOS">IRPJ e CSLL</option><option value="IRPJ">só IRPJ</option><option value="CSLL">só CSLL</option></select>' +
+      '<select id="lu-lk"><option value="ADICAO">adição</option><option value="EXCLUSAO">exclusão</option></select><input id="lu-ld" placeholder="descrição" style="width:180px"><input id="lu-lv" placeholder="valor" style="width:90px"><input id="lu-lb" placeholder="fundamento legal" style="width:160px"><input id="lu-lp" placeholder="controle Parte B (opcional)" style="width:150px"><button class="ghost" data-lu="lalur">Lançar ajuste</button></div>' +
+      '<h3 style="font-size:13px;margin:12px 0 6px">Parte B — prejuízo fiscal e base negativa herdados</h3>' +
+      '<div class="scroll"><table><tbody>' + (r.openings.map(function (o) { return '<tr' + (o.cancelled ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + (o.kind === "PREJUIZO_FISCAL" ? "Prejuízo fiscal (IRPJ)" : "Base negativa (CSLL)") + '</td><td class="num">' + brl(o.amount) + '</td><td>em ' + d(o.as_of) + '</td><td style="font-size:12px">' + esc(o.evidence) + '</td><td>' + (o.cancelled ? '' : '<button class="ghost only-confirmar" data-lu="parteb-x" data-ref="' + o.id + '">Cancelar</button>') + '</td></tr>'; }).join("") || '<tr><td class="empty">Nenhum saldo herdado.</td></tr>') + '</tbody></table></div>' +
+      '<div class="form-row only-confirmar" style="gap:4px;margin-top:6px"><select id="lu-bk"><option value="PREJUIZO_FISCAL">prejuízo fiscal</option><option value="BASE_NEGATIVA_CSLL">base negativa CSLL</option></select><input id="lu-bv" placeholder="valor" style="width:100px"><input type="date" id="lu-bd"><input id="lu-bo" placeholder="origem (ECF do ano, registro M410/M510)" style="width:240px"><button class="ghost" data-lu="parteb">Registrar saldo</button></div>' +
+      '<h3 style="font-size:13px;margin:12px 0 6px">Créditos de PIS/COFINS fora das NF-e</h3>' +
+      '<div class="scroll"><table><tbody>' + (r.credits.map(function (c) { return '<tr' + (c.cancelled ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + mm(c.competence + "-01") + '</td><td>' + esc(LKIND[c.kind] || c.kind) + '</td><td>' + esc(c.description) + '</td><td class="num">' + brl(c.base) + '</td><td style="font-size:12px">' + esc(c.legal_basis) + '</td><td>' + (c.cancelled ? '' : '<button class="ghost only-confirmar" data-lu="credito-x" data-ref="' + c.id + '">Cancelar</button>') + '</td></tr>'; }).join("") || '<tr><td class="empty">Nenhuma base lançada.</td></tr>') + '</tbody></table></div>' +
+      '<div class="form-row only-confirmar" style="gap:4px;margin-top:6px"><input type="month" id="lu-cc"><select id="lu-ck">' + Object.keys(LKIND).map(function (k) { return '<option value="' + k + '">' + LKIND[k] + '</option>'; }).join("") + '</select><input id="lu-cb" placeholder="base" style="width:100px"><input id="lu-cd" placeholder="descrição" style="width:180px"><input id="lu-cf" placeholder="fundamento (Lei 10.833/2003, art. 3º, …)" style="width:220px"><button class="ghost" data-lu="credito">Lançar base</button></div>' : '';
+    box.innerHTML = '<h2>Tributos: Lucro Presumido e Lucro Real</h2><div>' + regTxt + '</div>' + regForm + pend +
+      '<h3 style="font-size:13px;margin:12px 0 6px">Atividade para a presunção</h3><div class="scroll"><table><tbody>' + presRow("NFSE", "Serviços (NFS-e)") + presRow("NFE", "Vendas (NF-e)") + '</tbody></table></div>' + optHtml +
+      '<h3 style="font-size:13px;margin:12px 0 6px">Apuração</h3><div class="scroll"><table><thead><tr><th>Período</th><th>Tributo</th><th class="num">Base</th><th class="num">Devido</th><th class="num">Deduções</th><th class="num">A pagar</th><th>DARF</th><th>Vencimento</th><th>Situação</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="9" class="empty">Sem período encerrado no regime.</td></tr>') + '</tbody></table></div><div id="lu-det"></div>' + lal +
+      '<div class="empty">Motor determinístico: receita das NFS-e e NF-e de venda por mês de emissão, retenções sofridas deduzidas, LC 224/2025 (presunção +10% acima de R$ 1,25 mi no trimestre), trava de 30% no Real. Pagamento conferido no PagtoWeb pelo código do DARF; sem pagamento depois do vencimento: "ainda não identificado". Nada é emitido, transmitido ou lançado aqui.</div>';
+    bindLucro(id, r);
+  }).catch(function (err) { toast(err.message); });
+}
+function bindLucro(id, r) {
+  var box = $("lucro"); if (!box) return;
+  box.querySelectorAll("[data-lum]").forEach(function (a) {
+    a.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      var c = r.rows[Number(a.getAttribute("data-lum"))];
+      var al = (c.details && c.details.alerts) || [];
+      $("lu-det").innerHTML = '<h3 style="font-size:13px;margin:12px 0 6px">Memória de cálculo · ' + c.tax + ' ' + lucroPeriod(c) + '</h3>' +
+        '<div style="font-size:12px;line-height:1.6">' + ((c.details && c.details.lines) || []).map(esc).join("<br>") + '</div>' +
+        (al.length ? '<div class="wr" style="font-size:12px;margin-top:4px">' + al.map(esc).join("<br>") + '</div>' : '') +
+        '<div class="mut" style="font-size:11px;margin-top:4px">Regras: ' + (c.rule_refs || []).map(esc).join(", ") + '</div>';
+    });
+  });
+  box.querySelectorAll("[data-lu]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var k = b.getAttribute("data-lu");
+      var send = function (path, body, msg) {
+        b.disabled = true;
+        post("/api/empresa/" + id + "/lucro/" + path, "confirmar", body).then(function () { toast(msg); return loadLucro(id); }).catch(function (e) { toast(e.message); b.disabled = false; });
+      };
+      var v = function (x) { var el = $(x); return el ? el.value.trim() : ""; };
+      if (k === "regime") {
+        var m = v("lu-reg-ini"); if (!m) { toast("Informe o mês."); return; }
+        if (!window.confirm("Registrar " + LREG[v("lu-reg")] + " a partir de " + mm(m + "-01") + "? A decisão fica na auditoria em seu nome.")) return;
+        send("regime", { regime: v("lu-reg"), desde: m + "-01" }, "Regime registrado. O agente Tributos recalcula a empresa.");
+      }
+      if (k === "presuncao") {
+        var s = b.getAttribute("data-scope");
+        if (v("lu-gm-" + s).length < 3) { toast("Escreva o motivo da atividade escolhida."); return; }
+        send("presuncao", { fonte: s, grupo: v("lu-g-" + s), desde: v("lu-gi-" + s) + "-01", motivo: v("lu-gm-" + s) }, "Atividade confirmada.");
+      }
+      if (k === "opcao") send("opcao", { ano: v("lu-oy"), quotas: v("lu-oq"), receita: v("lu-or") }, "Opção do ano registrada.");
+      if (k === "lalur") send("lalur", { inicio: v("lu-li"), fim: v("lu-lf"), tributo: v("lu-lt"), tipo: v("lu-lk"), descricao: v("lu-ld"), valor: v("lu-lv").replace(/\\./g, "").replace(",", "."), fundamento: v("lu-lb"), parteB: v("lu-lp") }, "Ajuste lançado no e-LALUR.");
+      if (k === "parteb") send("parte-b", { tipo: v("lu-bk"), valor: v("lu-bv").replace(/\\./g, "").replace(",", "."), data: v("lu-bd"), origem: v("lu-bo") }, "Saldo da Parte B registrado.");
+      if (k === "credito") send("credito", { competencia: v("lu-cc") + "-01", tipo: v("lu-ck"), base: v("lu-cb").replace(/\\./g, "").replace(",", "."), descricao: v("lu-cd"), fundamento: v("lu-cf") }, "Base de crédito lançada.");
+      if (/-x$/.test(k)) {
+        if (!window.confirm("Cancelar este lançamento? Fica uma linha de cancelamento na história (nada é apagado).")) return;
+        send(k === "lalur-x" ? "lalur" : k === "parteb-x" ? "parte-b" : "credito", { cancela: b.getAttribute("data-ref") }, "Cancelado.");
+      }
+    });
+  });
+}
+function corporateRulesHtml(list) {
+  var pend = list.filter(function (x) { return !x.approved_by && !x.superseded; }).length;
+  var rows = list.map(function (x) {
+    return '<tr><td><b>' + esc(x.name) + '</b><div class="mut mono" style="font-size:11px">' + esc(x.code) + ' v' + x.version + ' · desde ' + d(x.valid_from) + '</div></td><td>' + esc(x.legal_basis) + (x.notes ? '<div class="mut" style="font-size:12px">' + esc(x.notes) + '</div>' : '') + '</td><td><details><summary style="cursor:pointer;font-size:12px">ver</summary><pre style="font-size:11px;white-space:pre-wrap;max-width:420px">' + esc(JSON.stringify(x.definition, null, 1)) + '</pre></details></td><td class="st ' + (x.approved_by ? "ok" : "wr") + '">' + (x.approved_by ? "aprovada por " + esc(x.approved_by) : "proposta") + '</td></tr>';
+  }).join("");
+  return '<section class="card"><h2>Lucro Presumido e Lucro Real · ' + pend + ' regra(s) aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Regra</th><th>Fundamento</th><th>Definição</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="lrules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira percentuais, alíquotas e códigos de DARF. A aprovação fica na auditoria em seu nome e recalcula as empresas.</span></div>' : '') + '</section>';
+}
 function loadSimples(id) {
   return getJson("/api/empresa/" + id + "/simples").then(function (r) {
     var box = $("simp"); if (!box) return;
@@ -1467,8 +1581,8 @@ function simplesRulesHtml(list) {
 
 function viewRegras() {
   setHead("Regras e legislação", "Catálogo de obrigações e tabelas de cálculo. Nenhuma regra vale sem a aprovação do responsável técnico.");
-  return Promise.all([getJson("/api/regras"), getJson("/api/simples/regras")]).then(function (both) {
-    var r = both[0], sr = both[1];
+  return Promise.all([getJson("/api/regras"), getJson("/api/simples/regras"), getJson("/api/lucro/regras")]).then(function (both) {
+    var r = both[0], sr = both[1], lr = both[2];
     var pend = r.rules.filter(function (x) { return !x.approved_by; }).length;
     var rows = r.rules.map(function (x) {
       var ADJ = { NEXT_BUSINESS_DAY: "em dia não útil, prorroga", PREVIOUS_BUSINESS_DAY: "em dia não útil, antecipa", NONE: "sem ajuste" };
@@ -1478,7 +1592,7 @@ function viewRegras() {
     $("view").innerHTML = '<section class="card"><h2>' + r.rules.length + ' regras · ' + pend + ' aguardando aprovação</h2><div class="scroll"><table><thead><tr><th>Regra</th><th>Esfera</th><th>Prazo</th><th>Fundamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="empty">Calendário: fins de semana e feriados nacionais. Na dúvida a IARIS usa a data mais cedo: dia só sem expediente bancário (Carnaval, Paixão, Corpus Christi) antecipa, mas não prorroga. Feriados municipais ainda não entram.</div>' +
       (pend ? '<div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="warn" data-act="rules">Aprovar ' + pend + ' regra(s)</button><span class="mut">Confira prazos e fundamentos antes de aprovar. A aprovação fica na auditoria em seu nome e completa os mapas das empresas.</span></div>' : '') + '</section>' +
-      simplesRulesHtml(sr.rules);
+      simplesRulesHtml(sr.rules) + corporateRulesHtml(lr.rules);
   });
 }
 
@@ -1509,6 +1623,11 @@ document.addEventListener("click", function (ev) {
       if (!window.confirm("Aprovar as tabelas do Simples Nacional propostas?\\n\\nConfira alíquotas, parcelas a deduzir e repartição com a LC 123. A aprovação fica registrada na auditoria em seu nome.")) return;
       b.disabled = true;
       post("/api/simples/regras/aprovar", "aprovar").then(function (r) { toast(r.approved.length + " tabela(s) aprovada(s). As empresas foram recalculadas pelo agente Tributos."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
+    }
+    if (b.dataset.act === "lrules") {
+      if (!window.confirm("Aprovar as regras do Lucro Presumido e do Lucro Real? Confira percentuais de presunção, LC 224/2025, alíquotas e códigos de DARF. A aprovação fica registrada na auditoria em seu nome.")) return;
+      b.disabled = true;
+      post("/api/lucro/regras/aprovar", "aprovar").then(function (r) { toast(r.approved.length + " regra(s) aprovada(s). As empresas do Presumido e do Real foram recalculadas."); }).catch(function (err) { toast(err.message); b.disabled = false; }).then(route);
     }
     if (b.dataset.act === "urevoke") {
       var ur = window._users[Number(b.dataset.i)];

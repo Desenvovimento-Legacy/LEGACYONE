@@ -7,10 +7,11 @@ import type { Actor } from "../../shared/actor.js";
 import { Dec } from "../../shared/decimal.js";
 import { withTenant } from "../../shared/db/tenant-tx.js";
 import { newId } from "../../shared/ids.js";
-import { CFOP_RULES_VERSION, CREDIT_RULES_VERSION } from "../fiscal/cfop-rules.js";
+import { CFOP_RULES_VERSION, CREDIT_RULES_VERSION, isSaleCfop } from "../fiscal/cfop-rules.js";
 import { chartConfig } from "../ledger/chart-config.js";
 import { closingStatus, type CheckStatus, type ClosingCheck } from "../ledger/closing.js";
 import { lockedCompetences, trialBalance } from "../ledger/ledger.js";
+import { corporateForMonth } from "../tax/corporate/corporate.js";
 
 /**
  * Agente Revisão independente (One Review).
@@ -78,9 +79,7 @@ const brl = (v: string | Dec) => Number(Dec.of(v).toFixed(2)).toLocaleString("pt
 const monthEnd = (month: string) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
 const absDec = (v: Dec) => (v.cmp("0") < 0 ? v.mul("-1") : v);
 
-/** CFOP de venda (receita): 51xx/61xx/71xx, 540x/640x (com ST) e 5933/6933 (serviço com ISS). */
-export const isSaleCfop = (cfop: string | null) =>
-  Boolean(cfop && (/^[567]1\d\d$/.test(cfop) || /^[56]40[1-5]$/.test(cfop) || cfop === "5933" || cfop === "6933"));
+export { isSaleCfop };
 
 /** Status de cada conferência → nota da revisão. Pura (testável). */
 export function grade(checks: ReviewCheck[], revenue: string | null): Pick<ReviewResult, "status" | "coverage" | "risk" | "materiality" | "pending" | "alerts"> {
@@ -235,6 +234,22 @@ async function crossChecks(tx: PoolClient, entityId: string, month: string, toda
     checks.push(m
       ? { key: "das_pagamento", area: "TRIBUTARIO", label: "DAS × pagamento", ...m, ...(m.status !== "OK" && amount ? { amount } : {}) }
       : { key: "das_pagamento", area: "TRIBUTARIO", label: "DAS × pagamento", status: "NAO_SE_APLICA", detail: "Situação do DAS ainda não montada" });
+  }
+
+  // Tributos do lucro (Presumido / Real) do período que termina no mês × pagamento
+  const corp = await corporateForMonth(tx, entityId, month, today);
+  if (corp.length) {
+    const blockedRows = corp.filter((r) => r.status !== "CALCULADO");
+    const unpaid = corp.filter((r) => r.payment === "PAGAMENTO_NAO_IDENTIFICADO" || r.payment === "PAGO_PARCIAL");
+    const per = (r: (typeof corp)[number]) => `${r.tax} ${r.period_kind === "TRIMESTRAL" ? "trimestre" : r.period_kind === "ANUAL" ? "ajuste anual" : "mês"}`;
+    checks.push({
+      key: "lucro_tributos", area: "TRIBUTARIO", label: "PIS, COFINS, IRPJ e CSLL × pagamento",
+      status: blockedRows.length || unpaid.length ? "PENDENTE" : "OK", critical: unpaid.length > 0,
+      ...(unpaid.length ? { amount: unpaid.reduce((s, r) => s.add(r.amount ?? "0").sub(r.paid?.principal ?? "0"), Dec.ZERO).toFixed(2) } : {}),
+      detail: blockedRows.length ? `${blockedRows.length} cálculo(s) bloqueado(s): ${[...new Set(blockedRows.flatMap((r) => r.blockers))].join("; ")}`
+        : unpaid.length ? `${unpaid.length} DARF com pagamento ainda não identificado` : `${corp.length} tributo(s) calculado(s), pagos ou no prazo`,
+      items: corp.map((r) => `${per(r)}: ${r.amount !== null ? brl(r.amount) : "—"} — ${r.status !== "CALCULADO" ? "bloqueado" : ({ PAGO: "pago", A_VENCER: "a vencer", SEM_SALDO: "sem saldo", PAGO_PARCIAL: "pago em parte", PAGAMENTO_NAO_IDENTIFICADO: "pagamento ainda não identificado" } as Record<string, string>)[r.payment ?? ""] ?? ""}`),
+    });
   }
 
   // Retenções das notas tomadas × recolhimento (IRRF, CSRF e ISS por município)

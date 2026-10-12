@@ -380,6 +380,18 @@ export const EventContracts = {
       version: z.string(),
     }),
   },
+  CORPORATE_TAX_RULES_APPROVED: {
+    1: z.object({ rules: z.array(z.string()), approved_by: z.string() }),
+  },
+  CORPORATE_TAX_SETUP_CHANGED: {
+    1: z.object({ entity_id: z.uuid(), what: z.string(), by: z.string() }),
+  },
+  TAX_REGIME_DEFINED: {
+    1: z.object({ entity_id: z.uuid(), regime: z.string(), valid_from: z.iso.date(), by: z.string() }),
+  },
+  CORPORATE_TAX_CALCULATED: {
+    1: z.object({ entity_id: z.uuid(), changed: z.number().int(), periods: z.array(z.string()), engine: z.string() }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

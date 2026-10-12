@@ -34,6 +34,10 @@ import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { nfeItemsOverview, readEntityNfeItems } from "../modules/fiscal/nfe-items.js";
 import { reviewOverview, runReview } from "../modules/review/review.js";
+import {
+  addCreditEntry, addLalurEntry, addLalurOpening, approveCorporateRules, corporateOverview, corporateRulesList, CorporateTaxError, defineCorporateRegime,
+  definePresumption, refreshCorporate, setCorporateOption,
+} from "../modules/tax/corporate/corporate.js";
 import { checkPgdasDraft, PgdasDraftError, pgdasDraftView, preparePgdasDrafts } from "../modules/tax/simples/pgdas-draft.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import { formatCnpj, isValidCnpj, normalizeCnpj } from "../shared/br/documents.js";
@@ -491,6 +495,55 @@ export function createWebServer(deps: WebDeps) {
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "nfe-itens") {
         await readEntityNfeItems(deps.appPool, deps.tenantId, parts[2]!);
         json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => nfeItemsOverview(tx, parts[2]!)));
+        return;
+      }
+      // GET /api/empresa/:id/lucro — Lucro Presumido/Real: cálculos, configuração e pagamento (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "lucro" && !parts[4]) {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        await refreshCorporate(deps.appPool, deps.tenantId, parts[2]!, today);
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => corporateOverview(tx, parts[2]!, today)));
+        return;
+      }
+      // POST /api/empresa/:id/lucro/{regime|presuncao|opcao|lalur|parte-b|credito} — decisões de pessoa (auditadas).
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "lucro" && parts[4]) {
+        if (guard("confirmar")) return;
+        const entityId = parts[2]!;
+        try {
+          const b = (await readJson(req)) as Record<string, string>;
+          const r = parts[4] === "regime" ? await defineCorporateRegime(deps.appPool, deps.tenantId, { entityId, regime: b.regime ?? "", validFrom: b.desde ?? "" }, actor)
+            : parts[4] === "presuncao" ? await definePresumption(deps.appPool, deps.tenantId, { entityId, scope: b.fonte ?? "", group: b.grupo ?? "", validFrom: b.desde ?? "", reason: b.motivo ?? "" }, actor)
+            : parts[4] === "opcao" ? await setCorporateOption(deps.appPool, deps.tenantId, { entityId, year: Number(b.ano), quotas: b.quotas ?? "", revenueBasis: b.receita ?? "" }, actor)
+            : parts[4] === "lalur" ? await addLalurEntry(deps.appPool, deps.tenantId, { entityId, periodStart: b.inicio ?? "", periodEnd: b.fim ?? "", tax: b.tributo ?? "", kind: b.tipo ?? "",
+                description: b.descricao ?? "", amount: b.valor ?? "0", legalBasis: b.fundamento ?? "", partB: b.parteB ?? null, accountCode: b.conta ?? null, cancels: b.cancela ?? null }, actor)
+            : parts[4] === "parte-b" ? await addLalurOpening(deps.appPool, deps.tenantId, { entityId, kind: b.tipo ?? "", amount: b.valor ?? "0", asOf: b.data ?? "", evidence: b.origem ?? "", cancels: b.cancela ?? null }, actor)
+            : parts[4] === "credito" ? await addCreditEntry(deps.appPool, deps.tenantId, { entityId, competence: b.competencia ?? "", kind: b.tipo ?? "", base: b.base ?? "0",
+                description: b.descricao ?? "", legalBasis: b.fundamento ?? "", cancels: b.cancela ?? null }, actor)
+            : null;
+          if (!r) { json(res, 404, { erro: "Não encontrado" }); return; }
+          await deps.orchestrate?.();
+          json(res, 200, r);
+        } catch (err) {
+          if (err instanceof CorporateTaxError) json(res, 409, { erro: err.message });
+          else if ((err as { code?: string }).code === "23P01") json(res, 409, { erro: "Já existe uma vigência nesse período" });
+          else throw err;
+        }
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/lucro/regras") {
+        json(res, 200, { rules: await withTenant(deps.appPool, deps.tenantId, (tx) => corporateRulesList(tx)) });
+        return;
+      }
+      // POST /api/lucro/regras/aprovar — decisão humana: aprovar as regras do Presumido e do Real.
+      if (req.method === "POST" && url.pathname === "/api/lucro/regras/aprovar") {
+        if (guard("aprovar")) return;
+        try {
+          const r = await approveCorporateRules(deps.appPool, deps.tenantId, actor);
+          await deps.orchestrate?.();
+          json(res, 200, r);
+        } catch (err) {
+          if (err instanceof CorporateTaxError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
       // GET /api/empresa/:id/revisao — revisão independente por mês (refaz os cruzamentos; só banco).
