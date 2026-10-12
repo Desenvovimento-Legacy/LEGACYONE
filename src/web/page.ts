@@ -29,6 +29,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   body:not(.p-aprovar) button[data-act=approve], body:not(.p-aprovar) button[data-act=rules], body:not(.p-aprovar) button[data-act=srules],
   body:not(.p-aprovar) button[data-act=ciencia], body:not(.p-aprovar) button[data-act=exc], body:not(.p-aprovar) .only-aprovar,
   body:not(.p-confirmar) .only-confirmar { display: none; }
+  body.p-confirmar .no-confirmar { display: none; }
   .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 8px; background: var(--panel2); }
   .drop.on { border-color: var(--teal); background: var(--teal-bg); }
   body:not(.p-confirmar) .drop { display: none; }
@@ -282,6 +283,9 @@ function viewCentral() {
         return '<div class="ent"><a href="#/empresa/' + r.id + '" style="color:var(--ink)"><b>' + esc(r.name) + '</b></a><small class="mono">' + esc(r.cnpj) + '</small></div>' + r.cells.map(function (x) { return '<div class="cell ' + x.kind + '">' + esc(x.text) + '</div>'; }).join("");
       }).join("") + '</div>';
     $("view").innerHTML =
+      '<section class="card only-confirmar" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 16px"><b>Nova empresa</b>' +
+      '<input id="inc-cnpj" placeholder="CNPJ 00.000.000/0000-00" style="width:210px"><label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="inc-serpro"> conferir no SERPRO (cobrada)</label>' +
+      '<button data-act="incluir">Iniciar implantação</button><span class="mut" style="font-size:12px">A IARIS busca o cadastro pelo CNPJ e abre a implantação.</span></section>' +
       '<section class="kpis">' + kpis + '</section>' +
       '<div class="cols"><div class="wide">' +
         '<section class="card"><h2>Processos</h2><div class="procs">' + procs + '</div></section>' +
@@ -381,10 +385,11 @@ function viewEmpresas() {
     var rows = r.entities.map(function (e) {
       return '<tr class="row" data-goto="#/empresa/' + e.id + '"><td><b>' + esc(e.legal_name) + '</b><div class="mut mono" style="font-size:12px">' + esc(e.cnpj) + '</div></td><td>' + esc((e.regime || "—").replace("_", " ").toLowerCase()) + '</td><td>' + (e.start ? d(e.start) : '<span class="wr st">a definir</span>') + '</td><td class="num">' + e.open_items + '</td></tr>';
     }).join("");
-    $("view").innerHTML = '<section class="card only-confirmar"><h2>Incluir empresa</h2>' +
+    $("view").innerHTML = '<section class="card no-confirmar"><h2>Incluir empresa</h2><p class="mut" style="margin:0;font-size:13px">Seu acesso é só de leitura: incluir empresa é para Operador ou Responsável técnico (Usuários).</p></section>' +
+      '<section class="card only-confirmar"><h2>Incluir empresa</h2>' +
       '<div class="form-row"><label>CNPJ<input id="inc-cnpj" placeholder="00.000.000/0000-00" style="width:190px"></label>' +
       '<label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="inc-serpro"> Conferir procuração e regime no SERPRO agora (consulta cobrada)</label>' +
-      '<button data-act="incluir">Incluir</button></div>' +
+      '<button data-act="incluir">Iniciar implantação</button></div>' +
       '<p class="mut" style="margin:8px 0 0;font-size:12px">A IARIS busca o cadastro na base pública do CNPJ (estabelecimentos, CNAEs, sócios, endereço) e abre a implantação. Em seguida, na Fila humana, você informa os serviços contratados e o mês de início da responsabilidade; daí ela monta os mapas de acesso e de obrigações e a lista de documentos.</p></section>' +
       '<section class="card"><div class="scroll"><table><thead><tr><th>Empresa</th><th>Regime</th><th>Responsabilidade desde</th><th class="num">Itens em aberto</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
       '<section class="card"><h2>Certificados A1 dos clientes</h2><p class="mut" style="margin:0 0 12px;font-size:13px">Os .pfx ficam em C:\\\\IARIS\\\\cofre\\\\clientes (pode ser em subpasta, com o CNPJ no nome do arquivo) e a senha no segredos.env (CERT_CNPJ_PASSWORD). A IARIS confere senha, CNPJ e validade; não consulta nenhum órgão.</p>' +
@@ -421,6 +426,7 @@ function viewEmpresa(id) {
         '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
         '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="pgdas"><h2>PGDAS-D pronta para transmitir</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ret"><h2>Retenções nas NFS-e tomadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ctb"><h2>Contabilidade</h2><div class="empty">Carregando…</div></section>' +
@@ -440,6 +446,7 @@ function viewEmpresa(id) {
       '</div></div>';
     loadConferencia(id);
     loadSimples(id);
+    loadPgdas(id);
     loadGuias(id);
     loadRetencoes(id);
     loadContabil(id);
@@ -944,6 +951,50 @@ function loadGuias(id) {
   }).catch(function (err) { toast(err.message); });
 }
 
+var PGR = {
+  PRONTA: '<span class="st ok">pronta · Receita confere</span>',
+  PRONTA_SO_RECEITA: '<span class="st ok">pronta · valores da Receita</span>',
+  FALTA_CONFERIR: '<span class="st wr">montada · conferir com a Receita</span>',
+  DIVERGE: '<span class="st bad">Receita calcula diferente</span>',
+  ERRO: '<span class="st bad">Receita recusou</span>',
+  BLOQUEADA: '<span class="st bad">bloqueada</span>'
+};
+function loadPgdas(id) {
+  return getJson("/api/empresa/" + id + "/pgdas").then(function (r) {
+    var box = $("pgdas"); if (!box) return;
+    if (!r.rows.length) { box.innerHTML = '<h2>PGDAS-D pronta para transmitir</h2><div class="empty">Nenhum mês em aberto (ou a empresa ainda não tem declaração lida para a IARIS saber as atividades).</div>'; return; }
+    var rows = r.rows.map(function (x) {
+      var acts = [];
+      (x.payload.declaracao.estabelecimentos || []).forEach(function (e) {
+        (e.atividades || []).forEach(function (a) { acts.push('atividade ' + a.idAtividade + ': ' + brl(a.valorAtividade)); });
+      });
+      var mine = Object.keys(x.taxes || {}).map(function (t) { return t + ' ' + brl(x.taxes[t]); }).join(" · ");
+      var rf = x.check && x.check.values ? x.check.values.filter(function (v) { return Number(v.value) !== 0; }).map(function (v) { return v.tax + ' ' + brl(v.value); }).join(" · ") : "";
+      var why = (x.blockers || []).map(function (b) { return '<div class="bad" style="font-size:11px">' + esc(b) + '</div>'; }).join("") +
+        (x.notes || []).map(function (b) { return '<div class="mut" style="font-size:11px">' + esc(b) + '</div>'; }).join("") +
+        (x.check && x.check.messages && x.check.messages.length ? x.check.messages.map(function (m) { return '<div class="wr" style="font-size:11px">' + esc(m.code + " " + m.text) + '</div>'; }).join("") : "");
+      var btn = x.status === "MONTADA" ? '<button data-pg="' + x.id + '"' + (r.integraConfigured ? '' : ' disabled') + '>Conferir com a Receita</button><div class="mut" style="font-size:11px">1 consulta cobrada · não transmite</div>' : '';
+      return '<tr><td>' + mm(x.competence) + '<div class="mut" style="font-size:11px">' + (x.declaration_type === 2 ? "retificadora" : "original") + ' · versão ' + x.version + '</div></td>' +
+        '<td class="num">' + brl(x.revenue) + '<div class="mut" style="font-size:11px">' + esc(acts.join(" · ")) + '</div></td>' +
+        '<td class="num">' + (x.iaris_total !== null ? brl(x.iaris_total) : '—') + (mine ? '<div class="mut" style="font-size:11px;white-space:normal">' + mine + '</div>' : '') + '</td>' +
+        '<td class="num">' + (x.check && x.check.total !== null ? brl(x.check.total) : '—') + (rf ? '<div class="mut" style="font-size:11px;white-space:normal">' + rf + '</div>' : '') + (x.check && x.check.difference && Number(x.check.difference) ? '<div class="bad" style="font-size:11px">diferença ' + brl(x.check.difference) + '</div>' : '') + '</td>' +
+        '<td>' + (PGR[x.readiness] || esc(x.readiness)) + why + '</td><td>' + btn + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>PGDAS-D pronta para transmitir</h2>' +
+      '<div class="scroll"><table><thead><tr><th>Competência</th><th class="num">Receita</th><th class="num">Cálculo da IARIS</th><th class="num">Cálculo da Receita</th><th>Situação</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="empty">Montada sozinha pelas NFS-e do mês e pelas atividades já declaradas. "Conferir com a Receita" usa o serviço de entrega do Integra Contador com transmissão desligada: a Receita calcula e devolve os valores, sem transmitir. Nesta fase a IARIS não transmite: a declaração fica pronta, com o pedido guardado.</div>';
+    box.querySelectorAll("[data-pg]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        b.disabled = true;
+        post("/api/pgdas/" + b.getAttribute("data-pg") + "/conferir", "buscar", {}).then(function (x) {
+          toast(x.status === "CONFERE" ? "A Receita calcula o mesmo valor: pronta." : x.status === "SO_RECEITA" ? "A Receita calculou " + brl(x.total) + ": pronta." : x.status === "DIVERGE" ? "A Receita calcula diferente: veja a diferença." : "A Receita recusou: veja a mensagem.");
+          return loadPgdas(id);
+        }).catch(function (e) { toast(e.message); b.disabled = false; });
+      });
+    });
+  }).catch(function (err) { toast(err.message); });
+}
+
 var TAXN = ["IRPJ", "CSLL", "COFINS", "PIS", "CPP", "ICMS", "IPI", "ISS"];
 function loadSimples(id) {
   return getJson("/api/empresa/" + id + "/simples").then(function (r) {
@@ -1341,7 +1392,7 @@ document.addEventListener("click", function (ev) {
         var nPend = r.pending.length;
         toast((r.name || "Empresa") + (r.created ? " incluída." : " já estava cadastrada.") + (nPend ? " " + nPend + " pendência(s); informe serviços e início na Fila humana." : ""));
         location.hash = nPend ? "#/fila" : "#/empresa/" + r.entityId;
-      }).catch(function (err) { toast(err.message); b.disabled = false; b.textContent = "Incluir"; });
+      }).catch(function (err) { toast(err.message); b.disabled = false; b.textContent = "Iniciar implantação"; });
     }
     if (b.dataset.act === "certs") {
       b.disabled = true;

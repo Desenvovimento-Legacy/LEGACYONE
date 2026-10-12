@@ -341,6 +341,12 @@ export const EventContracts = {
   CLIENT_REQUEST_SENT: {
     1: z.object({ entity_id: z.uuid(), request_id: z.uuid(), version: z.number().int(), channel: z.string(), items: z.number().int() }),
   },
+  PGDAS_DRAFT_PREPARED: {
+    1: z.object({ entity_id: z.uuid(), draft_id: z.uuid(), competence: z.string(), version: z.number().int(), status: z.enum(["MONTADA", "BLOQUEADA"]), revenue: z.string(), blockers: z.number().int() }),
+  },
+  PGDAS_DRAFT_CHECKED: {
+    1: z.object({ entity_id: z.uuid(), draft_id: z.uuid(), competence: z.string(), status: z.enum(["CONFERE", "DIVERGE", "SO_RECEITA", "ERRO"]), total: z.string().nullable(), difference: z.string().nullable() }),
+  },
   OPENING_BALANCES_IMPORTED: {
     1: z.object({ entity_id: z.uuid(), import_id: z.uuid(), entry_id: z.uuid(), period_end: z.string(), accounts: z.number().int(), total: z.string(), by_similarity: z.number().int() }),
   },

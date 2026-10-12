@@ -6,7 +6,9 @@ import type {
   IntegraContadorResult,
   PgdasDasIndex,
   PgdasDeclarationIndex,
+  PgdasDeclarationData,
   PgdasLastDeclaration,
+  PgdasSimulation,
   PgdasYearIndex,
   PowerOfAttorneyStatus,
 } from "./types.js";
@@ -15,6 +17,8 @@ export interface FakeContributorData {
   declarations?: PgdasDeclarationIndex[];
   das?: PgdasDasIndex[];
   payments?: FederalPayment[];
+  /** Valores devidos que a "Receita" devolve no cálculo sem transmissão, por PA (AAAAMM). */
+  simulations?: Record<string, { code: number; value: string }[] | { error: string }>;
   /** PDF da última declaração por PA (AAAAMM). */
   lastDeclarations?: Record<string, { number: string; pdf: Buffer }>;
 }
@@ -91,4 +95,17 @@ export class FakeIntegraContador implements IntegraContador {
     const all = (this.data[cnpj]?.payments ?? []).filter((p) => p.collectedOn >= q.from && p.collectedOn <= q.to);
     return this.result({ contributor: cnpj, from: q.from, to: q.to, first, size, payments: all.slice(first, first + size) });
   }
+
+  async simulatePgdas(contributorCnpj: string, data: PgdasDeclarationData): Promise<IntegraContadorResult<PgdasSimulation>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
+    const period = String(data.pa);
+    this.calls.push(`pgdas-simulacao:${cnpj}:${period}`);
+    this.lastSimulation = data;
+    const sim = this.data[cnpj]?.simulations?.[period];
+    if (sim && "error" in sim) throw Object.assign(new Error(sim.error), { name: "IntegraContadorError", messages: [{ codigo: "MSG_E", texto: sim.error }] });
+    return this.result({ contributor: cnpj, period, values: sim ?? [], messages: [] });
+  }
+
+  /** Última declaração enviada ao cálculo (para os testes conferirem o pedido). */
+  lastSimulation: PgdasDeclarationData | null = null;
 }

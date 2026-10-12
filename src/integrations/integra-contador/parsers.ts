@@ -1,4 +1,4 @@
-import type { FederalPayment, PgdasDasIndex, PgdasDeclarationIndex, PgdasYearIndex } from "./types.js";
+import type { FederalPayment, PgdasDasIndex, PgdasDeclarationIndex, PgdasSimulation, PgdasYearIndex } from "./types.js";
 
 /**
  * Interpretação das respostas de negócio do Integra Contador. A documentação
@@ -193,4 +193,19 @@ export function stripPdfs(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(stripPdfs);
   if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, stripPdfs(x)]));
   return v;
+}
+
+/**
+ * TRANSDECLARACAO11 sem transmissão: valoresDevidos (codigoTributo, valor). O
+ * "dados" pode vir como objeto ou como lista com um objeto.
+ */
+export function parsePgdasSimulation(dados: unknown, contributor: string, period: string, messages: { code: string; text: string }[]): PgdasSimulation {
+  const root = parseDados(dados);
+  const first = Array.isArray(root) ? obj(root[0]) : obj(root);
+  const values = arr(first.valoresdevidos).map((v) => {
+    const o = obj(v);
+    const n = Number(o.valor ?? 0);
+    return { code: Number(o.codigotributo), value: (Math.round(n * 100) / 100).toFixed(2) };
+  }).filter((v) => Number.isFinite(v.code));
+  return { contributor, period, values, messages };
 }

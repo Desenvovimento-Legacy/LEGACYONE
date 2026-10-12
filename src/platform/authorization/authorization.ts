@@ -13,12 +13,15 @@ import { audit } from "../audit/audit.js";
 export type AuthorizationAction =
   /** Consulta somente leitura ao Integra Contador em nome do contribuinte. */
   | "integra.read"
+  /** Cálculo pela Receita sem transmissão (PGDAS-D com indicadorTransmissao = false). */
+  | "integra.simulate"
   /** Transmissão de obrigação a órgão externo. */
   | "obligation.transmit";
 
 /** Serviços do e-CAC exigidos por ação (código da procuração eletrônica). */
 const REQUIRED_SCOPE: Partial<Record<AuthorizationAction, string>> = {
   "integra.read": "ECAC",
+  "integra.simulate": "ECAC",
 };
 
 const GRANT_TTL_MS = 5 * 60 * 1000;

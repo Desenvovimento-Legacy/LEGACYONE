@@ -1,12 +1,14 @@
 import { request } from "node:https";
 import { z } from "zod";
 import { isValidCnpj, normalizeCnpj } from "../../shared/br/documents.js";
-import { parseLastDeclaration, parsePayments, parsePgdasYear, stripPdfs } from "./parsers.js";
+import { parseLastDeclaration, parsePayments, parsePgdasSimulation, parsePgdasYear, stripPdfs } from "./parsers.js";
 import type {
   FederalPaymentPage,
   IntegraContador,
   IntegraContadorResult,
+  PgdasDeclarationData,
   PgdasLastDeclaration,
+  PgdasSimulation,
   PgdasYearIndex,
   PowerOfAttorneyGrant,
   PowerOfAttorneyStatus,
@@ -339,6 +341,35 @@ export class SerproIntegraContador implements IntegraContador {
     const value = parseLastDeclaration(r.dados, cnpj, period);
     // A evidência guarda a resposta sem os PDFs em base64 (eles vão para tabela própria, com hash).
     return { value, raw: { httpStatus: r.status, body: stripPdfs(r.body) }, source: this.name, fetchedAt: this.now() };
+  }
+
+  async simulatePgdas(contributorCnpj: string, data: PgdasDeclarationData): Promise<IntegraContadorResult<PgdasSimulation>> {
+    const cnpj = normalizeCnpj(contributorCnpj);
+    if (normalizeCnpj(data.cnpjCompleto) !== cnpj) throw new Error("CNPJ da declaração difere do contribuinte");
+    // indicadorTransmissao fixo em false: a IARIS não transmite declaração nesta fase
+    const dados = { cnpjCompleto: cnpj, pa: data.pa, indicadorTransmissao: false as const, indicadorComparacao: false, declaracao: data.declaracao };
+    const r = await this.consultDeclarar(cnpj, { idSistema: "PGDASD", idServico: "TRANSDECLARACAO11", versaoSistema: "1.0", dados });
+    const value = parsePgdasSimulation(r.dados, cnpj, String(data.pa), r.messages);
+    return { value, raw: { httpStatus: r.status, body: stripPdfs(r.body) }, source: this.name, fetchedAt: this.now() };
+  }
+
+  /** Como consult(), no caminho Declarar (o único usado é o cálculo sem transmissão). */
+  private async consultDeclarar(
+    cnpj: string,
+    pedido: { idSistema: string; idServico: string; versaoSistema: string; dados: { indicadorTransmissao: false } & Record<string, unknown> },
+  ): Promise<{ status: number; body: unknown; dados: unknown; messages: { code: string; text: string }[] }> {
+    if (pedido.dados.indicadorTransmissao !== false) throw new Error("Transmissão desligada");
+    const { status, body } = await this.call("Declarar", { numero: cnpj, tipo: 2 }, pedido);
+    const parsed = GatewayResponse.safeParse(body);
+    const messages = (parsed.data?.mensagens ?? []).map((m) => ({ code: m.codigo, text: m.texto }));
+    if (status !== 200) {
+      throw new IntegraContadorError(
+        `Integra Contador respondeu HTTP ${status} em ${pedido.idSistema}/${pedido.idServico}: ${messages.map((m) => `${m.code} ${m.text}`).join("; ") || "sem mensagem"}`,
+        status,
+        parsed.data?.mensagens ?? [],
+      );
+    }
+    return { status, body, dados: parsed.data?.dados ?? null, messages };
   }
 
   async listPayments(

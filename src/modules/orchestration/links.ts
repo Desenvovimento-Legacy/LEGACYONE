@@ -10,6 +10,7 @@ import { runAutoPosting } from "../ledger/auto-posting.js";
 import { refreshPowerRequirements } from "../onboarding/powers.js";
 import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
 import { prepareClientRequest } from "../relationship/client-request.js";
+import { preparePgdasDrafts } from "../tax/simples/pgdas-draft.js";
 
 /**
  * Vínculos entre agentes: "quando acontecer X, o agente Y faz Z".
@@ -138,6 +139,14 @@ export const LINKS: Link<LinkDeps>[] = [
     },
   },
   {
+    id: "pgdas-pronta",
+    on: ["SIMPLES_CALCULATED", "NFSE_BATCH_RECEIVED", "PGDAS_DECLARATION_READ", "PGDAS_INDEX_SYNCED", "NFSE_TAXES_READ", "SIMPLES_RULES_APPROVED"],
+    agent: "tax",
+    does: "Monta a PGDAS-D dos meses em aberto, pronta para transmitir (não transmite) e com o motivo do que bloqueia",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await preparePgdasDrafts(pool, tenantId, entityId!, today(deps))) }),
+  },
+  {
     id: "certificado-notas",
     on: ["DIGITAL_CERTIFICATE_REGISTERED"],
     agent: "docs",
@@ -170,4 +179,7 @@ export const EVENT_LABEL: Record<string, string> = {
   OPENING_BALANCES_IMPORTED: "Saldos de abertura lançados",
   ACCOUNTING_CLOSING_COMPLETED: "Competência contábil fechada",
   ACCOUNTING_RULES_APPROVED: "Regra de contabilização aprovada",
+  SIMPLES_CALCULATED: "Simples calculado",
+  PGDAS_DRAFT_PREPARED: "PGDAS-D montada (pronta para transmitir)",
+  PGDAS_DRAFT_CHECKED: "PGDAS-D conferida com a Receita (sem transmitir)",
 };

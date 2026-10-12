@@ -107,6 +107,25 @@ export interface PgdasLastDeclaration {
   receiptPdf: Buffer | null;
 }
 
+/**
+ * PGDAS-D calculada pela Receita SEM transmitir (TRANSDECLARACAO11 com
+ * indicadorTransmissao = false): devolve os valores devidos por tributo.
+ */
+export interface PgdasSimulation {
+  contributor: string;
+  period: string;
+  /** codigoTributo (1001 IRPJ … 1010 ISS) → valor em texto com 2 casas */
+  values: { code: number; value: string }[];
+  messages: { code: string; text: string }[];
+}
+
+/** Dados da declaração (objeto "dados" do TRANSDECLARACAO11) sem os indicadores. */
+export interface PgdasDeclarationData {
+  cnpjCompleto: string;
+  pa: number;
+  declaracao: Record<string, unknown>;
+}
+
 export interface IntegraContador {
   readonly name: string;
   /** Verifica se o contribuinte outorgou procuração eletrônica ao escritório. */
@@ -117,6 +136,12 @@ export interface IntegraContador {
   listPgdasPeriod(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasYearIndex>>;
   /** PGDAS-D: última declaração/recibo transmitidos do PA AAAAMM (CONSULTIMADECREC14). Cobrado. */
   lastPgdasDeclaration(contributorCnpj: string, period: string): Promise<IntegraContadorResult<PgdasLastDeclaration>>;
+  /**
+   * PGDAS-D: a Receita calcula a declaração e devolve os valores devidos, sem
+   * transmitir (TRANSDECLARACAO11, indicadorTransmissao = false). Cobrado.
+   * Não existe método de transmissão nesta interface.
+   */
+  simulatePgdas(contributorCnpj: string, data: PgdasDeclarationData): Promise<IntegraContadorResult<PgdasSimulation>>;
   /** PagtoWeb: pagamentos por data de arrecadação, paginado (PAGAMENTOS71). */
   listPayments(
     contributorCnpj: string,

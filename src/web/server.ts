@@ -30,6 +30,7 @@ import { activeTemplate, importChartTemplate } from "../modules/ledger/chart-tem
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
+import { checkPgdasDraft, PgdasDraftError, pgdasDraftView, preparePgdasDrafts } from "../modules/tax/simples/pgdas-draft.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import { formatCnpj, isValidCnpj, normalizeCnpj } from "../shared/br/documents.js";
 import { BrasilApiCnpjSource } from "../integrations/cnpj-public/brasilapi.js";
@@ -478,6 +479,26 @@ export function createWebServer(deps: WebDeps) {
         } catch (err) {
           if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
+          else json(res, 502, { erro: (err as Error).message });
+        }
+        return;
+      }
+      // GET /api/empresa/:id/pgdas — PGDAS-D montada dos meses em aberto (só banco; nada é transmitido).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "pgdas" && !parts[4]) {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        await preparePgdasDrafts(deps.appPool, deps.tenantId, parts[2]!, today);
+        json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => pgdasDraftView(tx, parts[2]!)), integraConfigured: Boolean(deps.integra) });
+        return;
+      }
+      // POST /api/pgdas/:draftId/conferir — 1 consulta cobrada: a Receita calcula SEM transmitir.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "pgdas" && parts[3] === "conferir") {
+        if (guard("buscar")) return;
+        if (!deps.integra) return json(res, 409, { erro: "Integra Contador não configurado" });
+        try {
+          json(res, 200, await checkPgdasDraft({ appPool: deps.appPool, integra: deps.integra, metering: deps.metering }, deps.tenantId, parts[2]!, actor));
+        } catch (err) {
+          if (err instanceof DailyLimitExceededError) json(res, 429, { erro: err.message });
+          else if (err instanceof PgdasDraftError) json(res, 409, { erro: err.message });
           else json(res, 502, { erro: (err as Error).message });
         }
         return;
