@@ -309,6 +309,7 @@ function viewCentral() {
       ["Em andamento", k.inProgress, "Cases executando", "var(--blue-ink)"],
       ["Fila humana", k.humanQueue, "só exceções", "var(--amber-ink)"],
       ["Aguardando cliente", k.waitingClient, k.waitingExternal + " aguardando órgão externo", "var(--ink)"],
+      ["Revisão", k.reviewsOpen, "empresa-mês com pendência ou risco alto", k.reviewsOpen ? "var(--amber-ink)" : "var(--green-ink)"],
       ["Toques humanos", k.humanTouchesPerClient, "por cliente", "var(--ink)"]
     ].map(function (x) { return '<div class="kpi"><span>' + x[0] + '</span><b class="mono" style="color:' + x[3] + '">' + x[1] + '</b><small>' + x[2] + '</small></div>'; }).join("");
     var procs = c.processes.map(function (p) {
@@ -459,6 +460,7 @@ function viewEmpresa(id) {
     var cs = e.cases.map(function (c) { return '<tr><td>' + esc(c.type) + '</td><td class="st ' + (c.status === "COMPLETED" ? "ok" : "wr") + '">' + esc(c.statusPt) + '</td><td>' + dt(c.updatedAt) + '</td></tr>'; }).join("");
     $("view").innerHTML =
       '<div class="cols"><div class="wide">' +
+        '<section class="card" id="rev"><h2>Revisão independente</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Mapa de obrigações</h2><div class="scroll"><table><thead><tr><th>Obrigação</th><th>Esfera</th><th>Desde</th><th>Próximos vencimentos</th></tr></thead><tbody>' + obl + '</tbody></table></div></section>' +
         '<section class="card" id="conf"><h2>Conferência da implantação: receita declarada × NFS-e prestadas</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="simp"><h2>Simples Nacional: cálculo do motor</h2><div class="empty">Carregando…</div></section>' +
@@ -481,6 +483,7 @@ function viewEmpresa(id) {
           '<div class="empty">Sem consulta automática nesses órgãos: registre como o escritório acessa (procuração, gov.br, certificado). Senha nunca é digitada aqui. Faltando ou vencida, a IARIS pede ao cliente; vencendo em até 30 dias, aparece na Fila humana.</div></details></section>' +
         '<section class="card"><h2>Cases</h2><table>' + cs + '</table></section>' +
       '</div></div>';
+    loadRevisao(id);
     loadConferencia(id);
     loadSimples(id);
     loadPgdas(id);
@@ -995,6 +998,38 @@ function loadRetencoes(id) {
     box.querySelectorAll("[data-ret]").forEach(function (a) {
       a.addEventListener("click", function (ev) { ev.preventDefault(); loadRetNotas(id, a.getAttribute("data-ret")); });
     });
+  }).catch(function (err) { toast(err.message); });
+}
+var RVS = { APROVADA: '<span class="st ok">aprovada</span>', COM_RESSALVAS: '<span class="st wr">com ressalvas</span>', PENDENTE: '<span class="st bad">com pendência</span>', NAO_SE_APLICA: '<span class="mut">sem o que revisar</span>' };
+var RVR = { BAIXO: '<span class="ok">baixo</span>', MEDIO: '<span class="wr">médio</span>', ALTO: '<span class="bad">alto</span>' };
+var RVA = { CONTABIL: "Contábil", FINANCEIRO: "Financeiro", FISCAL: "Fiscal", TRIBUTARIO: "Tributário", DOCUMENTOS: "Documentos" };
+var RVC = { OK: '<span class="ok">✓</span>', PENDENTE: '<span class="bad">pendente</span>', ALERTA: '<span class="wr">alerta</span>', NAO_SE_APLICA: '<span class="mut">n/a</span>' };
+function loadRevisao(id) {
+  return getJson("/api/empresa/" + id + "/revisao").then(function (r) {
+    var box = $("rev"); if (!box) return;
+    if (!r.rows.length) { box.innerHTML = '<h2>Revisão independente</h2><div class="empty">Sem meses a revisar: falta o início da responsabilidade ou o plano de contas.</div>'; return; }
+    var rows = r.rows.map(function (v, i) {
+      return '<tr><td><a href="#" data-rvm="' + i + '">' + mm(v.competence + "-01") + '</a>' + (v.locked ? '<div class="mut" style="font-size:11px">fechada</div>' : '') + '</td><td>' + (RVS[v.status] || esc(v.status)) + '</td><td class="num">' + Number(v.coverage).toLocaleString("pt-BR", { maximumFractionDigits: 0 }) + '%</td><td>' + (RVR[v.risk] || esc(v.risk)) + '</td><td class="num">' + (Number(v.materiality) ? brl(v.materiality) : '—') + '</td><td class="num">' + (v.pending ? '<span class="bad">' + v.pending + '</span>' : '0') + ' / ' + (v.alerts ? '<span class="wr">' + v.alerts + '</span>' : '0') + '</td><td class="mut" style="font-size:12px">' + dt(v.reviewedAt) + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>Revisão independente</h2>' +
+      '<div class="scroll"><table><thead><tr><th>Competência</th><th>Revisão</th><th class="num">Cobertura</th><th>Risco</th><th class="num">Em aberto</th><th class="num">Pend. / alertas</th><th>Revisada em</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div id="rev-det"></div>' +
+      '<div class="empty">O agente refaz os cruzamentos sem confiar nos outros agentes: fiscal × contábil, banco × razão, declarado × notas, Simples calculado × declarado, DAS e retenções × pagamento, CFOP/CST e XML completos. Risco alto: pendência tributária ou valor em aberto acima de 5% da receita do mês (ou de R$ 5.000,00). Não lança nem corrige nada.</div>';
+    var show = function (i) {
+      var v = r.rows[i]; var by = {};
+      v.checks.forEach(function (c) { (by[c.area] = by[c.area] || []).push(c); });
+      var html = Object.keys(RVA).filter(function (a) { return by[a]; }).map(function (a) {
+        return '<tr><td colspan="3" style="background:var(--bg2,#f4f4f4);font-weight:600;font-size:12px">' + RVA[a] + '</td></tr>' + by[a].map(function (c) {
+          return '<tr><td>' + esc(c.label) + '</td><td>' + (RVC[c.status] || esc(c.status)) + '</td><td style="font-size:12px;white-space:normal">' + esc(c.detail) + (c.items && c.items.length ? c.items.map(function (x) { return '<div class="mut" style="font-size:11px">' + esc(x) + '</div>'; }).join("") : '') + '</td></tr>';
+        }).join("");
+      }).join("");
+      $("rev-det").innerHTML = '<h3 style="font-size:13px;margin:12px 0 6px">Conferências de ' + mm(v.competence + "-01") + '</h3><div class="scroll"><table><thead><tr><th>Conferência</th><th>Situação</th><th>Detalhe</th></tr></thead><tbody>' + html + '</tbody></table></div>';
+    };
+    box.querySelectorAll("[data-rvm]").forEach(function (a) {
+      a.addEventListener("click", function (ev) { ev.preventDefault(); show(Number(a.getAttribute("data-rvm"))); });
+    });
+    var first = r.rows.findIndex(function (v) { return v.status === "PENDENTE" || v.status === "COM_RESSALVAS"; });
+    show(first >= 0 ? first : 0);
   }).catch(function (err) { toast(err.message); });
 }
 var CRS = { APROPRIAVEL: '<span class="ok">apropriável</span>', NAO_SE_APLICA: '<span class="mut">não se aplica</span>', A_CONFERIR: '<span class="wr">a conferir</span>' };

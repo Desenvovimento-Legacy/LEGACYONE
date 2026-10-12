@@ -33,6 +33,7 @@ import { bankOverview, importBankStatement, StatementError } from "../modules/fi
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { nfeItemsOverview, readEntityNfeItems } from "../modules/fiscal/nfe-items.js";
+import { reviewOverview, runReview } from "../modules/review/review.js";
 import { checkPgdasDraft, PgdasDraftError, pgdasDraftView, preparePgdasDrafts } from "../modules/tax/simples/pgdas-draft.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import { formatCnpj, isValidCnpj, normalizeCnpj } from "../shared/br/documents.js";
@@ -490,6 +491,13 @@ export function createWebServer(deps: WebDeps) {
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "nfe-itens") {
         await readEntityNfeItems(deps.appPool, deps.tenantId, parts[2]!);
         json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => nfeItemsOverview(tx, parts[2]!)));
+        return;
+      }
+      // GET /api/empresa/:id/revisao — revisão independente por mês (refaz os cruzamentos; só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "revisao") {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        await runReview(deps.appPool, deps.tenantId, parts[2]!, today);
+        json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => reviewOverview(tx, parts[2]!)) });
         return;
       }
       // GET /api/empresa/:id/pgdas — PGDAS-D montada dos meses em aberto (só banco; nada é transmitido).

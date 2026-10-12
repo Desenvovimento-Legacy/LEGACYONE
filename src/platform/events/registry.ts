@@ -365,6 +365,21 @@ export const EventContracts = {
   OPENING_BALANCES_IMPORTED: {
     1: z.object({ entity_id: z.uuid(), import_id: z.uuid(), entry_id: z.uuid(), period_end: z.string(), accounts: z.number().int(), total: z.string(), by_similarity: z.number().int() }),
   },
+  REVIEW_COMPLETED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      run_id: z.uuid(),
+      status: z.enum(["APROVADA", "COM_RESSALVAS", "PENDENTE", "NAO_SE_APLICA"]),
+      coverage: z.string(),
+      risk: z.enum(["BAIXO", "MEDIO", "ALTO"]),
+      materiality: z.string(),
+      pending: z.number().int(),
+      alerts: z.number().int(),
+      locked: z.boolean(),
+      version: z.string(),
+    }),
+  },
 } as const satisfies Record<string, Record<number, z.ZodType>>;
 
 export type EventType = keyof typeof EventContracts;

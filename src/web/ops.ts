@@ -53,6 +53,11 @@ const fmtDate = (iso: string | null | undefined) =>
 /** Frase curta, em português, para um evento do barramento. */
 export function describeEvent(type: string, p: Record<string, unknown>): string {
   switch (type) {
+    case "REVIEW_COMPLETED": {
+      const st = { APROVADA: "aprovada", COM_RESSALVAS: "com ressalvas", PENDENTE: "com pendência", NAO_SE_APLICA: "sem o que revisar" }[String(p.status)] ?? String(p.status);
+      const c = String(p.competence);
+      return `Revisão ${c.slice(5, 7)}/${c.slice(0, 4)} ${st}: cobertura ${Math.round(Number(p.coverage))}%, risco ${String(p.risk).toLowerCase().replace("medio", "médio")}`;
+    }
     case "CASE_CREATED":
       return `Case ${caseTypePt(String(p.case_type))} aberto`;
     case "CASE_STATUS_CHANGED":
@@ -171,12 +176,16 @@ export async function centralData(tx: PoolClient) {
     dfe_docs: number;
     awaiting: number;
     simples: { competence: string; status: string; total: string | null } | null;
+    review: { competence: string; status: string; risk: string; coverage: string } | null;
   }>(
     `SELECT e.id, coalesce(e.trade_name, e.legal_name) AS name, e.cnpj,
             (SELECT count(*)::int FROM dfe_document x WHERE x.entity_id = e.id AND x.kind IN ('NFE', 'RES_NFE')) AS dfe_docs,
             (SELECT json_build_object('competence', s.competence, 'status', s.status, 'total', s.total::text)
                FROM simples_calculation s WHERE s.entity_id = e.id
               ORDER BY s.competence DESC, s.created_at DESC LIMIT 1) AS simples,
+            (SELECT json_build_object('competence', v.competence, 'status', v.status, 'risk', v.risk, 'coverage', v.coverage::text)
+               FROM review_run v WHERE v.entity_id = e.id
+              ORDER BY v.competence DESC, v.created_at DESC LIMIT 1) AS review,
             (SELECT count(*)::int FROM dfe_document r WHERE r.entity_id = e.id AND r.kind = 'RES_NFE' AND r.situation = '1'
                AND NOT EXISTS (SELECT 1 FROM dfe_document f WHERE f.entity_id = r.entity_id AND f.kind = 'NFE' AND f.access_key = r.access_key)
                AND NOT EXISTS (SELECT 1 FROM nfe_manifestation m WHERE m.entity_id = r.entity_id AND m.access_key = r.access_key)) AS awaiting,
@@ -189,13 +198,15 @@ export async function centralData(tx: PoolClient) {
 
   const human = await humanQueue(tx);
 
-  const counts = await tx.query<{ in_progress: number; exceptions: number; waiting_client: number; waiting_external: number; office_items: number }>(
+  const counts = await tx.query<{ in_progress: number; exceptions: number; waiting_client: number; waiting_external: number; office_items: number; reviews_open: number }>(
     `SELECT
        (SELECT count(*)::int FROM "case" WHERE status = 'IN_PROGRESS') AS in_progress,
        (SELECT count(*)::int FROM "case" WHERE type = 'EXCEPTION' AND status NOT IN ('COMPLETED', 'CANCELLED')) AS exceptions,
        (SELECT count(*)::int FROM pending_item WHERE status = 'OPEN' AND responsible_source = 'CLIENT') AS waiting_client,
        (SELECT count(*)::int FROM pending_item WHERE status = 'OPEN' AND responsible_source = 'EXTERNAL') AS waiting_external,
-       (SELECT count(*)::int FROM pending_item WHERE responsible_source = 'OFFICE') AS office_items`,
+       (SELECT count(*)::int FROM pending_item WHERE responsible_source = 'OFFICE') AS office_items,
+       (SELECT count(*)::int FROM (SELECT DISTINCT ON (entity_id, competence) status, risk FROM review_run ORDER BY entity_id, competence, created_at DESC) v
+         WHERE v.status = 'PENDENTE' OR v.risk = 'ALTO') AS reviews_open`,
   );
   const c = counts.rows[0]!;
 
@@ -237,6 +248,15 @@ export async function centralData(tx: PoolClient) {
           }
           return e.has_pgdas ? { kind: "done", text: "Receita sincronizada" } : { kind: "future", text: "Fase 5" };
         }
+        case "Revisão": {
+          const v = e.review;
+          if (!v) return { kind: "future", text: "sem mês a revisar" };
+          const pa = `${v.competence.slice(5, 7)}/${v.competence.slice(0, 4)}`;
+          const cov = `${Math.round(Number(v.coverage))}%`;
+          if (v.status === "APROVADA") return { kind: "done", text: `${pa} aprovada · ${cov}` };
+          if (v.status === "NAO_SE_APLICA") return { kind: "future", text: `${pa} sem o que revisar` };
+          return { kind: "wait", text: `${pa} ${v.status === "PENDENTE" ? "com pendência" : "com ressalvas"} · ${cov}${v.risk === "ALTO" ? " · risco alto" : ""}` };
+        }
         default: {
           const proc = PROCESSES.find((p) => p.name.startsWith(stage) || (stage === "Cliente" && p.id === "relacionamento"));
           return { kind: "future", text: proc ? proc.phase : "planejado" };
@@ -254,6 +274,7 @@ export async function centralData(tx: PoolClient) {
       exceptions: c.exceptions,
       waitingClient: c.waiting_client,
       waitingExternal: c.waiting_external,
+      reviewsOpen: c.reviews_open,
       humanTouchesPerClient: nEntities ? Math.round((c.office_items / nEntities) * 10) / 10 : 0,
     },
     processes: PROCESSES,
@@ -722,6 +743,7 @@ export async function linksData(tx: PoolClient) {
 function describeEventType(t: string): string {
   const L: Record<string, string> = {
     REVENUE_DIVERGENCE_DETECTED: "divergência de receita",
+    REVIEW_COMPLETED: "revisão independente",
     SIMPLES_CALCULATED: "Simples calculado",
     GUIDE_STATUS_CHANGED: "situação de guia",
     CASE_CREATED: "Case aberto",

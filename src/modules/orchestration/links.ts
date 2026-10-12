@@ -12,6 +12,7 @@ import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
 import { prepareClientRequest } from "../relationship/client-request.js";
 import { preparePgdasDrafts } from "../tax/simples/pgdas-draft.js";
 import { readEntityNfeItems } from "../fiscal/nfe-items.js";
+import { runReview } from "../review/review.js";
 
 /**
  * Vínculos entre agentes: "quando acontecer X, o agente Y faz Z".
@@ -156,6 +157,15 @@ export const LINKS: Link<LinkDeps>[] = [
     run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await preparePgdasDrafts(pool, tenantId, entityId!, today(deps))) }),
   },
   {
+    id: "revisao-independente",
+    on: ["ACCOUNTING_BATCH_POSTED", "BANK_STATEMENT_RECEIVED", "SIMPLES_CALCULATED", "WITHHOLDING_STATUS_CHANGED", "GUIDE_STATUS_CHANGED", "NFE_ITEMS_READ",
+      "REVENUE_DIVERGENCE_DETECTED", "EXCEPTION_DECIDED", "ACCOUNTING_CLOSING_COMPLETED", "ACCOUNTING_PERIOD_REOPENED", "OPENING_BALANCES_IMPORTED", "DFE_BATCH_RECEIVED"],
+    agent: "review",
+    does: "Refaz os cruzamentos de cada mês (fiscal × contábil, banco × razão, declarado × notas, Simples × declarado, guia × pagamento, retenções) e dá a nota de cobertura e de risco",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await runReview(pool, tenantId, entityId!, today(deps))) }),
+  },
+  {
     id: "certificado-notas",
     on: ["DIGITAL_CERTIFICATE_REGISTERED"],
     agent: "docs",
@@ -194,4 +204,10 @@ export const EVENT_LABEL: Record<string, string> = {
   DFE_BATCH_RECEIVED: "NF-e/CT-e recebidos da SEFAZ",
   XML_BATCH_IMPORTED: "XML recebidos por upload ou pasta",
   PGDAS_DRAFT_CHECKED: "PGDAS-D conferida com a Receita (sem transmitir)",
+  WITHHOLDING_STATUS_CHANGED: "Situação das retenções mudou",
+  GUIDE_STATUS_CHANGED: "Situação do DAS mudou",
+  REVENUE_DIVERGENCE_DETECTED: "Diferença entre declarado e notas detectada",
+  EXCEPTION_DECIDED: "Exceção decidida por pessoa",
+  ACCOUNTING_PERIOD_REOPENED: "Competência contábil reaberta",
+  REVIEW_COMPLETED: "Revisão independente atualizada",
 };
