@@ -30,6 +30,7 @@ import { activeTemplate, importChartTemplate } from "../modules/ledger/chart-tem
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
+import { nfeItemsOverview, readEntityNfeItems } from "../modules/fiscal/nfe-items.js";
 import { checkPgdasDraft, PgdasDraftError, pgdasDraftView, preparePgdasDrafts } from "../modules/tax/simples/pgdas-draft.js";
 import { billedCallsToday, DailyLimitExceededError, type MeteringPolicy } from "../platform/metering/metering.js";
 import { formatCnpj, isValidCnpj, normalizeCnpj } from "../shared/br/documents.js";
@@ -481,6 +482,12 @@ export function createWebServer(deps: WebDeps) {
           else if (err instanceof FederalAccessDeniedError) json(res, 403, { erro: err.message });
           else json(res, 502, { erro: (err as Error).message });
         }
+        return;
+      }
+      // GET /api/empresa/:id/nfe-itens — itens das NF-e/NFC-e: CFOP, CST, ST e créditos (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "nfe-itens") {
+        await readEntityNfeItems(deps.appPool, deps.tenantId, parts[2]!);
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => nfeItemsOverview(tx, parts[2]!)));
         return;
       }
       // GET /api/empresa/:id/pgdas — PGDAS-D montada dos meses em aberto (só banco; nada é transmitido).

@@ -429,6 +429,7 @@ function viewEmpresa(id) {
         '<section class="card" id="pgdas"><h2>PGDAS-D pronta para transmitir</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ret"><h2>Retenções nas NFS-e tomadas</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="nfei"><h2>NF-e: CFOP, CST e créditos</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ctb"><h2>Contabilidade</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
       '</div><div class="narrow">' +
@@ -449,6 +450,7 @@ function viewEmpresa(id) {
     loadPgdas(id);
     loadGuias(id);
     loadRetencoes(id);
+    loadNfeItens(id);
     loadContabil(id);
     loadPedido(id);
     var bpoa = document.querySelector("[data-act=poa]");
@@ -928,6 +930,33 @@ function loadRetencoes(id) {
     box.querySelectorAll("[data-ret]").forEach(function (a) {
       a.addEventListener("click", function (ev) { ev.preventDefault(); loadRetNotas(id, a.getAttribute("data-ret")); });
     });
+  }).catch(function (err) { toast(err.message); });
+}
+var CRS = { APROPRIAVEL: '<span class="ok">apropriável</span>', NAO_SE_APLICA: '<span class="mut">não se aplica</span>', A_CONFERIR: '<span class="wr">a conferir</span>' };
+var DST = { REVENDA: "revenda", INDUSTRIALIZACAO: "industrialização", USO_CONSUMO: "uso e consumo" };
+function loadNfeItens(id) {
+  return getJson("/api/empresa/" + id + "/nfe-itens").then(function (r) {
+    var box = $("nfei"); if (!box) return;
+    if (!r.months.length) { box.innerHTML = '<h2>NF-e: CFOP, CST e créditos</h2><div class="empty">Nenhuma NF-e ou NFC-e completa recebida ainda.</div>'; return; }
+    var ms = r.months.map(function (m) {
+      return '<tr><td>' + mm(m.competence) + '</td><td>' + (m.direction === "ENTRADA" ? "entradas" : "saídas") + '</td><td class="num">' + m.notes + '</td><td class="num">' + m.items + '</td><td class="num">' + brl(m.value) + '</td><td class="num">' + (Number(m.st) ? brl(m.st) : '—') + '</td><td class="num">' + (Number(m.monophasic) ? brl(m.monophasic) : '—') + '</td><td class="mono" style="font-size:11px;white-space:normal">' + esc((m.cfops || []).join(" ")) + '</td><td class="num">' + (m.flagged ? '<span class="wr">' + m.flagged + '</span>' : '<span class="ok">0</span>') + '</td></tr>';
+    }).join("");
+    var cr = r.credits.map(function (c) {
+      return '<tr><td>' + mm(c.competence) + '</td><td>' + esc(c.tax) + '</td><td>' + (CRS[c.status] || esc(c.status)) + '</td><td class="num">' + c.items + '</td><td class="num">' + brl(c.value) + '</td><td class="mut" style="font-size:12px;white-space:normal">' + esc(c.reason) + '</td></tr>';
+    }).join("");
+    var en = r.entries.map(function (e) {
+      return '<tr><td class="mono">' + esc(e.cfop || "—") + '</td><td class="mono">' + (e.entry_cfop ? esc(e.entry_cfop) : '<span class="wr">sem proposta</span>') + '</td><td class="mut" style="font-size:12px">' + esc(e.entry_cfop_why || "") + '</td><td class="num">' + e.items + '</td><td class="num">' + brl(e.value) + '</td></tr>';
+    }).join("");
+    var fl = r.flagged.map(function (f) {
+      return '<tr><td>' + (f.issued_at ? d(String(f.issued_at).slice(0, 10)) : "—") + '</td><td>' + esc(f.issuer_name || "—") + '<div class="mut" style="font-size:11px">item ' + f.n_item + ' · ' + esc(f.description || "") + '</div></td><td class="mono">' + esc(f.cfop || "—") + '</td><td class="mono">' + esc(f.icms_csosn || f.icms_cst || "—") + '</td><td class="num">' + brl(f.total) + '</td><td>' + (f.checks || []).map(function (c) { return '<div class="wr" style="font-size:11px">' + esc(c.text) + '</div>'; }).join("") + '</td></tr>';
+    }).join("");
+    box.innerHTML = '<h2>NF-e: CFOP, CST e créditos</h2>' +
+      '<div class="mut" style="font-size:12px;margin-bottom:6px">Destinação das compras: ' + (r.destination ? '<b>' + DST[r.destination] + '</b> (pela atividade declarada no PGDAS-D)' : '<span class="wr">desconhecida</span> — sem ela o CFOP de entrada fica sem proposta') + '</div>' +
+      '<div class="scroll"><table><thead><tr><th>Mês</th><th>Sentido</th><th class="num">Notas</th><th class="num">Itens</th><th class="num">Valor</th><th class="num">Com ST</th><th class="num">Monofásico</th><th>CFOP</th><th class="num">A conferir</th></tr></thead><tbody>' + ms + '</tbody></table></div>' +
+      (en ? '<h3 style="font-size:13px;margin:12px 0 6px">CFOP de entrada proposto</h3><div class="scroll"><table><thead><tr><th>CFOP do fornecedor</th><th>CFOP de entrada</th><th>Regra</th><th class="num">Itens</th><th class="num">Valor</th></tr></thead><tbody>' + en + '</tbody></table></div>' : '') +
+      (cr ? '<h3 style="font-size:13px;margin:12px 0 6px">Créditos das entradas</h3><div class="scroll"><table><thead><tr><th>Mês</th><th>Tributo</th><th>Situação</th><th class="num">Itens</th><th class="num">Crédito</th><th>Fundamento</th></tr></thead><tbody>' + cr + '</tbody></table></div>' : '') +
+      (fl ? '<h3 style="font-size:13px;margin:12px 0 6px">Itens com CFOP/CST a conferir</h3><div class="scroll"><table><thead><tr><th>Emissão</th><th>Emitente / item</th><th>CFOP</th><th>CST/CSOSN</th><th class="num">Valor</th><th>Conferência</th></tr></thead><tbody>' + fl + '</tbody></table></div>' : '') +
+      '<div class="empty">Leitura dos XML autorizados (SEFAZ e entrada de XML), sem IA. Crédito pelo regime da empresa na data da nota. Nada é lançado nem transmitido aqui.</div>';
   }).catch(function (err) { toast(err.message); });
 }
 function loadRetNotas(id, comp) {

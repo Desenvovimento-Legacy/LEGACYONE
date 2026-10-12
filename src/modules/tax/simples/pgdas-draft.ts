@@ -127,7 +127,18 @@ export async function buildPgdasDraft(tx: PoolClient, entityId: string, competen
   const services = [...new Set(ids.filter(isServiceActivity))];
   const goods = ids.filter(isGoodsActivity);
   if (ids.some(isFactorR)) blockers.push("Atividade sujeita ao fator r: falta a folha de salários dos 12 meses anteriores (folha ainda não integrada)");
-  if (goods.length) blockers.push(`Vendas de mercadorias (NF-e/NFC-e) de ${my(competence)}: a separação por CFOP e por substituição tributária/monofásico depende da leitura dos itens das notas`);
+  if (goods.length) {
+    // itens das notas de saída do mês (agente Fiscal): mostra a separação, mas a montagem das vendas ainda não é automática
+    const out = (await tx.query<{ n: number; total: string | null; st: string | null; mono: string | null }>(
+      `SELECT count(DISTINCT access_key)::int AS n, sum(total - discount)::text AS total,
+              sum(total - discount) FILTER (WHERE has_st)::text AS st, sum(total - discount) FILTER (WHERE monophasic AND NOT has_st)::text AS mono
+         FROM nfe_item WHERE entity_id = $1 AND direction = 'SAIDA' AND competence = $2`,
+      [entityId, competence],
+    )).rows[0];
+    blockers.push(out?.n
+      ? `Vendas de mercadorias de ${my(competence)}: ${out.n} nota(s) de saída lidas (${brl(out.total ?? 0)}, sendo ${brl(out.st ?? 0)} com ST e ${brl(out.mono ?? 0)} monofásico); a montagem das vendas por atividade na declaração ainda não é automática`
+      : `Vendas de mercadorias (NF-e/NFC-e) de ${my(competence)}: nenhuma nota de saída do mês na IARIS (envie os XML das NFC-e/NF-e emitidas pela entrada de XML)`);
+  }
   const other = ids.filter((i) => !isServiceActivity(i) && !isGoodsActivity(i));
   if (other.length) blockers.push(`Atividade ainda não montada automaticamente: ${other.map((i) => `${i} (${PGDAS_ACTIVITIES[i]!.slice(0, 60)}…)`).join("; ")}`);
   if (services.length > 1) blockers.push("Mais de uma atividade de serviço declarada: a separação das notas por atividade (item da lista de serviços) ainda não é automática");

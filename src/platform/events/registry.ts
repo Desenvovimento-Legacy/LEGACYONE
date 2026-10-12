@@ -353,6 +353,9 @@ export const EventContracts = {
   CLIENT_REQUEST_SENT: {
     1: z.object({ entity_id: z.uuid(), request_id: z.uuid(), version: z.number().int(), channel: z.string(), items: z.number().int() }),
   },
+  NFE_ITEMS_READ: {
+    1: z.object({ entity_id: z.uuid(), documents: z.number().int(), items: z.number().int(), checks: z.number().int(), rules: z.string(), destination: z.string().nullable() }),
+  },
   PGDAS_DRAFT_PREPARED: {
     1: z.object({ entity_id: z.uuid(), draft_id: z.uuid(), competence: z.string(), version: z.number().int(), status: z.enum(["MONTADA", "BLOQUEADA"]), revenue: z.string(), blockers: z.number().int() }),
   },

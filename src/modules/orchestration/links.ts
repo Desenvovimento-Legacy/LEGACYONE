@@ -11,6 +11,7 @@ import { refreshPowerRequirements } from "../onboarding/powers.js";
 import { refreshAllSimples, refreshSimples } from "../tax/simples/apuracao.js";
 import { prepareClientRequest } from "../relationship/client-request.js";
 import { preparePgdasDrafts } from "../tax/simples/pgdas-draft.js";
+import { readEntityNfeItems } from "../fiscal/nfe-items.js";
 
 /**
  * Vínculos entre agentes: "quando acontecer X, o agente Y faz Z".
@@ -139,6 +140,14 @@ export const LINKS: Link<LinkDeps>[] = [
     },
   },
   {
+    id: "nfe-itens",
+    on: ["DFE_BATCH_RECEIVED", "XML_BATCH_IMPORTED", "PGDAS_DECLARATION_READ"],
+    agent: "fiscal",
+    does: "Lê os itens das NF-e e NFC-e: confere CFOP e CST, marca ST e monofásico, propõe o CFOP de entrada e decide os créditos pelo regime",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId }) => ({ ...(await readEntityNfeItems(pool, tenantId, entityId!)) }),
+  },
+  {
     id: "pgdas-pronta",
     on: ["SIMPLES_CALCULATED", "NFSE_BATCH_RECEIVED", "PGDAS_DECLARATION_READ", "PGDAS_INDEX_SYNCED", "NFSE_TAXES_READ", "SIMPLES_RULES_APPROVED"],
     agent: "tax",
@@ -181,5 +190,8 @@ export const EVENT_LABEL: Record<string, string> = {
   ACCOUNTING_RULES_APPROVED: "Regra de contabilização aprovada",
   SIMPLES_CALCULATED: "Simples calculado",
   PGDAS_DRAFT_PREPARED: "PGDAS-D montada (pronta para transmitir)",
+  NFE_ITEMS_READ: "Itens das NF-e lidos (CFOP, CST e créditos)",
+  DFE_BATCH_RECEIVED: "NF-e/CT-e recebidos da SEFAZ",
+  XML_BATCH_IMPORTED: "XML recebidos por upload ou pasta",
   PGDAS_DRAFT_CHECKED: "PGDAS-D conferida com a Receita (sem transmitir)",
 };
