@@ -149,6 +149,22 @@ export async function detectTaxRegime(pool: Pool, tenantId: string, entityId: st
     const { years, spans } = await regimeEvidence(tx, entityId, today);
     let added = 0;
     for (const s of spans) {
+      // regime anterior que termina dentro do ano (ex.: exclusão do Simples em julho): começa no mês seguinte
+      const prior = await tx.query<{ end: string }>(
+        `SELECT max(valid_to)::text AS end FROM tax_regime_history
+          WHERE entity_id = $1 AND valid_to IS NOT NULL AND valid_to >= $2 AND valid_from < $2::date + interval '1 year' AND valid_from <= $2::date`,
+        [entityId, s.validFrom],
+      );
+      const end = prior.rows[0]?.end ?? null;
+      if (end) {
+        const d = new Date(`${end}T12:00:00Z`);
+        d.setUTCDate(1);
+        d.setUTCMonth(d.getUTCMonth() + 1);
+        const start = d.toISOString().slice(0, 10);
+        if (s.validTo && start > s.validTo) continue;
+        s.why.unshift(`depois do regime anterior encerrado em ${end.split("-").reverse().join("/")}`);
+        (s as { validFrom: string }).validFrom = start;
+      }
       const clash = await tx.query(
         "SELECT 1 FROM tax_regime_history WHERE entity_id = $1 AND daterange(valid_from, valid_to, '[]') && daterange($2::date, $3::date, '[]')",
         [entityId, s.validFrom, s.validTo],

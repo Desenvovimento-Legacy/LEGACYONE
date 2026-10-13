@@ -199,6 +199,25 @@ describe("regime pela evidência da Receita", () => {
       const r = await tx.query("SELECT regime, valid_from::text, valid_to FROM tax_regime_history WHERE entity_id = $1", [entityId]);
       expect(r.rows).toEqual([{ regime: "LUCRO_PRESUMIDO", valid_from: "2025-01-01", valid_to: null }]);
     });
+    // Simples encerrado no meio do ano: o Presumido começa no mês seguinte à saída
+    const t2 = await newTenant();
+    const e2 = (await newEntity(t2, CNPJ_MATRIZ)).entityId;
+    await withTenant(appPool, t2, async (tx) => {
+      await tx.query("INSERT INTO tax_regime_history (id, tenant_id, entity_id, regime, valid_from, valid_to, source) VALUES ($1, current_tenant(), $2, 'SIMPLES_NACIONAL', '2010-01-01', '2024-07-30', 't')", [newId(), e2]);
+      const snap = newId();
+      await tx.query("INSERT INTO external_snapshot (id, tenant_id, entity_id, source, request_key, fetched_at, sha256, payload) VALUES ($1, current_tenant(), $2, 'teste', 'x', now(), $3, '{}')",
+        [snap, e2, createHash("sha256").update("q").digest()]);
+      for (const [y, c] of [["2024-09-01", "2089"], ["2025-03-01", "2089"], ["2026-03-01", "2089"]] as const) {
+        await tx.query(
+          `INSERT INTO federal_payment (id, tenant_id, entity_id, document_number, competence, collected_on, revenue_code, amount_total, breakdown, source, snapshot_id)
+           VALUES ($1, current_tenant(), $2, $3, $4, $4, $5, 1, '[]', 'teste', $6)`, [newId(), e2, `D${y}`, y, c, snap]);
+      }
+    });
+    expect(await detectTaxRegime(appPool, t2, e2, "2026-10-13")).toMatchObject({ added: 1 });
+    await withTenant(appPool, t2, async (tx) => {
+      const r = await tx.query("SELECT regime, valid_from::text FROM tax_regime_history WHERE entity_id = $1 ORDER BY valid_from", [e2]);
+      expect(r.rows.map((x) => [x.regime, x.valid_from])).toEqual([["SIMPLES_NACIONAL", "2010-01-01"], ["LUCRO_PRESUMIDO", "2024-08-01"]]);
+    });
     // de novo: nada muda (nunca sobrescreve)
     expect(await detectTaxRegime(appPool, t, entityId, "2026-10-13")).toMatchObject({ added: 0 });
     await putIssued(t, entityId, "1000.00", "2026-01-10");
