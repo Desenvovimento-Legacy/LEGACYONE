@@ -30,6 +30,12 @@ export interface NfeHeader {
   recipientDoc: string | null;
   recipientUf: string | null;
   authorized: boolean;
+  /** vNF: total da nota (produtos − desconto + frete + seguro + outras + IPI + ST) */
+  totalNf: string | null;
+  freight: string;
+  insurance: string;
+  /** duplicatas (cobr/dup): parcelas a pagar/receber */
+  installments: { n: string; due: string | null; amount: string }[];
 }
 
 export interface NfeItem {
@@ -118,6 +124,15 @@ export function readNfeItems(xml: string): { header: NfeHeader; items: NfeItem[]
     recipientDoc: docOf(dest),
     recipientUf: str(obj(dest.enderDest).UF),
     authorized: cStat === "100" || cStat === "150",
+    totalNf: num(obj(obj(inf.total).ICMSTot).vNF),
+    freight: z(num(obj(obj(inf.total).ICMSTot).vFrete)),
+    insurance: z(num(obj(obj(inf.total).ICMSTot).vSeg)),
+    installments: (() => {
+      const d = obj(inf.cobr).dup;
+      const list = d === undefined ? [] : Array.isArray(d) ? d : [d];
+      return list.map((x, i) => ({ n: str(obj(x).nDup) ?? String(i + 1).padStart(3, "0"), due: str(obj(x).dVenc), amount: z(num(obj(x).vDup)) }))
+        .filter((x) => Dec.of(x.amount).gt("0"));
+    })(),
   };
   const dets = inf.det === undefined ? [] : Array.isArray(inf.det) ? inf.det : [inf.det];
   const items: NfeItem[] = dets.map((d, i) => {
