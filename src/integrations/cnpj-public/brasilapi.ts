@@ -37,6 +37,8 @@ const BrasilApiCnpj = z.object({
       }),
     )
     .default([]),
+  // Dados abertos da Receita (forma de tributação declarada na ECF, por ano).
+  regime_tributario: z.array(z.object({ ano: z.number(), forma_de_tributacao: z.string().nullish() })).nullish(),
 });
 
 const cnae = (n: number) => String(n).padStart(7, "0");
@@ -75,6 +77,9 @@ export function normalizeBrasilApi(raw: unknown): PublicCompanyLookup["data"] {
       since: blankToNull(r.data_opcao_pelo_mei),
       excludedAt: blankToNull(r.data_exclusao_do_mei),
     },
+    taxRegimes: (r.regime_tributario ?? [])
+      .filter((x) => x.forma_de_tributacao && x.forma_de_tributacao.trim())
+      .map((x) => ({ year: x.ano, regime: x.forma_de_tributacao!.trim().toUpperCase() })),
     partners: r.qsa.map((p) => ({
       name: p.nome_socio.trim(),
       documentMasked: blankToNull(p.cnpj_cpf_do_socio),

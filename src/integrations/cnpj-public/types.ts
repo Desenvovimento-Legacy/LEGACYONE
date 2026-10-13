@@ -23,6 +23,8 @@ export interface PublicCompanyData {
   secondaryCnaes: { code: string; description: string }[];
   simples: { optant: boolean; since: string | null; excludedAt: string | null };
   mei: { optant: boolean; since: string | null; excludedAt: string | null };
+  /** Forma de tributação por ano (dados abertos da Receita, a partir da ECF): "LUCRO PRESUMIDO", "LUCRO REAL"... */
+  taxRegimes?: { year: number; regime: string }[];
   partners: {
     name: string;
     documentMasked: string | null;

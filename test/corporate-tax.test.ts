@@ -151,3 +151,62 @@ describe("motor dos tributos do lucro", () => {
     expect((m("2026-03-01", "COFINS").details as { lines: string[] }).lines.join(" ")).toMatch(/saldo credor anterior 760,00/);
   });
 });
+
+describe("regime pela evidência da Receita", () => {
+  it("DARF pagos decidem o ano; ECF dos dados abertos cobre o resto; anos seguidos viram uma vigência", async () => {
+    const { decideYears, spansFrom, detectTaxRegime } = await import("../src/modules/registry/regime-detect.js");
+    const ys = decideYears({
+      publicYears: [{ year: 2024, regime: "LUCRO PRESUMIDO" }],
+      paymentCodes: [{ year: 2025, code: "2089" }, { year: 2025, code: "2372" }, { year: 2026, code: "8109" }, { year: 2026, code: "2172" }],
+      currentYear: 2026,
+    });
+    expect(ys.map((y) => [y.year, y.regime])).toEqual([[2024, "LUCRO_PRESUMIDO"], [2025, "LUCRO_PRESUMIDO"], [2026, "LUCRO_PRESUMIDO"]]);
+    expect(spansFrom(ys, 2026)).toMatchObject([{ regime: "LUCRO_PRESUMIDO", validFrom: "2024-01-01", validTo: null }]);
+    // conflito entre ECF e DARF: não decide
+    expect(decideYears({ publicYears: [{ year: 2025, regime: "LUCRO PRESUMIDO" }], paymentCodes: [{ year: 2025, code: "3373" }], currentYear: 2026 })[0]!.regime).toBeNull();
+    // ECF diz Lucro Real; DARF de estimativa em outro ano mostra que é anual
+    expect(decideYears({ publicYears: [{ year: 2024, regime: "LUCRO REAL" }], paymentCodes: [{ year: 2025, code: "5993" }], currentYear: 2026 }).map((y) => y.regime))
+      .toEqual(["LUCRO_REAL_ANUAL", "LUCRO_REAL_ANUAL"]);
+    // ano sem evidência interrompe; o corrente sem evidência não fica em aberto
+    expect(spansFrom(decideYears({ publicYears: [{ year: 2023, regime: "LUCRO PRESUMIDO" }], paymentCodes: [], currentYear: 2026 }), 2026))
+      .toMatchObject([{ validFrom: "2023-01-01", validTo: "2023-12-31" }]);
+
+    // no banco: snapshot público + pagamento → regime registrado pelo agente, pendência resolvida, presunção sugerida pela CNAE
+    const t = await newTenant();
+    const { entityId } = await newEntity(t, CNPJ_MATRIZ);
+    await withTenant(appPool, t, async (tx) => {
+      const payload = { cnpj: CNPJ_MATRIZ, razao_social: "X", descricao_situacao_cadastral: "ATIVA", codigo_natureza_juridica: 2062, natureza_juridica: "LTDA",
+        identificador_matriz_filial: 1, uf: "PR", municipio: "PINHAIS", codigo_municipio_ibge: 4119152, cnae_fiscal: 6203100, regime_tributario: [{ ano: 2025, forma_de_tributacao: "LUCRO PRESUMIDO" }] };
+      const snap = newId();
+      await tx.query("INSERT INTO external_snapshot (id, tenant_id, entity_id, source, request_key, fetched_at, sha256, payload) VALUES ($1, current_tenant(), $2, 'brasilapi-cnpj', $3, now(), $4, $5)",
+        [snap, entityId, `cnpj:${CNPJ_MATRIZ}`, createHash("sha256").update("p").digest(), JSON.stringify(payload)]);
+      await tx.query(
+        `INSERT INTO federal_payment (id, tenant_id, entity_id, document_number, competence, collected_on, revenue_code, amount_total, breakdown, source, snapshot_id)
+         VALUES ($1, current_tenant(), $2, 'D1', '2026-03-01', '2026-04-30', '2089', 100, '[{"revenueCode":"2089","total":"100.00","principal":"100.00"}]', 'teste', $3)`,
+        [newId(), entityId, snap],
+      );
+      await tx.query(
+        `INSERT INTO pending_item (id, tenant_id, entity_id, type, responsible_source, required_information, impact, status)
+         VALUES ($1, current_tenant(), $2, 'TAX_REGIME_UNKNOWN', 'OFFICE', 'Informar o regime', 'x', 'OPEN')`,
+        [newId(), entityId],
+      );
+      const est = newId();
+      await tx.query("INSERT INTO establishment (id, tenant_id, entity_id, kind, cnpj, uf, municipio_ibge, opened_at) VALUES ($1, current_tenant(), $2, 'MATRIZ', $3, 'PR', '4119152', '2020-01-01')", [est, entityId, CNPJ_MATRIZ]);
+      await tx.query("INSERT INTO activity_history (id, tenant_id, establishment_id, cnae, is_primary, valid_from, source) VALUES ($1, current_tenant(), $2, '6203100', true, '2020-01-01', 'teste')", [newId(), est]);
+    });
+    expect(await detectTaxRegime(appPool, t, entityId, "2026-10-13")).toMatchObject({ added: 1, resolved: 1 });
+    await withTenant(appPool, t, async (tx) => {
+      const r = await tx.query("SELECT regime, valid_from::text, valid_to FROM tax_regime_history WHERE entity_id = $1", [entityId]);
+      expect(r.rows).toEqual([{ regime: "LUCRO_PRESUMIDO", valid_from: "2025-01-01", valid_to: null }]);
+    });
+    // de novo: nada muda (nunca sobrescreve)
+    expect(await detectTaxRegime(appPool, t, entityId, "2026-10-13")).toMatchObject({ added: 0 });
+    await putIssued(t, entityId, "1000.00", "2026-01-10");
+    await approveCorporateRules(appPool, t, LUAN);
+    await refreshCorporate(appPool, t, entityId, "2026-04-15");
+    await withTenant(appPool, t, async (tx) => {
+      const p = await tx.query("SELECT scope, grp, set_by FROM entity_presumption WHERE entity_id = $1", [entityId]);
+      expect(p.rows).toEqual([{ scope: "NFSE", grp: "SERVICOS_GERAIS", set_by: "agente:tax" }]);
+    });
+  });
+});

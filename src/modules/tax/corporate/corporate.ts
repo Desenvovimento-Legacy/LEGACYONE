@@ -828,9 +828,43 @@ export async function computeCorporate(tx: PoolClient, entityId: string, today: 
 const fingerprintOf = (r: CalcRow) =>
   createHash("sha256").update(JSON.stringify([CORPORATE_ENGINE, r.status, r.base, r.gross, r.deductions, r.amount, r.darfCode, r.dueOn, r.quotas, r.details.lines, r.blockers, r.ruleRefs])).digest("hex");
 
+/**
+ * Presunção sem pessoa: com receita e sem atividade confirmada, o agente usa o
+ * grupo da CNAE principal (Presumido e estimativa do Real anual). Fica marcada
+ * como do agente; o DARF pago na Receita confere o cálculo (pago × calculado).
+ * Pessoa pode trocar a qualquer momento (nova vigência).
+ */
+async function autoPresumption(tx: PoolClient, entityId: string, actor: Actor) {
+  const spans = (await regimeSpans(tx, entityId)).filter((s) => s.regime === "LUCRO_PRESUMIDO" || s.regime === "LUCRO_REAL_ANUAL");
+  if (!spans.length) return 0;
+  const from = spans[0]!.valid_from;
+  const prop = await presumptionProposal(tx, entityId);
+  if (!prop.cnae) return 0;
+  let added = 0;
+  for (const scope of ["NFSE", "NFE"] as const) {
+    const has = await tx.query("SELECT 1 FROM entity_presumption WHERE entity_id = $1 AND scope = $2 LIMIT 1", [entityId, scope]);
+    if (has.rowCount) continue;
+    const rev = scope === "NFSE"
+      ? await tx.query("SELECT 1 FROM nfse_document WHERE entity_id = $1 AND role = 'PRESTADA' AND issued_at >= $2 LIMIT 1", [entityId, from])
+      : await tx.query("SELECT 1 FROM nfe_item WHERE entity_id = $1 AND direction = 'SAIDA' AND competence >= $2 LIMIT 1", [entityId, from]);
+    if (!rev.rowCount) continue;
+    const id = newId();
+    const reason = `Sugerida pela CNAE principal ${prop.cnae ?? "—"} (agente); conferida pelo DARF pago quando houver`;
+    await tx.query(
+      `INSERT INTO entity_presumption (id, tenant_id, entity_id, scope, grp, valid_from, reason, set_by)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7)`,
+      [id, entityId, scope, prop[scope], from, reason, `agente:${actor.id}`],
+    );
+    await audit(tx, { actor, action: "tax.presumption_proposed", resourceType: "entity_presumption", resourceId: id, entityId, data: { scope, group: prop[scope], cnae: prop.cnae, valid_from: from } });
+    added++;
+  }
+  return added;
+}
+
 /** Calcula e grava o que mudou (evento CORPORATE_TAX_CALCULATED + auditoria). */
 export async function refreshCorporate(pool: Pool, tenantId: string, entityId: string, today: string, actor: Actor = TAX_AGENT) {
   return withTenant(pool, tenantId, async (tx) => {
+    await autoPresumption(tx, entityId, actor);
     const rows = await computeCorporate(tx, entityId, today);
     let changed = 0;
     const touched: string[] = [];

@@ -14,6 +14,7 @@ import { preparePgdasDrafts } from "../tax/simples/pgdas-draft.js";
 import { readEntityNfeItems } from "../fiscal/nfe-items.js";
 import { runReview } from "../review/review.js";
 import { refreshCorporate } from "../tax/corporate/corporate.js";
+import { detectTaxRegime } from "../registry/regime-detect.js";
 
 /**
  * Vínculos entre agentes: "quando acontecer X, o agente Y faz Z".
@@ -156,6 +157,14 @@ export const LINKS: Link<LinkDeps>[] = [
     does: "Monta a PGDAS-D dos meses em aberto, pronta para transmitir (não transmite) e com o motivo do que bloqueia",
     when: (e) => Boolean(e.entity_id),
     run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await preparePgdasDrafts(pool, tenantId, entityId!, today(deps))) }),
+  },
+  {
+    id: "regime-receita",
+    on: ["ENTITY_PROFILE_CREATED", "FEDERAL_PAYMENTS_SYNCED", "POWER_OF_ATTORNEY_VERIFIED"],
+    agent: "onboarding",
+    does: "Identifica o regime tributário pela evidência da Receita (DARF pagos e ECF nos dados abertos) e registra sem pessoa",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await detectTaxRegime(pool, tenantId, entityId!, today(deps))) }),
   },
   {
     id: "lucro-tributos",

@@ -57,7 +57,7 @@ export const PROCESSES: ProcessInfo[] = [
   { id: "folha", name: "Folha", status: "PLANEJADO", phase: "Fase 6", agents: ["payroll"], summary: "Admissão, folha, férias, rescisão, eSocial e FGTS Digital." },
   { id: "financeiro", name: "Financeiro e conciliação", status: "EM_CONSTRUCAO", phase: "Fase 3", agents: ["financial", "reconciliation"], summary: "Extrato em OFX, Excel, CSV ou PDF conciliado com DARF/DAS e notas (inclusive pagamento parcial e transferência entre contas); regras de histórico." },
   { id: "contabil", name: "Contábil", status: "EM_CONSTRUCAO", phase: "Fase 4", agents: ["ledger"], summary: "Razão de partidas dobradas montado sozinho a partir de notas, Simples e extrato; saldos de abertura do escritório anterior; balancete, DRE, balanço e fechamento do mês." },
-  { id: "tributos", name: "Tributos e guias", status: "EM_CONSTRUCAO", phase: "Fase 5 e 11", agents: ["tax", "guides"], summary: "Cálculo determinístico do Simples (conferido com o declarado); guia, vencimento e pagamento a seguir." },
+  { id: "tributos", name: "Tributos e guias", status: "EM_CONSTRUCAO", phase: "Fase 5 e 11", agents: ["tax", "guides"], summary: "Cálculo determinístico do Simples, do Lucro Presumido e do Lucro Real (e-LALUR), com vencimento, quota, código do DARF e pagamento conferido." },
   { id: "obrigacoes", name: "Obrigações e SPED", status: "PLANEJADO", phase: "Fases 7 a 10", agents: ["obligations", "sped"], summary: "Mapa por empresa, ECD, ECF, EFD, DCTFWeb, DEFIS." },
   { id: "transmissao", name: "Transmissão", status: "PLANEJADO", phase: "Fase 11", agents: ["transmission"], summary: "Assinatura, envio e recibo, sempre com sua aprovação." },
   { id: "societario", name: "Societário e contratos", status: "PLANEJADO", phase: "—", agents: ["corporate", "contracts"], summary: "Abertura, alteração, contratos e assinatura eletrônica." },
@@ -113,7 +113,7 @@ export const DEPARTMENTS: DepartmentInfo[] = [
     name: "Societário",
     summary: "Cadastro, identidade digital, atos societários e regularização.",
     agents: [
-      { id: "onboarding", name: "Implantação", status: "OPERANDO", summary: "Do CNPJ ao cliente pronto para operar.", capabilities: [cap("Cadastro pelo CNPJ", true), cap("Regime e histórico", true), cap("Serviços contratados", true), cap("Checklist e migração", true), cap("Mapa de obrigações", true)] },
+      { id: "onboarding", name: "Implantação", status: "OPERANDO", summary: "Do CNPJ ao cliente pronto para operar.", capabilities: [cap("Cadastro pelo CNPJ", true), cap("Regime e histórico", true), cap("Regime identificado pela Receita (DARF pagos e ECF nos dados abertos)", true), cap("Serviços contratados", true), cap("Checklist e migração", true), cap("Mapa de obrigações", true)] },
       { id: "digital-identity", name: "Identidade digital", status: "OPERANDO", summary: "Procurações e certificados de cada empresa.", capabilities: [cap("Procuração e-CAC", true), cap("Certificados A1 no cofre", true), cap("Validade dos certificados", true), cap("Procurações estaduais e municipais", true)] },
       { id: "corporate", name: "Societário", status: "PLANEJADO", summary: "Atos da empresa na Junta e na Receita.", capabilities: [cap("Abertura"), cap("Alteração contratual"), cap("Filiais"), cap("Baixa")] },
       { id: "contracts", name: "Contratos e assinatura", status: "PLANEJADO", summary: "Documentos a partir de modelos aprovados.", capabilities: [cap("Modelos aprovados"), cap("Assinatura eletrônica"), cap("Arquivo e evidência")] },
