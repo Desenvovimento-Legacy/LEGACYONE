@@ -102,8 +102,14 @@ export async function guidesOverview(tx: PoolClient, entityId: string, today: st
   // Últimos 12 meses fechados + o mês anterior ao atual (a declarar), desde o início de atividade.
   const current = `${today.slice(0, 7)}-01`;
   const first = [addMonths(current, -13), opening ?? "0000-01-01"].sort().pop()!;
+  // DAS só nos meses em que a empresa estava no Simples (Presumido/Real não têm PGDAS-D)
+  const simples = await tx.query<{ f: string; t: string | null }>(
+    "SELECT valid_from::text AS f, valid_to::text AS t FROM tax_regime_history WHERE entity_id = $1 AND regime = 'SIMPLES_NACIONAL'",
+    [entityId],
+  );
+  const inSimples = (c: string) => simples.rows.some((r) => r.f <= addMonths(c, 1) && (!r.t || r.t >= c));
   const comps: string[] = [];
-  for (let c = first; c < current; c = addMonths(c, 1)) comps.push(c);
+  for (let c = first; c < current; c = addMonths(c, 1)) if (inSimples(c)) comps.push(c);
 
   const rows: GuideRow[] = comps.map((c) => {
     const decl = declBy.get(c) ?? null;
@@ -170,14 +176,15 @@ export async function refreshGuides(pool: Pool, tenantId: string, entityId: stri
     const { rows } = await guidesOverview(tx, entityId, today);
     let changed = 0;
     for (const g of rows) {
-      const last = await tx.query<{ id: string; status: string; due_on: string | null; details: { documents?: string[] } }>(
+      const last = await tx.query<{ id: string; status: string; due_on: string | null; details: { documents?: string[]; responsibility?: string | null } }>(
         `SELECT id, status, due_on::text, details FROM tax_guide_observation
           WHERE entity_id = $1 AND competence = $2 AND guide = 'DAS_SIMPLES' ORDER BY created_at DESC LIMIT 1`,
         [entityId, g.competence],
       );
       const docs = g.payment?.documents ?? [];
       const prev = last.rows[0];
-      if (prev && prev.status === g.status && prev.due_on === g.due && JSON.stringify(prev.details.documents ?? []) === JSON.stringify(docs)) continue;
+      if (prev && prev.status === g.status && prev.due_on === g.due && JSON.stringify(prev.details.documents ?? []) === JSON.stringify(docs)
+        && (prev.details.responsibility ?? null) === (g.responsibility ?? null)) continue;
       const details = {
         documents: docs,
         collectedOn: g.payment?.collectedOn ?? null,
@@ -226,7 +233,9 @@ export async function guidesNeedingAttention(tx: PoolClient) {
               WHERE guide = 'DAS_SIMPLES' ORDER BY entity_id, competence, created_at DESC) o
        JOIN entity e ON e.id = o.entity_id
       WHERE o.status IN ('PAGAMENTO_NAO_IDENTIFICADO', 'DECLARACAO_NAO_IDENTIFICADA')
-        AND coalesce(o.details->>'responsibility', 'LEGACY') = 'LEGACY'
+        AND o.details->>'responsibility' = 'LEGACY'
+        AND EXISTS (SELECT 1 FROM tax_regime_history r WHERE r.entity_id = o.entity_id AND r.regime = 'SIMPLES_NACIONAL'
+                     AND r.valid_from < o.competence + interval '1 month' AND (r.valid_to IS NULL OR r.valid_to >= o.competence))
       ORDER BY o.competence`,
   );
   return rows;

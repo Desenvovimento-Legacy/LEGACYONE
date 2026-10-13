@@ -238,6 +238,7 @@ export class IssDueError extends Error {}
  */
 export const ISS_DUE_HINTS: Record<string, { day: number; adjust: DueAdjust; basis: string }> = {
   "3550308": { day: 10, adjust: "PREVIOUS_BUSINESS_DAY", basis: "Prefeitura de São Paulo: ISS retido vence no dia 10 do mês seguinte (IN SF/SUREM nº 08/2011)" },
+  "4106902": { day: 20, adjust: "PREVIOUS_BUSINESS_DAY", basis: "Prefeitura de Curitiba: ISS (inclusive do responsável tributário) vence no dia 20 do mês seguinte, pelo DAM (Decreto nº 1.442/2007)" },
 };
 
 export class GuideDispatchError extends Error {}
@@ -390,7 +391,8 @@ export async function withholdingsOverview(tx: PoolClient, entityId: string, tod
       let status: WithholdingStatus;
       if (items.length) {
         if (withheld.isZero()) status = "PAGO_SEM_NOTA";
-        else if (paid.cmp(withheld) !== 0) status = "PAGO_DIVERGENTE";
+        // centavos de arredondamento (a retenção é arredondada nota a nota) não são divergência
+        else if (paid.sub(withheld).abs().cmp(Dec.of("0.01").mul(String(Math.max(m?.withRetention ?? 0, 2)))) > 0) status = "PAGO_DIVERGENTE";
         else status = due && collectedOn && collectedOn > due ? "PAGO_EM_ATRASO" : "PAGO";
       } else if (!dueSpec) status = "PRAZO_A_APROVAR";
       else if (withheld.cmp(dueSpec.min) < 0) status = "ABAIXO_DO_MINIMO";
@@ -524,14 +526,15 @@ export async function refreshWithholdings(pool: Pool, tenantId: string, entityId
     }
     let changed = 0;
     for (const w of rows) {
-      const last = await tx.query<{ id: string; status: string; withheld: string; paid: string | null; due_on: string | null }>(
-        `SELECT id, status, withheld::text, paid::text, due_on::text FROM withholding_observation
+      const last = await tx.query<{ id: string; status: string; withheld: string; paid: string | null; due_on: string | null; resp: string | null }>(
+        `SELECT id, status, withheld::text, paid::text, due_on::text, details->>'responsibility' AS resp FROM withholding_observation
           WHERE entity_id = $1 AND competence = $2 AND tax = $3 ORDER BY created_at DESC LIMIT 1`,
         [entityId, w.competence, w.tax],
       );
       const prev = last.rows[0];
       const same = prev && prev.status === w.status && Dec.of(prev.withheld).cmp(w.withheld) === 0 && prev.due_on === w.due
-        && (prev.paid === null ? w.paid === null : w.paid !== null && Dec.of(prev.paid).cmp(w.paid) === 0);
+        && (prev.paid === null ? w.paid === null : w.paid !== null && Dec.of(prev.paid).cmp(w.paid) === 0)
+        && (prev.resp ?? null) === (w.responsibility ?? null);
       if (same) continue;
       const details = { notes: w.notes, payment: w.payment, difference: w.difference, dueReason: w.dueReason, responsibility: w.responsibility, guide: w.guide ?? null, cityName: w.cityName ?? null };
       const fingerprint = createHash("sha256").update(JSON.stringify({ s: w.status, w: w.withheld, p: w.paid, d: w.due, details, prev: prev?.id ?? null })).digest("hex");
@@ -582,7 +585,8 @@ export async function withholdingsNeedingAttention(tx: PoolClient) {
               ORDER BY entity_id, competence, tax, created_at DESC) o
        JOIN entity e ON e.id = o.entity_id
       WHERE o.status IN ('PAGAMENTO_NAO_IDENTIFICADO', 'GUIA_NAO_ENVIADA', 'PAGO_DIVERGENTE')
-        AND coalesce(o.details->>'responsibility', 'LEGACY') = 'LEGACY'
+        -- só a partir do início da responsabilidade do escritório (sem início definido, ainda não é nossa)
+        AND o.details->>'responsibility' = 'LEGACY'
       ORDER BY o.competence, o.tax`,
   );
   return rows;

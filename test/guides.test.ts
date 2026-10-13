@@ -14,6 +14,7 @@ describe("guias: DAS do Simples por competência", () => {
     const t = await newTenant();
     const { entityId } = await newEntity(t, CNPJ_MATRIZ);
     await withTenant(appPool, t, async (tx) => {
+      await tx.query("INSERT INTO tax_regime_history (id, tenant_id, entity_id, regime, valid_from, source) VALUES ($1, current_tenant(), $2, 'SIMPLES_NACIONAL', '2020-01-01', 'teste')", [newId(), entityId]);
       const rule = await tx.query<{ id: string }>("SELECT id FROM obligation_rule WHERE code = 'PGDAS_D' AND superseded_at IS NULL ORDER BY version DESC LIMIT 1");
       await tx.query("INSERT INTO obligation_rule_approval (id, tenant_id, rule_id, approved_by) VALUES ($1, current_tenant(), $2, 'luan')", [newId(), rule.rows[0]!.id]);
       await tx.query(

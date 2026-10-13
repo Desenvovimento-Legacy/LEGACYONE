@@ -20,6 +20,8 @@ describe("orquestrador: vínculos entre agentes por evento", () => {
     const t = await newTenant();
     const { entityId } = await newEntity(t, CNPJ_MATRIZ);
     await withTenant(appPool, t, (tx) =>
+      tx.query("INSERT INTO tax_regime_history (id, tenant_id, entity_id, regime, valid_from, source) VALUES ($1, current_tenant(), $2, 'SIMPLES_NACIONAL', '2020-01-01', 'teste')", [newId(), entityId]));
+    await withTenant(appPool, t, (tx) =>
       tx.query(
         `INSERT INTO power_of_attorney (id, tenant_id, entity_id, system, grantee_document, scopes, valid_from, valid_to, source, verified_at)
          VALUES ($1, current_tenant(), $2, 'ECAC', $3, '{TODOS}', '2025-01-01', '2030-12-31', 'teste', now())`,
