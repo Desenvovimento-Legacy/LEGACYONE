@@ -1,0 +1,18 @@
+{
+  "v": 3,
+  "createdOnFiles": { "v": 1, "at": "2026-10-06T11:30:00Z" },
+  "title": "AIRES — Telas do sistema",
+  "launch": { "view": "canvas" },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": { "x": 0, "y": 0, "w": 1440, "h": 1300, "title": "Central de agentes", "expand": "fill" },
+    "Processos.dc.html": { "x": 1520, "y": 0, "w": 1440, "h": 1300, "title": "Processos (todos)", "expand": "fill", "is_interactive": true },
+    "Fechamento.dc.html": { "x": 3040, "y": 0, "w": 1440, "h": 1160, "title": "Fechamento ao vivo (dados de exemplo)", "expand": "fill" },
+    "Empresa.dc.html": { "x": 4560, "y": 0, "w": 1440, "h": 1180, "title": "Ficha da empresa", "expand": "fill" },
+    "Receita.dc.html": { "x": 6080, "y": 0, "w": 1440, "h": 1040, "title": "Receita Federal — busca mensal", "expand": "fill", "is_interactive": true },
+    "Sidebar.dc.html": { "x": 0, "y": 1420, "w": 260, "h": 1100, "title": "Componente · menu lateral" }
+  },
+  "order": ["Main.dc.html", "Processos.dc.html", "Fechamento.dc.html", "Empresa.dc.html", "Receita.dc.html", "Sidebar.dc.html"],
+  "notes": {},
+  "designSystems": []
+}

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>AIRES — Central de agentes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0B1622}
+a{color:#7FC8F2;text-decoration:none}a:hover{color:#FFFFFF;text-decoration:underline}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; background: #0B1622; color: #E6EEF5; font-family: Manrope, system-ui, sans-serif">
+  <dc-import name="Sidebar" active="central" hint-size="260px,1100px"></dc-import>
+
+  <main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 16px 28px; border-bottom: 1px solid #1E3247; background: #0E1B29">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 800">Central de agentes</h1>
+        <span style="font-size: 12px; color: #8FA5B8">O que a AIRES está fazendo agora, em todas as empresas e processos</span>
+      </div>
+      <div style="margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px">
+        <label for="comp" style="color: #8FA5B8">Competência</label>
+        <select id="comp" style="font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 6px; border: 1px solid #2A3F55; background: #111F2E; color: #FFFFFF">
+          <option>09/2026</option><option>08/2026</option>
+        </select>
+        <span style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #0F2A26; color: #7FE0D4; border: 1px solid #1E4A43"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3FC1B4"></span>Sistema operando</span>
+        <span style="padding: 6px 12px; border-radius: 999px; border: 1px solid #1E3247; color: #B8C9D8; font-family: 'IBM Plex Mono', monospace">SERPRO 0/20 hoje</span>
+      </div>
+    </header>
+
+    <div style="padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 20px">
+
+      <section aria-label="Indicadores" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px">
+        <sc-for list="{{kpis}}" as="k" hint-placeholder-count="6">
+          <div style="background: #111F2E; border: 1px solid #1E3247; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px">
+            <span style="font-size: 11px; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.08em">{{k.label}}</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 30px; font-weight: 600; color: {{k.color}}">{{k.value}}</span>
+            <span style="font-size: 12px; color: #8FA5B8">{{k.note}}</span>
+          </div>
+        </sc-for>
+      </section>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+
+        <div style="flex: 999 1 620px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+          <section aria-labelledby="mapa" style="background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+            <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px">
+              <h2 id="mapa" style="margin: 0; font-size: 16px; font-weight: 700">Processos</h2>
+              <div style="display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #8FA5B8">
+                <span style="display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3FC1B4"></span>operando</span>
+                <span style="display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #4A9BE0"></span>em construção</span>
+                <span style="display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3A4F63"></span>planejado</span>
+                <a href="Processos.dc.html">ver fluxos →</a>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px">
+              <sc-for list="{{processes}}" as="p" hint-placeholder-count="13">
+                <a href="Processos.dc.html" style="text-decoration: none; color: #E6EEF5; background: #0E1B29; border: {{p.border}}; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-height: 112px; box-sizing: border-box">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+                    <span style="font-weight: 700; font-size: 14px">{{p.name}}</span>
+                    <span style="width: 9px; height: 9px; border-radius: 50%; flex: none; background: {{p.dot}}"></span>
+                  </div>
+                  <span style="font-size: 12px; color: #B8C9D8; line-height: 1.4">{{p.now}}</span>
+                  <span style="margin-top: auto; font-size: 11px; color: #8FA5B8; font-family: 'IBM Plex Mono', monospace">{{p.meta}}</span>
+                </a>
+              </sc-for>
+            </div>
+          </section>
+
+          <section aria-labelledby="esteira" style="background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+            <h2 id="esteira" style="margin: 0; font-size: 16px; font-weight: 700">Esteira por empresa · 09/2026</h2>
+            <div style="overflow-x: auto">
+              <div style="min-width: 900px; display: flex; flex-direction: column; gap: 8px">
+                <div style="display: grid; grid-template-columns: 180px repeat(10, minmax(0, 1fr)); gap: 6px; font-size: 10px; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.06em">
+                  <span>Empresa</span>
+                  <sc-for list="{{stages}}" as="s" hint-placeholder-count="10"><span style="text-align: center">{{s}}</span></sc-for>
+                </div>
+                <sc-for list="{{rows}}" as="r" hint-placeholder-count="2">
+                  <div style="display: grid; grid-template-columns: 180px repeat(10, minmax(0, 1fr)); gap: 6px">
+                    <div style="display: flex; flex-direction: column; justify-content: center; gap: 2px">
+                      <a href="Empresa.dc.html" style="color: #E6EEF5; font-weight: 700; font-size: 13px">{{r.name}}</a>
+                      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #8FA5B8">{{r.cnpj}}</span>
+                    </div>
+                    <sc-for list="{{r.cells}}" as="c" hint-placeholder-count="10">
+                      <div style="border-radius: 6px; padding: 6px; font-size: 11px; line-height: 1.3; text-align: center; display: flex; align-items: center; justify-content: center; min-height: 44px; background: {{c.bg}}; color: {{c.fg}}; border: {{c.border}}">{{c.text}}</div>
+                    </sc-for>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+          <section id="fila" aria-labelledby="humano" style="background: #1A1A10; border: 1px solid #5A4520; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; justify-content: space-between; align-items: baseline">
+              <h2 id="humano" style="margin: 0; font-size: 16px; font-weight: 700; color: #F5C77E">Fila humana</h2>
+              <span style="font-size: 12px; color: #C9A86A">só exceções</span>
+            </div>
+            <sc-for list="{{human}}" as="h" hint-placeholder-count="2">
+              <div style="background: #221F12; border: 1px solid #4A3A1C; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+                <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #C9A86A; font-family: 'IBM Plex Mono', monospace"><span>{{h.agent}}</span><span>{{h.type}}</span></div>
+                <span style="font-weight: 700; font-size: 13px">{{h.company}}</span>
+                <span style="font-size: 12px; color: #D9CBB0">{{h.text}}</span>
+                <a href="Empresa.dc.html" style="align-self: flex-start; padding: 9px 14px; border-radius: 6px; background: #E8A33D; color: #1B1206; font-weight: 700; font-size: 13px; text-decoration: none">Resolver</a>
+              </div>
+            </sc-for>
+          </section>
+
+          <section aria-labelledby="eventos" style="background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; justify-content: space-between; align-items: baseline">
+              <h2 id="eventos" style="margin: 0; font-size: 16px; font-weight: 700">Barramento de eventos</h2>
+              <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #7FE0D4"><span style="width: 7px; height: 7px; border-radius: 50%; background: #3FC1B4"></span>ao vivo</span>
+            </div>
+            <sc-for list="{{events}}" as="e" hint-placeholder-count="8">
+              <div style="display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid #1A2C3E">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #8FA5B8; padding-top: 2px">{{e.time}}</span>
+                <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; color: {{e.color}}; overflow-wrap: anywhere">{{e.type}}</span>
+                  <span style="font-size: 12px; color: #C6D4E0">{{e.text}}</span>
+                  <span style="font-size: 11px; color: #6F8496">agente {{e.producer}}</span>
+                </div>
+              </div>
+            </sc-for>
+            <span style="font-size: 11px; color: #6F8496">Todo evento tem evidência e entra na trilha de auditoria encadeada.</span>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const C = {
+      done: { bg: '#0F2A26', fg: '#7FE0D4', border: '1px solid #1E4A43' },
+      wait: { bg: '#2A2112', fg: '#F5C77E', border: '1px solid #5A4520' },
+      future: { bg: 'transparent', fg: '#5B6F82', border: '1px dashed #2A3F55' }
+    };
+    const cell = (k, text) => ({ ...C[k], text });
+    const pipe = () => [cell('wait', 'aguardando você'), cell('wait', 'aguarda certificado A1'), cell('future', 'Fase 5'), cell('future', 'Fase 6'), cell('future', 'Fase 3'), cell('future', 'Fase 4'), cell('done', 'Receita sincronizada'), cell('future', 'Fase 12'), cell('future', 'Fase 7'), cell('future', 'Fase 11')];
+    const P = {
+      on: { dot: '#3FC1B4', border: '1px solid #1E4A43' },
+      build: { dot: '#4A9BE0', border: '1px solid #24507A' },
+      off: { dot: '#3A4F63', border: '1px solid #1A2C3E' }
+    };
+    const pr = (name, st, now, meta) => ({ name, now, meta, ...P[st] });
+    return {
+      kpis: [
+        { label: 'Empresas', value: '2', note: 'em implantação', color: '#FFFFFF' },
+        { label: 'Agentes operando', value: '3', note: 'de 29 previstos', color: '#7FE0D4' },
+        { label: 'Executando agora', value: '0', note: 'nenhuma tarefa', color: '#9CCBF3' },
+        { label: 'Fila humana', value: '2', note: 'só exceções', color: '#F5C77E' },
+        { label: 'Exceções abertas', value: '0', note: 'sem divergência', color: '#FFFFFF' },
+        { label: 'Toques humanos', value: '1', note: 'por cliente na implantação', color: '#FFFFFF' }
+      ],
+      processes: [
+        pr('Implantação', 'on', '2 empresas · perfil, regime e procuração prontos; falta a data de início', 'Implantação · Identidade Digital'),
+        pr('Receita Federal', 'on', 'PGDAS-D, DAS e pagamentos sincronizados; busca mensal pelo botão', 'Busca Receita · 0/20 hoje'),
+        pr('Documentos', 'build', 'NF-e, NFS-e e CT-e direto da SEFAZ e da NFS-e Nacional, todo dia', 'aguarda certificado A1 · Fase 2'),
+        pr('Fiscal', 'off', 'Entradas, saídas, CFOP, CST, retenções e créditos', 'Fiscal · Fase 5'),
+        pr('Folha', 'off', 'Admissão, folha, férias, rescisão, eSocial e FGTS Digital', 'Folha · Fase 6'),
+        pr('Financeiro e conciliação', 'off', 'Extratos, banco × razão, clientes e fornecedores', 'Financeiro · Conciliação · Fase 3'),
+        pr('Contábil', 'off', 'Lançamentos, fechamento, balancete, DRE e balanço', 'Contábil · Fase 4'),
+        pr('Tributos e guias', 'off', 'Cálculo determinístico, DAS, DARF, vencimento e pagamento', 'Tributos · Guias · Fase 5/11'),
+        pr('Obrigações e SPED', 'off', 'Mapa por empresa, ECD, ECF, EFD, DCTFWeb, DEFIS', 'Obrigações · SPED · Fase 7–10'),
+        pr('Transmissão', 'off', 'Assinatura, envio e recibo; só com sua aprovação', 'Transmissão · Fase 11'),
+        pr('Societário e contratos', 'off', 'Abertura, alteração, contratos e assinatura eletrônica', 'Societário · Contratos'),
+        pr('Regularização', 'off', 'Parcelamentos, certidões, PER/DCOMP e intimações', 'Regularização · Fase 11'),
+        pr('Relacionamento', 'off', 'Um pedido consolidado ao cliente; entrega do mês no portal', 'Relacionamento · Fase 11')
+      ],
+      stages: ['Implantação', 'Documentos', 'Fiscal', 'Folha', 'Financeiro', 'Contábil', 'Tributos', 'Revisão', 'Obrigações', 'Cliente'],
+      rows: [
+        { name: "SABORES D'ALMA", cnpj: '01.210.421/0001-00', cells: pipe() },
+        { name: 'SAFE ON SERVICOS', cnpj: '60.611.420/0001-36', cells: pipe() }
+      ],
+      human: [
+        { agent: 'implantação', type: 'CONTRACTED_SERVICES', company: "SABORES D'ALMA LTDA", text: 'Todos os serviços contratados. Falta a data de início da responsabilidade.' },
+        { agent: 'implantação', type: 'CONTRACTED_SERVICES', company: 'SAFE ON SERVICOS LTDA', text: 'Todos os serviços contratados. Falta a data de início da responsabilidade.' }
+      ],
+      events: [
+        { time: '17:00', type: 'FEDERAL_PAYMENTS_SYNCED', text: "SABORES D'ALMA · 154 pagamentos 2021–2026", producer: 'busca receita', color: '#7FE0D4' },
+        { time: '17:00', type: 'PGDAS_INDEX_SYNCED', text: "SABORES D'ALMA · 76 declarações, 79 DAS", producer: 'busca receita', color: '#7FE0D4' },
+        { time: '17:00', type: 'FEDERAL_PAYMENTS_SYNCED', text: 'SAFE ON · 23 pagamentos', producer: 'busca receita', color: '#7FE0D4' },
+        { time: '17:00', type: 'PGDAS_INDEX_SYNCED', text: 'SAFE ON · 19 declarações, 14 DAS', producer: 'busca receita', color: '#7FE0D4' },
+        { time: '16:46', type: 'POWER_OF_ATTORNEY_VERIFIED', text: 'SAFE ON · e-CAC vigente até 10/07/2031', producer: 'implantação', color: '#7FC8F2' },
+        { time: '16:46', type: 'POWER_OF_ATTORNEY_VERIFIED', text: "SABORES D'ALMA · e-CAC vigente até 09/12/2030", producer: 'implantação', color: '#7FC8F2' },
+        { time: '05/10', type: 'PENDING_ITEM_CREATED', text: 'Serviços contratados e data de início', producer: 'pendências', color: '#F5C77E' },
+        { time: '05/10', type: 'ENTITY_PROFILE_CREATED', text: 'Simples Nacional · sociedade empresária', producer: 'implantação', color: '#7FC8F2' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

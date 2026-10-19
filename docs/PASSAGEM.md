@@ -3,6 +3,18 @@
 Documento para quem assume o desenvolvimento e a operação do IARIS. Situação em 19/10/2026.
 Leia junto com o [CLAUDE.md](../CLAUDE.md) (regras invioláveis e convenções) e o [README](../README.md) (comandos).
 
+Tudo o que existe salvo sobre o projeto está nesta pasta `docs/`:
+
+| Arquivo | O que é |
+| --- | --- |
+| `PASSAGEM.md` | Este documento: estado atual, operação, pendências |
+| `ESPECIFICACAO-MESTRE.md` | A especificação original que deu início ao projeto (o norte do produto) |
+| `ARQUITETURA.md` | Arquitetura aprovada em 05/10/2026 (cópia do Claude Docs) |
+| `DECISOES.md` | Decisões do dono do produto, por assunto |
+| `paginas/acompanhamento/index.html` | Página de acompanhamento da evolução (abrir no navegador) |
+| `paginas/telas/*.dc.html` | Primeiros protótipos de tela (out/2026, antes da tela atual em `src/web`) |
+| `brand/iaris-logo.jpg` | Logo |
+
 **Automação primeiro. Evidência sempre. Humano por exceção.**
 
 ---
@@ -46,7 +58,7 @@ Tarefas agendadas no Windows (rodam via `wscript`, sem abrir janela):
 | Dados (empresas, notas, lançamentos, auditoria) | Não | Supabase; backup diário em `C:\IARIS\backup\nuvem` (`.sql.gz`, log em `log.txt`) |
 | XML recebidos e consultas avulsas | Não | `C:\IARIS\entrada\processados`, `C:\IARIS\consultas` (originais também no banco) |
 | `.env` do PC | Não | `C:\IARIS\sistema\.env` (só `IARIS_DB_TARGET=cloud` e caminhos; sem segredos) |
-| Documento de arquitetura aprovado | Não | Claude Docs ("IARIS — Arquitetura para Aprovação") |
+| Documento de arquitetura, especificação mestre, decisões, páginas | Sim (cópias) | `docs/` |
 | `coleta_de_xml (2).py` | Não | `C:\IARIS\scripts` — script próprio do Luan, fora do IARIS |
 
 ### Montar o PC do zero
@@ -201,7 +213,7 @@ Além das 10 regras do CLAUDE.md:
 
 ## 10. Como começar (primeiro dia)
 
-1. Ler CLAUDE.md, este documento e `src/platform/events/registry.ts`.
+1. Ler CLAUDE.md, este documento, DECISOES.md, ESPECIFICACAO-MESTRE.md e `src/platform/events/registry.ts`.
 2. Subir o ambiente local (README, "Rodando no Windows") e rodar `pnpm typecheck && pnpm test`.
 3. Pedir ao Luan: acesso ao repositório, um convite de usuário (`pnpm user:invite`) e, se for operar o PC, acesso remoto.
    O cofre não sai do PC e não é copiado para outra máquina.

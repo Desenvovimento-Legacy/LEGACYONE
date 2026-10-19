@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>AIRES — Receita Federal</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0B1622}
+a{color:#7FC8F2;text-decoration:none}a:hover{color:#FFFFFF;text-decoration:underline}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; font-family: Manrope, system-ui, sans-serif; color: #E6EEF5; background: #0B1622">
+
+  <dc-import name="Sidebar" active="receita" hint-size="260px,1100px"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+    <header style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 28px; font-weight: 800">Receita Federal</h1>
+        <span style="font-size: 14px; color: #B8C9D8">PGDAS-D, DAS e pagamentos federais por competência. Abrir esta tela não consulta a Receita.</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; min-width: 220px">
+        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #8FA5B8"><span>Consultas cobradas hoje</span><span style="font-family: 'IBM Plex Mono', monospace; color: #E6EEF5; font-weight: 500">{{usedLabel}}</span></div>
+        <div style="height: 8px; border-radius: 999px; background: #1E3247; overflow: hidden"><div style="height: 8px; border-radius: 999px; background: #2E6DA4; width: {{usedPct}}"></div></div>
+      </div>
+    </header>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+      <label for="comp" style="font-size: 13px; color: #8FA5B8; font-weight: 600">Competência</label>
+      <select id="comp" style="font: inherit; font-size: 14px; padding: 9px 12px; border: 1px solid #2A3F55; border-radius: 8px; background: #111F2E; color: #E6EEF5">
+        <option>agosto de 2026</option>
+        <option>setembro de 2026</option>
+        <option>julho de 2026</option>
+      </select>
+      <span style="font-size: 13px; color: #8FA5B8">Prazo do PGDAS-D: 20/09/2026</span>
+    </div>
+
+    <section aria-label="Empresas" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+      <sc-for list="{{companies}}" as="c" hint-placeholder-count="2">
+        <div style="background: #111F2E; border: {{c.border}}; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+          <div style="display: flex; justify-content: space-between; gap: 12px; align-items: flex-start">
+            <div style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+              <span style="font-weight: 700; font-size: 15px">{{c.name}}</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8FA5B8">{{c.cnpj}}</span>
+            </div>
+            <span style="padding: 4px 10px; border-radius: 999px; background: #0F2A26; color: #7FE0D4; font-size: 12px; font-weight: 700; white-space: nowrap">{{c.status}}</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <span style="font-size: 12px; color: #8FA5B8">DAS pago</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-weight: 500">{{c.das}}</span>
+              <span style="font-size: 12px; color: #8FA5B8">{{c.dasOn}}</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <span style="font-size: 12px; color: #8FA5B8">Outros federais</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-weight: 500">{{c.other}}</span>
+              <span style="font-size: 12px; color: #8FA5B8">{{c.otherNote}}</span>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 12px; border-top: 1px solid #1A2C3E; flex-wrap: wrap">
+            <span style="font-size: 12px; color: #8FA5B8">Última busca: {{c.last}}</span>
+            <div style="display: flex; gap: 8px">
+              <button type="button" onClick="{{c.view}}" style="font: inherit; font-size: 14px; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 1px solid #2A3F55; background: #111F2E; color: #9CCBF3; cursor: pointer">Detalhe</button>
+              <button type="button" onClick="{{c.ask}}" style="font: inherit; font-size: 14px; font-weight: 700; padding: 10px 16px; border-radius: 8px; border: 0; background: #2E6DA4; color: #FFFFFF; cursor: pointer">Buscar</button>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </section>
+
+    <sc-if value="{{confirming}}" hint-placeholder-val="{{ false }}">
+      <section role="alertdialog" aria-labelledby="cf" style="background: #111F2E; border: 2px solid #3B6A92; border-radius: 12px; padding: 20px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between">
+        <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+          <h2 id="cf" style="margin: 0; font-size: 16px; font-weight: 700">Buscar 08/2026 de {{pick.name}} na Receita?</h2>
+          <span style="font-size: 13px; color: #B8C9D8">São 2 consultas cobradas pelo SERPRO: PGDAS-D do período e pagamentos do mês e do seguinte. Hoje: {{usedLabel}}.</span>
+          <span style="font-size: 13px; color: #F5C77E">Já buscado em {{pick.last}}. Buscar de novo só vale se algo mudou na Receita.</span>
+        </div>
+        <div style="display: flex; gap: 8px">
+          <button type="button" onClick="{{cancel}}" style="font: inherit; font-size: 14px; font-weight: 600; padding: 10px 16px; border-radius: 8px; border: 1px solid #2A3F55; background: #111F2E; color: #9CCBF3; cursor: pointer">Cancelar</button>
+          <button type="button" onClick="{{run}}" style="font: inherit; font-size: 14px; font-weight: 700; padding: 10px 16px; border-radius: 8px; border: 0; background: #2E6DA4; color: #FFFFFF; cursor: pointer">Buscar (2 consultas)</button>
+        </div>
+      </section>
+    </sc-if>
+
+    <section aria-labelledby="det" style="background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px">
+        <h2 id="det" style="margin: 0; font-size: 17px; font-weight: 700">{{pick.name}} · 08/2026</h2>
+        <span style="font-size: 12px; color: #8FA5B8">Evidência: resposta original da Receita guardada</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+        <div style="display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 10px; background: #0E1B29">
+          <span style="font-size: 12px; font-weight: 700; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.04em">Declaração</span>
+          <span style="font-size: 14px">{{pick.decl}}</span>
+          <span style="font-size: 12px; color: #8FA5B8">{{pick.declNote}}</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 10px; background: #0E1B29">
+          <span style="font-size: 12px; font-weight: 700; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.04em">DAS</span>
+          <span style="font-size: 14px">{{pick.dasLine}}</span>
+          <span style="font-size: 12px; color: #8FA5B8">casado pelo número da guia</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 10px; background: #0E1B29">
+          <span style="font-size: 12px; font-weight: 700; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.04em">Outros federais</span>
+          <span style="font-size: 14px">{{pick.otherLine}}</span>
+          <span style="font-size: 12px; color: #8FA5B8">DARF da DCTFWeb (folha)</span>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { selected: 'safe', confirming: false, used: 0 };
+  }
+  renderVals() {
+    const data = {
+      sabores: {
+        name: "SABORES D'ALMA LTDA", cnpj: '01.210.421/0001-00', status: 'declarado · pago',
+        das: 'R$ 35.529,64', dasOn: 'pago em 21/09/2026', other: 'R$ 3.560,47', otherNote: '2 guias',
+        last: '05/10/2026, 17:00', decl: 'Original', declNote: 'sem malha',
+        dasLine: '1 DAS · R$ 35.529,64 em 21/09/2026', otherLine: '2 guias · R$ 3.560,47'
+      },
+      safe: {
+        name: 'SAFE ON SERVICOS LTDA', cnpj: '60.611.420/0001-36', status: 'declarado · pago',
+        das: 'R$ 93.371,73', dasOn: 'pago em 21/09/2026', other: 'R$ 3.332,79', otherNote: '2 guias',
+        last: '05/10/2026, 17:00', decl: 'Original + 1 retificadora', declNote: 'malha: Liberada',
+        dasLine: '2 DAS emitidos · R$ 93.371,73 em 21/09/2026', otherLine: '2 guias · R$ 3.332,79'
+      }
+    };
+    const companies = ['sabores', 'safe'].map((id) => ({
+      ...data[id],
+      border: this.state.selected === id ? '2px solid #3B6A92' : '1px solid #1E3247',
+      view: () => this.setState({ selected: id, confirming: false }),
+      ask: () => this.setState({ selected: id, confirming: true })
+    }));
+    const used = this.state.used;
+    return {
+      companies,
+      pick: data[this.state.selected],
+      confirming: this.state.confirming,
+      usedLabel: used + ' de 20',
+      usedPct: Math.min(100, used * 5) + '%',
+      cancel: () => this.setState({ confirming: false }),
+      run: () => this.setState({ confirming: false, used: used + 2 })
+    };
+  }
+}
+</script>
+</body>
+</html>

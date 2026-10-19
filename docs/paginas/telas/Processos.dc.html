@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>AIRES — Processos</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0B1622}
+a{color:#7FC8F2;text-decoration:none}a:hover{color:#FFFFFF;text-decoration:underline}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; background: #0B1622; color: #E6EEF5; font-family: Manrope, system-ui, sans-serif">
+  <dc-import name="Sidebar" active="processos" hint-size="260px,1100px"></dc-import>
+
+  <main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 16px 28px; border-bottom: 1px solid #1E3247; background: #0E1B29">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 800">Processos</h1>
+        <span style="font-size: 12px; color: #8FA5B8">Cada processo de ponta a ponta: quem inicia, qual agente executa, qual motor calcula, quando o humano entra e quando termina</span>
+      </div>
+    </header>
+
+    <div style="padding: 22px 28px 40px; display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+
+      <section aria-label="Lista de processos" style="flex: 1 1 240px; max-width: 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+        <sc-for list="{{list}}" as="p" hint-placeholder-count="14">
+          <button type="button" onClick="{{p.pick}}" style="font: inherit; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 8px; background: {{p.bg}}; border: {{p.border}}; color: #E6EEF5">
+            <span style="width: 9px; height: 9px; border-radius: 50%; flex: none; background: {{p.dot}}"></span>
+            <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px">
+              <span style="font-weight: 700; font-size: 13px">{{p.name}}</span>
+              <span style="font-size: 11px; color: #8FA5B8">{{p.phase}}</span>
+            </span>
+          </button>
+        </sc-for>
+      </section>
+
+      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+
+        <section style="background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+          <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px">
+            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 0">
+              <h2 style="margin: 0; font-size: 22px; font-weight: 800">{{pick.name}}</h2>
+              <span style="font-size: 14px; color: #B8C9D8; max-width: 720px; line-height: 1.5">{{pick.goal}}</span>
+            </div>
+            <span style="padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; background: {{pick.chipBg}}; color: {{pick.chipFg}}">{{pick.status}}</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 11px; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.08em">Fluxo</span>
+            <div style="display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px">
+              <sc-for list="{{pick.steps}}" as="s" hint-placeholder-count="6">
+                <div style="display: flex; align-items: center; gap: 8px">
+                  <div style="display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; min-width: 120px; background: {{s.bg}}; border: {{s.border}}">
+                    <span style="font-size: 13px; font-weight: 700; color: #E6EEF5">{{s.label}}</span>
+                    <span style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: {{s.whoColor}}">{{s.who}}</span>
+                  </div>
+                  <sc-if value="{{s.arrow}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="color: #4A6075; font-size: 16px">→</span></sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: #8FA5B8">
+              <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #10243A; border: 1px solid #24507A"></span>agente</span>
+              <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #0F2A26; border: 1px solid #1E4A43"></span>motor determinístico</span>
+              <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #2A2112; border: 1px solid #5A4520"></span>humano por exceção</span>
+              <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #16222F; border: 1px solid #2A3F55"></span>fonte externa</span>
+            </div>
+          </div>
+        </section>
+
+        <section aria-label="Critérios do processo" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px">
+          <sc-for list="{{pick.criteria}}" as="c" hint-placeholder-count="10">
+            <div style="background: #111F2E; border: 1px solid #1E3247; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px">
+              <span style="font-size: 11px; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.08em">{{c.k}}</span>
+              <span style="font-size: 13px; color: #E6EEF5; line-height: 1.5">{{c.v}}</span>
+            </div>
+          </sc-for>
+        </section>
+
+        <section style="background: #1A1A10; border: 1px solid #5A4520; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+          <span style="font-size: 11px; color: #C9A86A; text-transform: uppercase; letter-spacing: 0.08em">O humano precisa participar?</span>
+          <span style="font-size: 14px; color: #F5E3C2; line-height: 1.5">{{pick.human}}</span>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: 'implantacao' };
+  }
+  renderVals() {
+    const A = { bg: '#10243A', border: '1px solid #24507A', whoColor: '#9CCBF3' };
+    const M = { bg: '#0F2A26', border: '1px solid #1E4A43', whoColor: '#7FE0D4' };
+    const H = { bg: '#2A2112', border: '1px solid #5A4520', whoColor: '#F5C77E' };
+    const X = { bg: '#16222F', border: '1px solid #2A3F55', whoColor: '#B8C9D8' };
+    const st = (label, who, kind) => ({ label, who, ...kind });
+    const crit = (o) => [
+      { k: 'Quem inicia', v: o.start }, { k: 'Case', v: o.cases }, { k: 'Agentes', v: o.agents },
+      { k: 'Dados e fontes', v: o.data }, { k: 'Motor determinístico', v: o.engine }, { k: 'Eventos publicados', v: o.events },
+      { k: 'Quem recebe depois', v: o.next }, { k: 'Evidência guardada', v: o.evidence }, { k: 'Encerramento', v: o.end }
+    ];
+    const S = {
+      on: { status: 'OPERANDO', chipBg: '#0F2A26', chipFg: '#7FE0D4', dot: '#3FC1B4' },
+      build: { status: 'EM CONSTRUÇÃO', chipBg: '#10243A', chipFg: '#9CCBF3', dot: '#4A9BE0' },
+      off: { status: 'PLANEJADO', chipBg: '#16222F', chipFg: '#8FA5B8', dot: '#3A4F63' }
+    };
+    const P = {
+      implantacao: { name: 'Implantação', s: 'on', phase: 'Fase 1 · operando',
+        goal: 'Do CNPJ ao cliente pronto para operar: perfil temporal, regime, procuração e serviços contratados, sem cadastro manual.',
+        steps: [st('CNPJ informado', 'cliente ou escritório', X), st('Dados públicos', 'base do CNPJ', X), st('Perfil, tipo e regime', 'Implantação', A), st('Procuração e-CAC', 'Integra Contador', X), st('Serviços e início', 'você', H), st('Revisão', 'Revisão', A), st('Mapa de obrigações', 'Obrigações', M)],
+        c: { start: 'Cliente ou escritório, só com o CNPJ.', cases: 'CLIENT_ONBOARDING · ACCOUNTING_FIRM_MIGRATION', agents: 'Implantação, Identidade Digital', data: 'CNPJ, CNAEs, sócios, regime, procuração — base pública do CNPJ e Integra Contador', engine: 'Cadastro temporal (vigências) e Authorization Service', events: 'CASE_CREATED · ENTITY_PROFILE_CREATED · POWER_OF_ATTORNEY_VERIFIED · PENDING_ITEM_CREATED', next: 'Documentos, Obrigações, Relacionamento', evidence: 'Resposta bruta da base do CNPJ e do e-CAC, com hash', end: 'Perfil completo, procuração vigente, serviços com data e revisão aprovada' },
+        human: 'Sim, uma vez: informar os serviços contratados e a data de início (decisão empresarial). Ao informar, o processo retoma sozinho.' },
+      receita: { name: 'Receita Federal', s: 'on', phase: 'operando',
+        goal: 'Trazer da Receita o que já foi declarado e pago, competência a competência, com custo controlado.',
+        steps: [st('Botão Buscar', 'você', H), st('Autorização', 'uso único + procuração', M), st('Medidor de custo', 'teto diário', M), st('PGDAS-D e pagamentos', 'Integra Contador', X), st('Casamento DAS × guia', 'pelo número', M), st('Resumo da competência', 'Busca Receita', A)],
+        c: { start: 'Botão Buscar (rotina mensal); carga histórica uma vez por cliente.', cases: 'Tarefa do fechamento da competência', agents: 'Busca Receita', data: 'Declarações PGDAS-D, DAS emitidos, pagamentos federais — SERPRO Integra Contador', engine: 'Autorização de uso único, medidor com teto diário, casamento pelo número do documento', events: 'PGDAS_INDEX_SYNCED · FEDERAL_PAYMENTS_SYNCED', next: 'Tributos e guias (conferir pagamento), Revisão', evidence: 'Resposta original do SERPRO de cada consulta', end: 'Competência com declaração e pagamento identificados, ou pendência aberta' },
+        human: 'Só para disparar a busca, porque cada consulta é cobrada. Nada consulta sozinho.' },
+      documentos: { name: 'Documentos', s: 'build', phase: 'Fase 2 · em construção',
+        goal: 'O cliente não precisa organizar nada: os documentos chegam sozinhos, são guardados no original e classificados.',
+        steps: [st('Agenda diária', 'Orquestrador', A), st('Busca por NSU', 'SEFAZ · NFS-e Nacional', X), st('Original + hash', 'cofre de documentos', M), st('Classificação', 'empresa, competência, E/S', M), st('Extração', 'Documentos', A), st('Roteamento', 'Fiscal · Financeiro', A)],
+        c: { start: 'Agenda diária por empresa; e-mail e upload no portal.', cases: 'DOCUMENT_REQUEST quando algo falta', agents: 'Documentos, Busca', data: 'XML de NF-e, NFS-e, CT-e; PDF; OFX — SEFAZ Distribuição DF-e, NFS-e Nacional, WebISS', engine: 'Classificação determinística pelo XML (modelo, CNPJs, data de emissão)', events: 'DOCUMENT_RECEIVED · DOCUMENT_CLASSIFIED · DOCUMENT_MISSING', next: 'Fiscal, Financeiro, Contábil', evidence: 'Arquivo original, hash, origem e data de recebimento', end: 'Todos os documentos da competência recebidos, classificados e roteados' },
+        human: 'Só quando um documento não pertence a nenhuma empresa ou quando a ciência da operação exigir sua aprovação.' },
+      fiscal: { name: 'Fiscal', s: 'off', phase: 'Fase 5 · planejado',
+        goal: 'Escriturar entradas e saídas com regras temporais: CFOP, CST, retenções, créditos e benefícios.',
+        steps: [st('Documento classificado', 'evento', A), st('Regras fiscais', 'Fiscal Engine', M), st('Retenções e créditos', 'Fiscal Engine', M), st('Conferência com a Receita', 'Revisão', A), st('Livros fechados', 'Fiscal', A)],
+        c: { start: 'DOCUMENT_CLASSIFIED', cases: 'TAX_CLOSING', agents: 'Fiscal', data: 'Notas de entrada e saída, cadastro de produtos e serviços', engine: 'Fiscal Engine com regras versionadas no tempo', events: 'FISCAL_CLOSING_COMPLETED', next: 'Tributos, Contábil', evidence: 'Regra e versão aplicadas em cada nota', end: 'Livros de entrada e saída fechados e conferidos' },
+        human: 'Quando a regra é ambígua ou há benefício fiscal sem evidência.' },
+      folha: { name: 'Folha', s: 'off', phase: 'Fase 6 · planejado',
+        goal: 'Do "contratei a Maria" ao eSocial transmitido, folha paga e provisões contabilizadas.',
+        steps: [st('Pedido do cliente', 'Relacionamento', A), st('Dados faltantes', 'cliente', H), st('Contrato e assinatura', 'Contratos', A), st('Cálculo da folha', 'Payroll Engine', M), st('eSocial e FGTS Digital', 'Transmissão', A), st('Provisões e lançamentos', 'Contábil', A)],
+        c: { start: 'Pedido do cliente ou competência', cases: 'PAYROLL_CLOSING · EMPLOYEE_ADMISSION · EMPLOYEE_TERMINATION · VACATION', agents: 'Folha, Contratos, Transmissão', data: 'Empregados, salários, eventos — cliente e eSocial', engine: 'Payroll Engine', events: 'PAYROLL_COMPLETED', next: 'Contábil, Tributos (DCTFWeb), Financeiro', evidence: 'Contrato assinado, recibo do eSocial', end: 'eSocial aceito, guias pagas, provisões contabilizadas' },
+        human: 'Assinatura do contrato pelo cliente e dados que só ele tem.' },
+      financeiro: { name: 'Financeiro e conciliação', s: 'off', phase: 'Fase 3 · planejado',
+        goal: 'Conciliar banco, clientes, fornecedores, folha e tributos sem forçar 100%.',
+        steps: [st('Extrato recebido', 'Documentos', A), st('Matching', 'Reconciliation Engine', M), st('Sem evidência', 'exceção', H), st('Conciliado', 'Financeiro', A)],
+        c: { start: 'BANK_STATEMENT_RECEIVED', cases: 'BANK_RECONCILIATION', agents: 'Financeiro, Conciliação', data: 'Extratos OFX, notas, guias, folha', engine: 'Reconciliation Engine (valor, data, documento, contraparte)', events: 'BANK_RECONCILIATION_COMPLETED', next: 'Contábil', evidence: 'Linha do extrato ligada ao documento', end: 'Tudo conciliado ou exceção aberta com hipóteses' },
+        human: 'Movimento sem documento suficiente: a AIRES mostra hipóteses, não inventa lançamento.' },
+      contabil: { name: 'Contábil', s: 'off', phase: 'Fase 4 · planejado',
+        goal: 'Ledger próprio em partidas dobradas: todo lançamento com documento, regra e evidência.',
+        steps: [st('Eventos fiscal, folha, banco', 'agentes', A), st('Lançamentos', 'Accounting Engine', M), st('D = C', 'validação', M), st('Fechamento', 'Contábil', A), st('Revisão', 'Revisão', A)],
+        c: { start: 'Eventos de Fiscal, Folha e Financeiro', cases: 'ACCOUNTING_CLOSING', agents: 'Contábil', data: 'Documentos e eventos já validados', engine: 'Accounting Engine (débitos = créditos, período bloqueado)', events: 'ACCOUNTING_POSTING_CREATED · ACCOUNTING_CLOSING_COMPLETED', next: 'Tributos, Obrigações (ECD), Relacionamento', evidence: 'Documento e regra de cada lançamento', end: 'Balancete fechado e revisão aprovada' },
+        human: 'Reabertura de período e decisões sem evidência.' },
+      tributos: { name: 'Tributos e guias', s: 'off', phase: 'Fase 5 e 11 · planejado',
+        goal: 'Calcular com motor determinístico, gerar a guia, acompanhar o vencimento e confirmar o pagamento.',
+        steps: [st('Fechamento fiscal', 'evento', A), st('Cálculo', 'Tax Engine', M), st('Guia gerada', 'Guias', A), st('Enviada ao cliente', 'Relacionamento', A), st('Pagamento', 'Busca Receita', A)],
+        c: { start: 'FISCAL_CLOSING_COMPLETED · PAYROLL_COMPLETED', cases: 'TAX_CLOSING', agents: 'Tributos, Guias, Pós-vencimento', data: 'Base de cálculo dos motores fiscais e da folha', engine: 'Tax Engine (IA não calcula tributo)', events: 'TAX_CALCULATION_COMPLETED · TAX_GUIDE_READY · PAYMENT_NOT_FOUND', next: 'Obrigações, Relacionamento', evidence: 'Memória de cálculo e guia emitida', end: 'Guia paga e identificada; senão, "pagamento ainda não identificado" acompanhado' },
+        human: 'Não na rotina. Só se o cliente contestar a guia.' },
+      obrigacoes: { name: 'Obrigações e SPED', s: 'off', phase: 'Fases 7 a 10 · planejado',
+        goal: 'Mapa de obrigações por empresa, montadas a partir dos próprios motores: ECD, ECF, EFD, DCTFWeb, DEFIS.',
+        steps: [st('Perfil + serviços', 'Implantação', A), st('Mapa de obrigações', 'Regulatory Engine', M), st('Montagem', 'SPEDCompiler', M), st('Validação', 'Validation Engine', M), st('Pronta para transmitir', 'Obrigações', A)],
+        c: { start: 'Perfil e serviços da empresa; calendário', cases: 'SPED_SUBMISSION · ECD_SUBMISSION · ECF_SUBMISSION', agents: 'Obrigações, SPED, ECD, ECF, LALUR', data: 'Ledger, fiscal, folha, e-LALUR', engine: 'Regulatory Engine + SPEDCompiler', events: 'OBLIGATION_READY · OBLIGATION_VALIDATED', next: 'Transmissão', evidence: 'Arquivo gerado, layout e versão da regra', end: 'Obrigação aceita, com recibo' },
+        human: 'Assinatura quando a obrigação exige.' },
+      transmissao: { name: 'Transmissão', s: 'off', phase: 'Fase 11 · planejado',
+        goal: 'Enviar aos órgãos com certificado no cofre, sem a credencial nunca passar por agente ou IA.',
+        steps: [st('Obrigação validada', 'evento', A), st('Sua aprovação', 'você', H), st('Autorização', 'Authorization Service', M), st('Envio', 'conector', X), st('Recibo', 'Transmissão', A)],
+        c: { start: 'OBLIGATION_VALIDATED', cases: 'SPED_SUBMISSION e afins', agents: 'Transmissão, Identidade Digital', data: 'Arquivo validado e certificado no cofre', engine: 'Authorization Service + cofre + conector', events: 'OBLIGATION_TRANSMITTED', next: 'Relacionamento', evidence: 'Recibo do órgão', end: 'Recibo armazenado e entregue' },
+        human: 'Sim: toda transmissão passa pela sua aprovação até a promoção formal para autonomia total.' },
+      societario: { name: 'Societário e contratos', s: 'off', phase: 'planejado',
+        goal: 'Abertura, alteração, baixa, filial e regime, com análise de impacto em todos os departamentos.',
+        steps: [st('Pedido do cliente', 'Relacionamento', A), st('Análise de impacto', 'Societário', A), st('Documento', 'Contract Engine', M), st('Assinatura eletrônica', 'cliente', H), st('Registro', 'órgãos', X), st('Impactos aplicados', 'agentes', A)],
+        c: { start: 'Pedido do cliente', cases: 'COMPANY_OPENING · COMPANY_CHANGE · COMPANY_CLOSURE · NEW_BRANCH · TAX_REGIME_CHANGE · SCP_CREATION', agents: 'Societário, Contratos', data: 'Contrato social, sócios, endereço, CNAE', engine: 'Document & Contract Engine com modelos aprovados', events: 'IMPACT_ANALYSIS e eventos de cada área', next: 'Fiscal, Folha, Obrigações, Contábil', evidence: 'Documento assinado e registro', end: 'Registro concluído e impactos aplicados' },
+        human: 'Decisão empresarial e assinatura.' },
+      regularizacao: { name: 'Regularização', s: 'off', phase: 'Fase 11 · planejado',
+        goal: 'Intimações, débitos, parcelamentos, certidões, restituição e compensação.',
+        steps: [st('Caixa postal / débito', 'Integra Contador', X), st('Análise', 'Regularização', A), st('Opções e impacto', 'Regularização', A), st('Decisão', 'você e cliente', H), st('Execução', 'Transmissão', A)],
+        c: { start: 'Mensagem na caixa postal, débito ou pedido', cases: 'TAX_NOTICE · REGULARIZATION · TAX_REFUND · TAX_COMPENSATION', agents: 'Regularização', data: 'Situação fiscal, débitos, parcelamentos', engine: 'Cálculo de débitos e parcelas', events: 'CASE_CREATED e eventos de cada etapa', next: 'Tributos, Relacionamento', evidence: 'Notificação, pedido e recibo', end: 'Débito regularizado ou certidão emitida' },
+        human: 'Adesão a parcelamento e pedidos de restituição: decisão do cliente.' },
+      relacionamento: { name: 'Relacionamento', s: 'off', phase: 'Fase 11 · planejado',
+        goal: 'Os agentes não falam com o cliente: o Relacionamento junta tudo em um pedido só e entrega o mês.',
+        steps: [st('Pendências dos agentes', 'eventos', A), st('Pedido consolidado', 'Relacionamento', A), st('Cliente responde', 'portal, e-mail, WhatsApp', H), st('Pendência resolvida', 'Pending Engine', M), st('Processo retoma', 'Orquestrador', A)],
+        c: { start: 'CLIENT_APPROVAL_REQUIRED · DOCUMENT_MISSING · entrega do mês', cases: 'DOCUMENT_REQUEST', agents: 'Relacionamento, Cobrança', data: 'Pendências abertas de todas as áreas', engine: 'Pending Engine', events: 'mensagens registradas', next: 'O agente que esperava', evidence: 'Mensagem enviada e resposta', end: 'Pendência resolvida e processo retomado' },
+        human: 'O cliente responde; o escritório não repassa nada à mão.' },
+      revisao: { name: 'Revisão independente', s: 'off', phase: 'Fase 12 · planejado',
+        goal: 'Um revisor que não confia nos executores: cruza tudo antes de qualquer entrega.',
+        steps: [st('Fechamentos', 'agentes', A), st('Cruzamentos', 'Revisão', A), st('Scores', 'cobertura, anomalia, materialidade', M), st('Bloqueio só se crítico', 'Revisão', A)],
+        c: { start: 'Conclusão de cada fechamento', cases: 'Etapa de todo Case (nada conclui sem revisão)', agents: 'Revisão', data: 'Banco × razão, fiscal × contábil, folha × contábil, ECD × ledger', engine: 'Cruzamentos determinísticos', events: 'CASE_COMPLETED ou bloqueio', next: 'Obrigações, Relacionamento', evidence: 'Relatório de cruzamentos', end: 'Case aprovado ou devolvido com motivo' },
+        human: 'Só quando o bloqueio é crítico e exige decisão.' }
+    };
+    const order = ['implantacao', 'receita', 'documentos', 'fiscal', 'folha', 'financeiro', 'contabil', 'tributos', 'obrigacoes', 'transmissao', 'societario', 'regularizacao', 'relacionamento', 'revisao'];
+    const sel = this.state.sel;
+    const list = order.map((id) => ({
+      name: P[id].name, phase: P[id].phase, dot: S[P[id].s].dot,
+      bg: id === sel ? '#17293B' : '#111F2E',
+      border: id === sel ? '1px solid #3B6A92' : '1px solid #1E3247',
+      pick: () => this.setState({ sel: id })
+    }));
+    const p = P[sel];
+    const steps = p.steps.map((s, i) => ({ ...s, arrow: i < p.steps.length - 1 }));
+    return { list, pick: { ...p, ...S[p.s], steps, criteria: crit(p.c) } };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,178 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>IARIS · Acompanhamento</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: coluna única de leitura (até 1080px); cabeçalho com números-resumo, depois fases, agentes por departamento, pilotos e linha do tempo. */
+:root {
+  --bg: #F3F5F7; --panel: #FFFFFF; --ink: #14212E; --mut: #5A6A79; --line: #DCE3EA;
+  --accent: #1D5B8F; --accent-bg: #E3EEF8;
+  --on: #1E8A4C; --on-bg: #E2F4E9; --off: #B8433A; --off-bg: #FBE9E7; --part: #A86A0B; --part-bg: #FCF1DE;
+  --f-display: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0F1720; --panel: #16212C; --ink: #E5ECF2; --mut: #93A4B4; --line: #26384A;
+  --accent: #7FB6E6; --accent-bg: #1B3247;
+  --on: #5CCB8A; --on-bg: #163527; --off: #F09A90; --off-bg: #3A1E1C; --part: #E8B45A; --part-bg: #3A2C14; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0F1720; --panel: #16212C; --ink: #E5ECF2; --mut: #93A4B4; --line: #26384A;
+  --accent: #7FB6E6; --accent-bg: #1B3247;
+  --on: #5CCB8A; --on-bg: #163527; --off: #F09A90; --off-bg: #3A1E1C; --part: #E8B45A; --part-bg: #3A2C14; color-scheme: dark }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--f-body); padding-inline: 16px; padding-block: 28px 56px; }
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 40px; }
+h1, h2, h3, h4 { font-family: var(--f-display); text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 800; letter-spacing: .04em; }
+h2 { font-size: 22px; font-weight: 800; }
+h3 { font-size: 18px; font-weight: 800; }
+h4 { font-size: 15px; font-weight: 600; }
+p { margin: 0; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.mut { color: var(--mut); }
+.tiny { font-size: 12px; }
+.eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+section > header { display: grid; gap: 6px; margin-bottom: 16px; }
+section > header p { max-width: 66ch; color: var(--mut); }
+
+.top { display: grid; gap: 18px; }
+.top .tag { color: var(--mut); max-width: 60ch; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 2px; }
+.kpi b { font-family: var(--f-mono); font-size: 26px; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 13px; color: var(--mut); }
+
+.phases { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.ph { display: grid; grid-template-columns: 44px 1fr; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 12px; min-width: 0; }
+.ph.done { border-left-color: var(--on); } .ph.part { border-left-color: var(--part); } .ph.todo { border-left-color: var(--line); }
+.ph .pn { font-size: 14px; color: var(--mut); padding-top: 2px; }
+.ph b { display: block; font-size: 15px; }
+.ph p { font-size: 13px; color: var(--mut); margin-top: 4px; }
+.pst { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 99px; }
+.done .pst { background: var(--on-bg); color: var(--on); } .part .pst { background: var(--part-bg); color: var(--part); } .todo .pst { background: var(--bg); color: var(--mut); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--mut); margin-bottom: 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.depts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+.dept { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 8px; min-width: 0; }
+.dh { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.dh .mono { font-size: 13px; color: var(--mut); }
+.bar { height: 6px; background: var(--bg); border-radius: 99px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--on); border-radius: 99px; }
+.ags { display: grid; gap: 10px; margin-top: 6px; }
+.ag { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; }
+.ag header { display: flex; align-items: center; gap: 8px; }
+.ag h4 { flex: 1; }
+.lamp { width: 10px; height: 10px; border-radius: 50%; background: var(--off); box-shadow: 0 0 0 3px var(--off-bg); flex: none; }
+.ag.on .lamp, .lamp.on { background: var(--on); box-shadow: 0 0 0 3px var(--on-bg); }
+.st { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--off); }
+.ag.on .st { color: var(--on); }
+.ag p { font-size: 13px; color: var(--mut); }
+.caps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.cap { font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px dashed var(--line); color: var(--mut); }
+.cap.on { border-style: solid; border-color: transparent; background: var(--on-bg); color: var(--on); font-weight: 600; }
+
+.pilots { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.pilot { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.pilot dl { margin: 0; display: grid; gap: 8px; }
+.pilot dl div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.pilot dt { color: var(--mut); font-size: 14px; }
+.pilot dd { margin: 0; font-weight: 700; text-align: right; font-size: 14px; }
+.ok { color: var(--on); } .wait { color: var(--part); }
+
+.tl { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; border-left: 2px solid var(--line); padding-left: 18px; }
+.tl li { position: relative; display: grid; gap: 2px; }
+.tl li::before { content: ""; position: absolute; left: -24px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.tl .dt { font-size: 13px; color: var(--accent); }
+.tl p { max-width: 70ch; }
+
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.rule { background: var(--accent-bg); border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+.rule b { display: block; font-family: var(--f-display); font-size: 15px; margin-bottom: 2px; }
+.next { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 70ch; }
+footer { font-size: 13px; color: var(--mut); border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+<div class="wrap">
+  <section class="top">
+    <div class="eyebrow">Acompanhamento da construção</div>
+    <h1>IARIS</h1>
+    <p class="tag">Inteligência Artificial para Resultados, Integração e Soluções. Sistema contábil próprio da Contabilidade Legacy: automação primeiro, evidência sempre, pessoa só na exceção.</p>
+    <div class="kpis">
+      <div class="kpi"><b>14/23</b><span>agentes operando</span></div>
+      <div class="kpi"><b>43/97</b><span>capacidades ativas</span></div>
+      <div class="kpi"><b>11/11</b><span>meses do Simples conferidos ao centavo (piloto A)</span></div>
+      <div class="kpi"><b>113</b><span>testes automáticos passando</span></div>
+    </div>
+    <p class="tiny mut">Situação em 07/10/2026. Esta página é atualizada a cada etapa concluída; não é o sistema ao vivo.</p>
+  </section>
+
+  <section>
+    <header><h2>Fases do plano</h2><p>A ordem segue o plano do projeto: primeiro fundação, segurança e cadastro; depois documentos, tributos, contabilidade e entregas.</p></header>
+    <ol class="phases"><li class="ph done"><span class="pn mono">0</span><div><b>Fundação</b><span class="pst">concluída</span><p>Multi-tenant, eventos, auditoria imutável, Cases</p></div></li><li class="ph done"><span class="pn mono">1</span><div><b>Implantação e identidade</b><span class="pst">concluída</span><p>Cadastro pelo CNPJ, procuração e-CAC, certificados no cofre, autorização</p></div></li><li class="ph part"><span class="pn mono">2</span><div><b>Documentos</b><span class="pst">em andamento</span><p>NFS-e Nacional rodando; NF-e aguarda a sequência do outro sistema; NFC-e e CT-e a fazer</p></div></li><li class="ph part"><span class="pn mono">3</span><div><b>Financeiro e conciliação</b><span class="pst">em andamento</span><p>Extrato OFX conciliado com DARF/DAS, notas e regras aprendidas; PDF, Excel e Open Finance a fazer</p></div></li><li class="ph part"><span class="pn mono">4</span><div><b>Contábil</b><span class="pst">em andamento</span><p>Razão próprio montado sozinho (notas, Simples, extrato) e balancete; DRE, balanço e fechamento a fazer</p></div></li><li class="ph part"><span class="pn mono">5</span><div><b>Fiscal e tributos</b><span class="pst">em andamento</span><p>Simples Nacional calculado e conferido; retenções das NFS-e conferidas com o DARF; Presumido e Real a fazer</p></div></li><li class="ph todo"><span class="pn mono">6</span><div><b>Folha</b><span class="pst">a fazer</span><p>Admissão a rescisão, eSocial, FGTS Digital</p></div></li><li class="ph part"><span class="pn mono">7</span><div><b>Obrigações</b><span class="pst">em andamento</span><p>Mapa por empresa e calendário de dias úteis; entrega a fazer</p></div></li><li class="ph todo"><span class="pn mono">8–10</span><div><b>SPED, ECD, ECF</b><span class="pst">a fazer</span><p>Arquivos digitais e LALUR/LACS</p></div></li><li class="ph part"><span class="pn mono">11</span><div><b>Guias e transmissão</b><span class="pst">em andamento</span><p>Prazo e pagamento do DAS identificados; emissão e transmissão a fazer</p></div></li><li class="ph part"><span class="pn mono">12</span><div><b>Revisão e autonomia</b><span class="pst">em andamento</span><p>Revisão independente com exceções e hipóteses</p></div></li></ol>
+  </section>
+
+  <section>
+    <header><h2>Agentes por departamento</h2><p>Cada agente tem tarefas definidas. Verde é capacidade já rodando com dados reais; tracejado é o que falta construir.</p></header>
+    <div class="legend"><span><span class="lamp on"></span>operando</span><span><span class="lamp"></span>a construir</span></div>
+    <div class="depts"><section class="dept"><div class="dh"><h3>Societário</h3><span class="mono">2/5 agentes</span></div><p class="mut">Cadastro, identidade digital, atos societários e regularização.</p><div class="bar" role="img" aria-label="8 de 20 capacidades ativas"><i style="width:40%"></i></div><p class="tiny mut">8 de 20 capacidades ativas</p><div class="ags"><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Implantação</h4><span class="st">operando</span></header><p>Do CNPJ ao cliente pronto para operar.</p><ul class="caps"><li class="cap on">Cadastro pelo CNPJ</li><li class="cap on">Regime e histórico</li><li class="cap on">Serviços contratados</li><li class="cap on">Checklist e migração</li><li class="cap on">Mapa de obrigações</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Identidade digital</h4><span class="st">operando</span></header><p>Procurações e certificados de cada empresa.</p><ul class="caps"><li class="cap on">Procuração e-CAC</li><li class="cap on">Certificados A1 no cofre</li><li class="cap on">Validade dos certificados</li><li class="cap">Procurações estaduais e municipais</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>Societário</h4><span class="st">a construir</span></header><p>Atos da empresa na Junta e na Receita.</p><ul class="caps"><li class="cap">Abertura</li><li class="cap">Alteração contratual</li><li class="cap">Filiais</li><li class="cap">Baixa</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>Contratos e assinatura</h4><span class="st">a construir</span></header><p>Documentos a partir de modelos aprovados.</p><ul class="caps"><li class="cap">Modelos aprovados</li><li class="cap">Assinatura eletrônica</li><li class="cap">Arquivo e evidência</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>Regularização</h4><span class="st">a construir</span></header><p>Pendências com os órgãos.</p><ul class="caps"><li class="cap">Certidões</li><li class="cap">Parcelamentos</li><li class="cap">PER/DCOMP</li><li class="cap">Intimações</li></ul></article></div></section><section class="dept"><div class="dh"><h3>Fiscal</h3><span class="mono">6/8 agentes</span></div><p class="mut">Documentos, Receita Federal, apuração, guias e obrigações.</p><div class="bar" role="img" aria-label="16 de 33 capacidades ativas"><i style="width:48%"></i></div><p class="tiny mut">16 de 33 capacidades ativas</p><div class="ags"><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Documentos</h4><span class="st">operando</span></header><p>Busca as notas sozinho e guarda o XML original.</p><ul class="caps"><li class="cap on">NFS-e Nacional</li><li class="cap on">Ciência com aprovação</li><li class="cap on">CT-e (distribuição nacional)</li><li class="cap on">Entrada de XML: upload e pasta</li><li class="cap on">NFC-e pelo XML do PDV</li><li class="cap">NF-e SEFAZ (aguarda sequência)</li><li class="cap">NFS-e municipal</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Receita Federal</h4><span class="st">operando</span></header><p>PGDAS-D, DAS e pagamentos, com teto de custo.</p><ul class="caps"><li class="cap on">PGDAS-D e DAS</li><li class="cap on">Pagamentos (PagtoWeb)</li><li class="cap on">Receita declarada</li><li class="cap on">Teto diário de consultas</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Obrigações</h4><span class="st">operando</span></header><p>Quais obrigações cada empresa tem e quando vencem.</p><ul class="caps"><li class="cap on">Mapa por empresa</li><li class="cap on">Calendário de dias úteis</li><li class="cap">Entrega das obrigações</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Escrita fiscal</h4><span class="st">operando</span></header><p>Lê os tributos de cada NFS-e e confere as retenções com o recolhimento.</p><ul class="caps"><li class="cap on">Tributos da NFS-e (NT 007)</li><li class="cap on">IRRF e PIS/COFINS/CSLL retidos × DARF</li><li class="cap">ISS retido nas tomadas (sem guia municipal)</li><li class="cap">CFOP e CST</li><li class="cap">Créditos</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Tributos</h4><span class="st">operando</span></header><p>Cálculo determinístico de cada tributo, só com tabela aprovada.</p><ul class="caps"><li class="cap on">Simples Nacional: cálculo e conferência</li><li class="cap">Simples: fator r e impedimento de ISS/ICMS</li><li class="cap">Presumido e Real</li><li class="cap">ICMS e ISS próprios</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Guias</h4><span class="st">operando</span></header><p>DAS de cada competência: prazo, emissão e pagamento identificado.</p><ul class="caps"><li class="cap on">Vencimento com dias úteis</li><li class="cap on">Pagamento identificado (DAS)</li><li class="cap">Emissão do DAS</li><li class="cap">DARF e outras guias</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>SPED fiscal</h4><span class="st">a construir</span></header><p>Arquivos digitais fiscais.</p><ul class="caps"><li class="cap">EFD ICMS/IPI</li><li class="cap">EFD-Contribuições</li><li class="cap">EFD-Reinf</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>Transmissão</h4><span class="st">a construir</span></header><p>Assinatura, envio e recibo, com sua aprovação.</p><ul class="caps"><li class="cap">Assinatura</li><li class="cap">Envio</li><li class="cap">Recibo</li></ul></article></div></section><section class="dept"><div class="dh"><h3>Folha</h3><span class="mono">0/2 agentes</span></div><p class="mut">Pessoas, folha mensal e obrigações trabalhistas.</p><div class="bar" role="img" aria-label="0 de 9 capacidades ativas"><i style="width:0%"></i></div><p class="tiny mut">0 de 9 capacidades ativas</p><div class="ags"><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>Folha de pagamento</h4><span class="st">a construir</span></header><p>Do contrato à rescisão.</p><ul class="caps"><li class="cap">Admissão</li><li class="cap">Folha mensal</li><li class="cap">Férias</li><li class="cap">13º salário</li><li class="cap">Rescisão</li><li class="cap">Provisões</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>eSocial e DCTFWeb</h4><span class="st">a construir</span></header><p>Eventos, contribuições e FGTS.</p><ul class="caps"><li class="cap">Eventos eSocial</li><li class="cap">DCTFWeb</li><li class="cap">FGTS Digital</li></ul></article></div></section><section class="dept"><div class="dh"><h3>Contábil</h3><span class="mono">4/5 agentes</span></div><p class="mut">Razão próprio, conciliação, revisão e SPED contábil.</p><div class="bar" role="img" aria-label="13 de 26 capacidades ativas"><i style="width:50%"></i></div><p class="tiny mut">13 de 26 capacidades ativas</p><div class="ags"><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Contábil (razão)</h4><span class="st">operando</span></header><p>Partidas dobradas com evidência, garantidas pelo banco de dados.</p><ul class="caps"><li class="cap on">Plano de contas padrão</li><li class="cap on">Lançamentos com evidência e estorno</li><li class="cap on">Receita das NFS-e e provisão do Simples</li><li class="cap on">Balancete</li><li class="cap on">Bloqueio de período</li><li class="cap">DRE e balanço</li><li class="cap">Saldos de abertura (migração)</li><li class="cap">Fechamento</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Financeiro</h4><span class="st">operando</span></header><p>Extratos e contas da empresa.</p><ul class="caps"><li class="cap on">Extratos OFX sem duplicar</li><li class="cap on">Conta contábil do banco automática</li><li class="cap">Extrato em PDF, Excel e CSV</li><li class="cap">Open Finance</li><li class="cap">Contas a pagar e receber</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Conciliação</h4><span class="st">operando</span></header><p>Cada movimento do banco explicado por DARF, nota ou regra.</p><ul class="caps"><li class="cap on">DAS e DARF item a item</li><li class="cap on">Recebimento × NFS-e</li><li class="cap on">Regras de histórico aprendidas</li><li class="cap">Fornecedores × NF-e</li><li class="cap">Proposta por IA com aprovação</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Revisão independente</h4><span class="st">operando</span></header><p>Cruza tudo antes de qualquer entrega e abre exceção com hipótese.</p><ul class="caps"><li class="cap on">Receita declarada × NFS-e</li><li class="cap on">Simples calculado × declarado</li><li class="cap on">Exceções com hipótese</li><li class="cap">Fiscal × contábil</li><li class="cap">Folha × contábil</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>ECD e ECF</h4><span class="st">a construir</span></header><p>SPED contábil e fiscal anual.</p><ul class="caps"><li class="cap">ECD</li><li class="cap">ECF</li><li class="cap">e-LALUR / e-LACS</li></ul></article></div></section>
+      <section class="dept"><div class="dh"><h3>Comum a todos</h3></div><p class="mut">Organização do trabalho e contato com o cliente.</p><div class="ags"><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Orquestrador</h4><span class="st">operando</span></header><p>Liga os agentes por evento: quando um termina, o próximo começa sozinho.</p><ul class="caps"><li class="cap on">Vínculos por evento</li><li class="cap on">Cadeia de causa visível</li><li class="cap on">Refazer com limite e escalar</li></ul></article><article class="ag on"><header><span class="lamp" aria-hidden="true"></span><h4>Cases e pendências</h4><span class="st">operando</span></header><p>Toda operação é um Case; o que falta vira pendência.</p><ul class="caps"><li class="cap on">Cases</li><li class="cap on">Pendências</li><li class="cap on">Fila humana</li></ul></article><article class="ag"><header><span class="lamp" aria-hidden="true"></span><h4>Relacionamento</h4><span class="st">a construir</span></header><p>Um pedido consolidado ao cliente.</p><ul class="caps"><li class="cap">Pedido consolidado</li><li class="cap">Portal do cliente</li><li class="cap">WhatsApp e e-mail</li></ul></article></div></section>
+    </div>
+  </section>
+
+  <section>
+    <header><h2>Resultados nas empresas-piloto</h2><p>Duas empresas reais do Simples Nacional. Nomes e valores ficam de fora desta página.</p></header>
+    <div class="pilots">
+      <article class="pilot"><h3>Piloto A · serviços (Anexo IV)</h3>
+        <dl>
+          <div><dt>Documentos de NFS-e lidos do Sistema Nacional</dt><dd class="mono">1.205</dd></div>
+          <div><dt>Simples recalculado × declarado (10/2025 a 08/2026)</dt><dd class="ok">11 de 11 conferem</dd></div>
+          <div><dt>Receita declarada × notas emitidas</dt><dd class="wait">2 meses em revisão</dd></div>
+          <div><dt>DAS de 10/2025 a 08/2026</dt><dd class="ok">pagos no prazo</dd></div>
+          <div><dt>Setembro/2026</dt><dd class="wait">em avaliação pelo time fiscal</dd></div>
+        </dl>
+        <p class="tiny mut">As duas diferenças de receita vêm de notas canceladas e substituídas que entraram na declaração. Ficaram em revisão posterior; nada foi retificado nem transmitido.</p>
+      </article>
+      <article class="pilot"><h3>Piloto B · comércio (lanchonete)</h3>
+        <dl>
+          <div><dt>NFS-e de serviços tomados lidas</dt><dd class="mono">549</dd></div>
+          <div><dt>DAS de 09/2025 a 08/2026</dt><dd class="ok">pagos no prazo</dd></div>
+          <div><dt>Cálculo do Simples</dt><dd class="wait">aguarda ler 1 declaração</dd></div>
+          <div><dt>Vendas por NFC-e</dt><dd class="wait">conector a construir</dd></div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <header><h2>Linha do tempo</h2></header>
+    <ol class="tl"><li><span class="mono dt">05/10</span><p>Fundação no ar: multi-tenant, eventos, Cases e auditoria. Implantação pelo CNPJ. Conector real do SERPRO (Integra Contador) com procuração e-CAC e teto diário de consultas cobradas.</p></li><li><span class="mono dt">06/10</span><p>Tela de operação com Central de agentes e Fila humana. Implantação completa (checklist, mapa de obrigações, calendário de dias úteis). Certificados A1 no cofre local. Busca de NF-e na SEFAZ e de NFS-e no Sistema Nacional. Receita declarada no PGDAS-D lida do PDF oficial.</p></li><li><span class="mono dt">07/10</span><p>Conferência de receita declarada × NFS-e com exceções e hipóteses. Motor do Simples Nacional aprovado pelo responsável técnico e conferido centavo a centavo. Agente Guias: prazo e pagamento do DAS por competência. Login com senha e autenticador de 2 etapas, com perfis de acesso. Orquestrador: os agentes passam a se chamar sozinhos por evento. Usuários e acessos pela própria tela; entrada de XML (upload e pasta) e CT-e da distribuição nacional; endereço público para acesso de fora. Agente Fiscal: lê os tributos de cada NFS-e e confere IRRF e PIS/COFINS/CSLL retidos nas notas tomadas com o DARF pago.</p></li><li><span class="mono dt">08/10</span><p>Contabilidade nasce: razão de partidas dobradas com débito = crédito garantido pelo banco de dados, estorno e bloqueio de período. Notas, Simples declarado e extrato OFX viram lançamentos sozinhos; o que não tem hipótese única vai para classificação humana, que pode virar regra. Simples de comércio e indústria (Anexos I e II) conferido ao centavo em 8 meses de um piloto.</p></li></ol>
+  </section>
+
+  <section>
+    <header><h2>Regras que o sistema segue</h2></header>
+    <div class="rules">
+      <div class="rule"><b>IA não calcula tributo</b>Tributo é calculado por motor com regra versionada e aprovada pelo responsável técnico.</div>
+      <div class="rule"><b>Nada sai sem aprovação</b>Retificação, transmissão e ciência de nota só com decisão de uma pessoa, registrada na auditoria.</div>
+      <div class="rule"><b>Certificados no cofre</b>Certificados digitais e senhas ficam só no cofre do escritório, nunca em tela, log ou texto enviado à IA.</div>
+      <div class="rule"><b>Consulta cobrada com teto</b>Consultas pagas à Receita só por botão, com limite de 20 por dia.</div>
+      <div class="rule"><b>Agentes ligados por evento</b>Quando um agente termina, o próximo começa sozinho. Erro é refeito até 3 vezes e depois vai para uma pessoa.</div>
+      <div class="rule"><b>Login com 2 etapas</b>Senha e código do celular. Perfis Leitura, Operador e Responsável técnico; cada ação exige o perfil certo.</div>
+    </div>
+  </section>
+
+  <section>
+    <header><h2>Próximas etapas</h2></header>
+    <ol class="next">
+            <li>Simples acima do sublimite (piloto A), depois da avaliação do time fiscal.</li>
+      <li>NF-e da SEFAZ, assim que a sequência do outro sistema for informada.</li>
+      <li>Escrita fiscal e contabilidade própria (razão de partidas dobradas).</li>
+    </ol>
+  </section>
+
+  <footer>IARIS · Contabilidade Legacy · atualizado em 07/10/2026</footer>
+</div>
+
+</body></html>

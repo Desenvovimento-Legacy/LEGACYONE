@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>AIRES — Fechamento ao vivo</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0B1622}
+a{color:#7FC8F2;text-decoration:none}a:hover{color:#FFFFFF;text-decoration:underline}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-wrap: wrap; background: #0B1622; color: #E6EEF5; font-family: Manrope, system-ui, sans-serif">
+  <dc-import name="Sidebar" active="fechamento" hint-size="260px,1100px"></dc-import>
+  <main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column">
+
+  <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; padding: 14px 28px; border-bottom: 1px solid #1E3247; background: #0E1B29">
+    <div style="display: flex; flex-direction: column; gap: 2px"><h1 style="margin: 0; font-size: 20px; font-weight: 800">Fechamento</h1><span style="font-size: 12px; color: #8FA5B8">Todos os agentes trabalhando na competência, ao vivo</span></div>
+    <span style="margin-left: auto; padding: 6px 12px; border-radius: 999px; background: #2A2112; color: #F5C77E; border: 1px solid #5A4520; font-size: 12px; font-weight: 700; letter-spacing: 0.04em">DADOS DE EXEMPLO · como o fechamento vai aparecer</span>
+  </header>
+
+  <div style="padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box; width: 100%">
+
+    <section style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 12px; color: #8FA5B8; text-transform: uppercase; letter-spacing: 0.06em">Case ACCOUNTING_CLOSING · iniciado pelo Orquestrador às 09:04</span>
+        <h2 style="margin: 0; font-size: 26px; font-weight: 800">ALPHA INDÚSTRIA LTDA · setembro/2026</h2>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; min-width: 300px">
+        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #8FA5B8"><span>Progresso do fechamento</span><span style="font-family: 'IBM Plex Mono', monospace; color: #FFFFFF">72%</span></div>
+        <div style="height: 10px; border-radius: 999px; background: #1A2C3E; overflow: hidden"><div style="height: 10px; width: 72%; border-radius: 999px; background: #3FC1B4"></div></div>
+      </div>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+
+      <section aria-labelledby="lanes" style="flex: 999 1 640px; min-width: 0; background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px">
+        <h2 id="lanes" style="margin: 0 0 4px; font-size: 16px; font-weight: 700">Agentes em paralelo</h2>
+        <sc-for list="{{lanes}}" as="l" hint-placeholder-count="10">
+          <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) 150px; gap: 14px; align-items: center; padding: 10px 12px; border-radius: 10px; background: #0E1B29; border: 1px solid #1A2C3E">
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <span style="font-weight: 700; font-size: 13px">{{l.name}}</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #8FA5B8">{{l.time}}</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 0">
+              <span style="font-size: 12px; color: #C6D4E0">{{l.detail}}</span>
+              <div style="height: 6px; border-radius: 999px; background: #1A2C3E; overflow: hidden"><div style="height: 6px; border-radius: 999px; width: {{l.pct}}; background: {{l.bar}}"></div></div>
+            </div>
+            <span style="justify-self: end; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; padding: 3px 9px; border-radius: 999px; background: {{l.chipBg}}; color: {{l.chipFg}}">{{l.state}}</span>
+          </div>
+        </sc-for>
+      </section>
+
+      <div style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+        <section aria-labelledby="lanc" style="background: #111F2E; border: 1px solid #1E3247; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; justify-content: space-between; align-items: baseline">
+            <h2 id="lanc" style="margin: 0; font-size: 16px; font-weight: 700">Lançamentos acontecendo</h2>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #7FE0D4">D = C ✓</span>
+          </div>
+          <div style="background: #0E1B29; border: 1px solid #1A2C3E; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #8FA5B8"><span>Conta de energia · NF 004.218</span><span style="font-family: 'IBM Plex Mono', monospace">conf. 0,98</span></div>
+            <div style="display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 4px 8px; font-size: 13px; font-family: 'IBM Plex Mono', monospace">
+              <span style="color: #9CCBF3">D</span><span style="font-family: Manrope, sans-serif">Energia Elétrica / Custo Industrial</span><span>12.450,00</span>
+              <span style="color: #F5C77E">C</span><span style="font-family: Manrope, sans-serif">Fornecedores</span><span>12.450,00</span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px"><span style="padding: 2px 8px; border-radius: 999px; background: #16222F; color: #B8C9D8">evidência: XML + PDF</span><span style="padding: 2px 8px; border-radius: 999px; background: #16222F; color: #B8C9D8">regra energia@3</span><span style="padding: 2px 8px; border-radius: 999px; background: #16222F; color: #B8C9D8">CC: produção</span></div>
+          </div>
+          <div style="background: #0E1B29; border: 1px solid #1A2C3E; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #8FA5B8"><span>Pagamento identificado · Banco A</span><span style="font-family: 'IBM Plex Mono', monospace">conciliado</span></div>
+            <div style="display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 4px 8px; font-size: 13px; font-family: 'IBM Plex Mono', monospace">
+              <span style="color: #9CCBF3">D</span><span style="font-family: Manrope, sans-serif">Fornecedores</span><span>12.450,00</span>
+              <span style="color: #F5C77E">C</span><span style="font-family: Manrope, sans-serif">Banco A</span><span>12.450,00</span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px"><span style="padding: 2px 8px; border-radius: 999px; background: #16222F; color: #B8C9D8">evidência: extrato OFX</span><span style="padding: 2px 8px; border-radius: 999px; background: #16222F; color: #B8C9D8">match valor + documento</span></div>
+          </div>
+        </section>
+
+        <section aria-labelledby="exc" style="background: #241416; border: 1px solid #6A2A2A; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; justify-content: space-between; align-items: baseline">
+            <h2 id="exc" style="margin: 0; font-size: 16px; font-weight: 700; color: #F7A39C">Exceção · Banco B</h2>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #F7A39C">conf. 0,41</span>
+          </div>
+          <span style="font-size: 14px"><b>Saída de R$ 8.430,00</b> em 22/09/2026 · "PIX ENVIADO 22/09"</span>
+          <span style="font-size: 13px; color: #E7C9C6">Não existe evidência suficiente para lançamento definitivo.</span>
+          <div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #E7C9C6">
+            <span>Hipótese 1 · adiantamento a fornecedor (2 notas em aberto no valor)</span>
+            <span>Hipótese 2 · distribuição de lucros ao sócio</span>
+          </div>
+          <span style="font-size: 12px; color: #B89894">O resto do fechamento continua. Só este movimento espera sua decisão.</span>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button type="button" style="font: inherit; font-size: 13px; font-weight: 700; padding: 9px 14px; border-radius: 6px; border: 0; background: #F07167; color: #1C0B0A; cursor: pointer">Decidir</button>
+            <button type="button" style="font: inherit; font-size: 13px; font-weight: 600; padding: 9px 14px; border-radius: 6px; border: 1px solid #6A2A2A; background: transparent; color: #F7A39C; cursor: pointer">Pedir ao cliente</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1160}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const K = {
+      done: { chipBg: '#0F2A26', chipFg: '#7FE0D4', bar: '#3FC1B4', state: 'CONCLUÍDO' },
+      run: { chipBg: '#10243A', chipFg: '#9CCBF3', bar: '#4A9BE0', state: 'EXECUTANDO' },
+      wait: { chipBg: '#16222F', chipFg: '#8FA5B8', bar: '#2A3F55', state: 'NA FILA' },
+      human: { chipBg: '#2A2112', chipFg: '#F5C77E', bar: '#E8A33D', state: 'APROVAÇÃO' }
+    };
+    const lane = (name, time, detail, pct, kind) => ({ name, time, detail, pct, ...K[kind] });
+    return {
+      lanes: [
+        lane('Documentos', '09:04', '1.842 documentos encontrados · 1.842 classificados', '100%', 'done'),
+        lane('Fiscal', '09:18', 'Documentos fiscais processados · tributação determinada · retenções verificadas', '100%', 'done'),
+        lane('Folha', '09:26', '18 colaboradores · folha, provisões e encargos calculados', '100%', 'done'),
+        lane('Financeiro', '09:41', 'Banco A 100% · Banco B 99,8% (1 exceção) · Banco C 100%', '99%', 'done'),
+        lane('Contábil', '10:02', '4.731 lançamentos contabilizados · débitos = créditos', '100%', 'done'),
+        lane('Tributos', '10:14', 'Tributos calculados pelo motor determinístico', '100%', 'done'),
+        lane('Revisão', '10:27', 'Cruzando banco × razão, fiscal × contábil, folha × contábil', '64%', 'run'),
+        lane('Obrigações', '—', 'Aguardando a revisão para validar as obrigações', '0%', 'wait'),
+        lane('Transmissão', '—', 'Transmissões só com sua aprovação', '0%', 'human'),
+        lane('Relacionamento', '—', 'Entrega ao cliente após os recibos', '0%', 'wait')
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
