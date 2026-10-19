@@ -37,6 +37,29 @@ Tarefas agendadas no Windows (rodam via `wscript`, sem abrir janela):
   que reabre o lançador `src/cli/web-public.ts` (servidor + túnel) se ele tiver caído.
 - **IARIS backup nuvem** — 20:00, `backup-nuvem-oculto.vbs` (`cloud:db backup`).
 
+### O que está no GitHub e o que não está
+
+| Item | No GitHub? | Onde fica |
+| --- | --- | --- |
+| Todo o código, migrações, testes, scripts do PC (`scripts/windows/*.ps1` e `*.vbs`) | Sim | repositório |
+| Cofre (senhas, certificados A1, credenciais SERPRO, URLs do banco) | **Não, de propósito** | só no PC, `C:\IARIS\cofre` |
+| Dados (empresas, notas, lançamentos, auditoria) | Não | Supabase; backup diário em `C:\IARIS\backup\nuvem` (`.sql.gz`, log em `log.txt`) |
+| XML recebidos e consultas avulsas | Não | `C:\IARIS\entrada\processados`, `C:\IARIS\consultas` (originais também no banco) |
+| `.env` do PC | Não | `C:\IARIS\sistema\.env` (só `IARIS_DB_TARGET=cloud` e caminhos; sem segredos) |
+| Documento de arquitetura aprovado | Não | Claude Docs ("IARIS — Arquitetura para Aprovação") |
+| `coleta_de_xml (2).py` | Não | `C:\IARIS\scripts` — script próprio do Luan, fora do IARIS |
+
+### Montar o PC do zero
+
+1. `git clone` do repositório em `C:\IARIS\sistema`, `npm install` (ou `pnpm install`), criar `.env` a partir do `.env.example` com `IARIS_DB_TARGET=cloud`.
+2. Copiar o cofre (`C:\IARIS\cofre`) do PC antigo — só o Luan faz isso; não há outra cópia.
+3. Copiar `scripts/windows/*` para `C:\IARIS\scripts` e criar as tarefas:
+   ```
+   schtasks /Create /TN "IARIS no ar" /TR "wscript.exe //B //Nologo C:\IARIS\scripts\garantir-iaris-oculto.vbs" /SC MINUTE /MO 5
+   schtasks /Create /TN "IARIS backup nuvem" /TR "wscript.exe //B //Nologo C:\IARIS\scripts\backup-nuvem-oculto.vbs" /SC DAILY /ST 20:00
+   ```
+   (a "IARIS no ar" também tem gatilho ao entrar no Windows; acrescentar pelo Agendador de Tarefas).
+
 ## 3. Como publicar uma alteração
 
 1. No repositório: `pnpm typecheck` e `pnpm test` passando (Postgres local; se parar: `service postgresql start`).
