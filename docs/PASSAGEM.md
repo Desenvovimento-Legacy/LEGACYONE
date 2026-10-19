@@ -157,9 +157,8 @@ Além das 10 regras do CLAUDE.md:
    `NFE_COMPRA`/`NFE_COMPRA_PARCIAL` no `bank_match`), contabilização de compra por NF-e com a regra `compras-nfe@1`,
    conciliação por parcela (duplicatas já lidas: commit `b2e2126`), visão AP/AR e cruzamento na revisão.
    Retomar só quando o Luan pedir.
-3. **PC desatualizado:** o PC está em `4eabeb4`; falta `git pull` do `b2e2126` (sem migração) e reinício.
-4. Entrega ao cliente por e-mail/portal (Relacionamento): última etapa, por decisão do Luan.
-5. Endereço fixo: hoje o túnel Cloudflare muda a cada reinício; domínio próprio ainda não definido.
+3. Entrega ao cliente por e-mail/portal (Relacionamento): última etapa, por decisão do Luan.
+4. Endereço fixo: hoje o túnel Cloudflare muda a cada reinício; domínio próprio ainda não definido.
 
 ## 9. Referência técnica rápida
 
@@ -183,4 +182,5 @@ Além das 10 regras do CLAUDE.md:
 2. Subir o ambiente local (README, "Rodando no Windows") e rodar `pnpm typecheck && pnpm test`.
 3. Pedir ao Luan: acesso ao repositório, um convite de usuário (`pnpm user:invite`) e, se for operar o PC, acesso remoto.
    O cofre não sai do PC e não é copiado para outra máquina.
-4. Primeira tarefa sugerida: item técnico 3 do bloco 8 (deploy pendente) e, com o Luan, a decisão do item técnico 1.
+4. Primeira tarefa sugerida: com o Luan, a decisão do item técnico 1 do bloco 8 (NF-e das empresas novas).
+   PC e repositório estão no mesmo commit em 19/10/2026.
