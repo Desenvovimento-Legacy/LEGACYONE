@@ -46,6 +46,8 @@ Serviços locais:
 
 ## Arquitetura
 
+**Vai assumir o projeto? Comece por [docs/PASSAGEM.md](docs/PASSAGEM.md)** (estado atual, operação no PC, pendências).
+
 Documento de arquitetura aprovado: IARIS — Arquitetura para Aprovação (Claude Docs).
 Convenções para quem escreve código neste repositório: [CLAUDE.md](CLAUDE.md).
 
