@@ -130,3 +130,39 @@ describe("incluir empresa pela tela", () => {
     expect(list.entities.map((e: { legal_name: string }) => e.legal_name)).toContain("NOVA EMPRESA TESTE LTDA");
   });
 });
+
+describe("visualização sem login (IARIS_LOGIN=off)", () => {
+  async function startOpen(openView: boolean) {
+    const t = await newTenant();
+    const { entityId } = await newEntity(t, CNPJ_MATRIZ);
+    const integra = new FakeIntegraContador(OFFICE, {}, {});
+    const server = createWebServer({
+      appPool, tenantId: t, officeName: "Escritório Teste", integra,
+      metering: { provider: "serpro", dailyLimit: 20 }, port: 0, authKey: AUTH_KEY, openView,
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    close = () => new Promise((r) => server.close(() => r()));
+    return { base, entityId, integra };
+  }
+
+  it("ligada: abre a tela e lê tudo sem login, como Leitura; nenhuma ação passa", async () => {
+    const { base, entityId, integra } = await startOpen(true);
+    const page = await (await fetch(`${base}/`)).text();
+    expect(page).toContain('id="sair"');
+    const me = await (await fetch(`${base}/api/sessao`)).json();
+    expect(me).toMatchObject({ visitor: true, role: "LEITURA", permissions: ["ver"] });
+    expect((await fetch(`${base}/api/competencia/2026-08`)).status).toBe(200);
+    expect((await fetch(`${base}/api/usuarios`)).status).toBe(403);
+    const buscar = await fetch(`${base}/api/empresa/${entityId}/competencia/2026-08/buscar`, { method: "POST", headers: { "X-IARIS-Acao": "buscar" } });
+    expect(buscar.status).toBe(403);
+    expect(integra.calls).toEqual([]);
+    expect(await (await fetch(`${base}/login`)).text()).toContain("Entrar");
+  });
+
+  it("desligada (padrão): sem login a tela pede entrar e a API recusa", async () => {
+    const { base } = await startOpen(false);
+    expect(await (await fetch(`${base}/`)).text()).not.toContain('id="sair"');
+    expect((await fetch(`${base}/api/competencia/2026-08`)).status).toBe(401);
+  });
+});

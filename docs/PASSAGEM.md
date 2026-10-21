@@ -57,7 +57,7 @@ Tarefas agendadas no Windows (rodam via `wscript`, sem abrir janela):
 | Cofre (senhas, certificados A1, credenciais SERPRO, URLs do banco) | **Não, de propósito** | só no PC, `C:\IARIS\cofre` |
 | Dados (empresas, notas, lançamentos, auditoria) | Não | Supabase; backup diário em `C:\IARIS\backup\nuvem` (`.sql.gz`, log em `log.txt`) |
 | XML recebidos e consultas avulsas | Não | `C:\IARIS\entrada\processados`, `C:\IARIS\consultas` (originais também no banco) |
-| `.env` do PC | Não | `C:\IARIS\sistema\.env` (só `IARIS_DB_TARGET=cloud` e caminhos; sem segredos) |
+| `.env` do PC | Não | `C:\IARIS\sistema\.env` (`IARIS_DB_TARGET=cloud`, `IARIS_LOGIN=off` e caminhos; sem segredos) |
 | Documento de arquitetura, especificação mestre, decisões, páginas | Sim (cópias) | `docs/` |
 | `coleta_de_xml (2).py` | Não | `C:\IARIS\scripts` — script próprio do Luan, fora do IARIS |
 

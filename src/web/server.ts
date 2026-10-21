@@ -83,6 +83,7 @@ import {
   userActor,
   type AccessDeps,
   type Permission,
+  type SessionUser,
 } from "../platform/access/access.js";
 import { parseAuthKey } from "../platform/access/crypto.js";
 import { AUTH_HTML } from "./auth-page.js";
@@ -123,6 +124,11 @@ export interface WebDeps {
   authKey: Buffer;
   /** Código do autenticador no login (padrão: ligado). IARIS_2FA=off desliga. */
   twoFactor?: boolean;
+  /**
+   * Visualização sem login (IARIS_LOGIN=off, decisão do escritório): quem abre o endereço
+   * vê tudo como Leitura e não executa nada; para agir, entra pelo /login.
+   */
+  openView?: boolean;
   /** Pasta de entrada de XML (ex.: C:\\IARIS\\entrada). Nulo = sem pasta. */
   inbox?: string | null;
   /** Orquestrador: roda os vínculos entre agentes (ex.: depois de uma ação na tela). */
@@ -138,6 +144,8 @@ export interface WebDeps {
 }
 
 const COOKIE = "iaris_sessao";
+/** Quem abre a tela sem login quando a visualização livre está ligada: Leitura, sem nenhuma ação. */
+const VISITOR: SessionUser = { sessionId: "", userId: "", email: "visitante", name: "Visitante", role: "LEITURA", permissions: ["ver"] };
 const ENTRAR_HTML = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IARIS</title>
 <style>body{font-family:system-ui,sans-serif;background:#0f1720;color:#e6edf3;display:grid;place-items:center;min-height:100vh;margin:0}div{max-width:420px;padding:24px;text-align:center}b{color:#E8A33D}</style></head>
 <body><div><b>IARIS</b><p id="m">Entrando…</p></div><script>
@@ -329,8 +337,10 @@ export function createWebServer(deps: WebDeps) {
       // ------------------------------------------------------------ sem sessão
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/convite")) {
         const user = url.pathname === "/" ? await sessionFromToken(access, cookieToken(req)) : null;
-        return html(res, user ? PAGE_HTML : AUTH_HTML);
+        return html(res, user || (url.pathname === "/" && deps.openView) ? PAGE_HTML : AUTH_HTML);
       }
+      // Tela de login sempre disponível (na visualização sem login, é por aqui que se entra para agir).
+      if (req.method === "GET" && url.pathname === "/login") return html(res, AUTH_HTML);
       // Computador confiável? (a tela de entrada esconde o código). Não diz de quem é.
       if (req.method === "GET" && url.pathname === "/api/login/dispositivo") {
         const duasEtapas = deps.twoFactor !== false;
@@ -393,8 +403,11 @@ export function createWebServer(deps: WebDeps) {
       }
 
       // ------------------------------------------------------------ com sessão
-      const user = await sessionFromToken(access, cookieToken(req));
-      if (!user) return json(res, 401, { erro: "Sessão encerrada. Entre de novo.", login: true });
+      const session = await sessionFromToken(access, cookieToken(req));
+      if (!session && !deps.openView) return json(res, 401, { erro: "Sessão encerrada. Entre de novo.", login: true });
+      // Visualização sem login: só leitura (GET); qualquer ação exige entrar.
+      if (!session && req.method !== "GET") return json(res, 403, { erro: "Modo visualização: entre com seu usuário para executar ações." });
+      const user = session ?? VISITOR;
       const actor = userActor(user);
       /** true = já respondeu (ação recusada ou perfil sem permissão). */
       const guard = (action: string): boolean => {
@@ -409,6 +422,7 @@ export function createWebServer(deps: WebDeps) {
       };
 
       if (req.method === "GET" && url.pathname === "/api/sessao") {
+        if (!session) return json(res, 200, { name: VISITOR.name, email: "", role: VISITOR.role, roleLabel: "só visualização", permissions: VISITOR.permissions, visitor: true });
         return json(res, 200, { name: user.name, email: user.email, role: user.role, roleLabel: ROLE_LABEL[user.role], permissions: user.permissions });
       }
       if (req.method === "POST" && url.pathname === "/api/sair") {
@@ -1285,6 +1299,7 @@ if (isMain(import.meta.url)) {
     vault,
     authKey: parseAuthKey(vault.require("IARIS_AUTH_KEY")),
     twoFactor: process.env.IARIS_2FA !== "off",
+    openView: process.env.IARIS_LOGIN === "off",
     publicOrigin,
     dfe: vault
       ? {

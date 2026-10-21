@@ -1747,6 +1747,10 @@ $("sair").addEventListener("click", function () { post("/api/sair", "sair").catc
 getJson("/api/sessao").then(function (me) {
   me.permissions.forEach(function (p) { document.body.classList.add("p-" + p); });
   $("me").textContent = me.name + " · " + me.roleLabel;
+  if (me.visitor) {
+    var b = $("sair"); var nb = b.cloneNode(true); nb.textContent = "Entrar"; b.parentNode.replaceChild(nb, b);
+    nb.addEventListener("click", function () { location.href = "/login"; });
+  }
   $("me").title = me.email;
   route();
 }).catch(function (err) { toast(err.message); });

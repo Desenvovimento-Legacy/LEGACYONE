@@ -16,6 +16,7 @@ Valem como regra até ele mudar. Em caso de dúvida, pergunte a ele antes de con
 
 - Login próprio com senha + autenticador; usuários e perfis administrados por painel dentro do IARIS.
 - Entra só quem o Luan convidar pelo link.
+- 21/10/2026: "quero remover esse acesso nao precisa por hora" — tela aberta sem login para visualização (`IARIS_LOGIN=off` no `.env` do PC), só leitura; ações (buscar, aprovar, confirmar) continuam exigindo entrar em `/login`. Para voltar a exigir login: apagar a linha e reiniciar.
 - Certificados A1 dos clientes ficam no cofre local do PC (nuvem depois). O escritório usa e-CNPJ A1.
 - Responsáveis técnicos: contabilidade@grouplegacy.com.br e marcio.odor@grouplegacy.com.br.
 
