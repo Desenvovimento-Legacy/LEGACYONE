@@ -1275,7 +1275,10 @@ function loadSimples(id) {
         var dif = res.taxDifferences && res.taxDifferences[t] ? ' <span class="bad">(' + brl(res.taxDifferences[t]) + ')</span>' : '';
         return t + ' ' + brl(res.taxes[t]) + dif;
       }).join(" · ") : "";
-      var base = '<div class="mut" style="font-size:11px">RBT12 ' + (inp.rbt12 ? brl(inp.rbt12) : "—") + (inp.rbt12Proportional ? " (proporcional)" : "") + (res.bracket ? " · faixa " + res.bracket + " · alíq. efetiva " + Number(res.effectiveRate).toFixed(4).replace(".", ",") + "%" : "") + '</div>';
+      var fr = inp.factorR;
+      var base = '<div class="mut" style="font-size:11px">RBT12 ' + (inp.rbt12 ? brl(inp.rbt12) : "—") + (inp.rbt12Proportional ? " (proporcional)" : "") + (res.bracket ? " · faixa " + res.bracket + " · alíq. efetiva " + Number(res.effectiveRate).toFixed(4).replace(".", ",") + "%" : "") + '</div>' +
+        (fr ? '<div class="mut" style="font-size:11px">fator r ' + Number(fr.r).toFixed(2).replace(".", ",") + '% → Anexo ' + esc(fr.annex) + ' (folha ' + brl(fr.payroll) + (fr.convention === "SEM_FOLHA" ? ", sem folha" : fr.convention === "SEM_RECEITA" ? ", sem receita" : "") + ')</div>' : '') +
+        (inp.localImpeded ? '<div class="wr" style="font-size:11px">impedido de ISS/ICMS no DAS</div>' : '');
       var why = (res.reason ? '<div class="wr" style="font-size:11px">' + esc(res.reason) + '</div>' : '') + (res.notes && res.notes.length ? '<div class="mut" style="font-size:11px">' + esc(res.notes.join(" · ")) + '</div>' : '');
       return '<tr><td>' + mm(x.competence) + '<div class="mut" style="font-size:11px">' + (x.mode === "APURACAO" ? "apuração pelas NFS-e" : "conferência") + '</div></td>' +
         '<td class="num">' + (inp.rpa ? brl(inp.rpa) : "—") + base + '</td>' +
@@ -1284,9 +1287,15 @@ function loadSimples(id) {
         '<td class="num">' + (x.difference === null ? "—" : brl(x.difference)) + '</td>' +
         '<td>' + (ST[x.status] || esc(x.status)) + why + '</td></tr>';
     }).join("");
+    var pay = r.payroll || {};
+    var payKeys = Object.keys(pay).sort().slice(-13);
+    var payHtml = '<details style="margin-top:12px"><summary style="cursor:pointer">Folha de salários (fator r)' + (payKeys.length ? ' · ' + payKeys.length + ' mês(es) conhecidos' : '') + '</summary>' +
+      (payKeys.length ? '<div class="mut" style="font-size:12px;margin:6px 0">' + payKeys.map(function (k) { return mm(k) + ' ' + brl(pay[k].total) + (pay[k].source === "INFORMADA" ? ' (informada)' : ''); }).join(" · ") + '</div>' : '<div class="mut" style="font-size:12px;margin:6px 0">Nenhuma folha conhecida. As declarações do PGDAS-D trazem a folha dos 12 meses anteriores; o mês que acabou de fechar precisa ser informado.</div>') +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="month" id="folha-mes" value="' + lastClosedMonth() + '"><input id="folha-valor" placeholder="12.345,67" style="width:120px"><input id="folha-origem" placeholder="origem (ex.: resumo da folha)" style="width:220px"><button data-act="folha" data-id="' + id + '">Informar folha</button></div>' +
+      '<div class="mut" style="font-size:11px;margin-top:4px">Valor com encargos: salários, pró-labore, 13º no mês da contribuição, CPP e FGTS (Res. CGSN 140/2018, art. 26). Informar de novo corrige; fica na auditoria.</div></details>';
     box.innerHTML = '<h2>Simples Nacional: cálculo do motor</h2>' +
       (rows ? '<div class="scroll"><table><thead><tr><th>Competência</th><th class="num">Receita do PA</th><th class="num">Calculado</th><th class="num">Referência</th><th class="num">Diferença</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">Sem cálculo ainda: precisa de uma declaração lida (anexo da atividade) e das tabelas aprovadas.</div>') +
-      '<div class="empty">Motor determinístico, sem IA. Competência declarada: recalcula com a receita e a RBT12 declaradas e compara com o débito do PDF ou com o DAS pago. Mês fechado e não declarado: receita pelas NFS-e prestadas. Nada é transmitido.</div>';
+      '<div class="empty">Motor determinístico, sem IA. Competência declarada: recalcula com a receita e a RBT12 declaradas e compara com o débito do PDF ou com o DAS pago. Mês fechado e não declarado: receita pelas NFS-e prestadas. Fator r pela folha dos 12 meses anteriores; impedimento de ISS/ICMS pelo sublimite. Nada é transmitido.</div>' + payHtml;
   }).catch(function (err) { toast(err.message); });
 }
 
@@ -1672,6 +1681,14 @@ document.addEventListener("click", function (ev) {
         var msg = r.outcome === "aguardando" ? "A SEFAZ só pode ser consultada de novo a partir de " + hm(r.nextAllowedAt) + "." : r.outcome === "sem_certificado" ? "Sem certificado utilizável no cofre." : r.outcome === "erro" ? "Falha na consulta: " + r.statusMessage : r.documents + " documento(s) novo(s) em " + r.calls + " consulta(s). SEFAZ: " + r.statusCode + " " + (r.statusMessage || "");
         toast(msg);
       }).catch(function (err) { toast(err.message); }).then(function () { return loadCentral(); }).then(route);
+    }
+    if (b.dataset.act === "folha") {
+      var fm = $("folha-mes").value, fv = $("folha-valor").value, fo = $("folha-origem").value;
+      if (!fm || !fv || !fo) { toast("Informe o mês, o valor e a origem da folha."); return; }
+      b.disabled = true;
+      post("/api/empresa/" + id + "/folha", "confirmar", { competencia: fm + "-01", valor: fv, origem: fo }).then(function (r) {
+        toast(r.changed ? "Folha de " + mm(fm + "-01") + " registrada. O Simples foi recalculado." : "Esse valor já estava registrado.");
+      }).catch(function (err) { toast(err.message); }).then(function () { b.disabled = false; loadSimples(id); });
     }
     if (b.dataset.act === "decl") {
       var pa = $("decl-pa").value;

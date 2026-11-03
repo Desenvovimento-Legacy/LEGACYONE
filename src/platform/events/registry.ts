@@ -171,6 +171,14 @@ export const EventContracts = {
       decided_by: z.string(),
     }),
   },
+  PAYROLL_INFORMED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      total: z.string(),
+      informed_by: z.string(),
+    }),
+  },
   SIMPLES_RULES_APPROVED: {
     1: z.object({
       rules: z.array(z.string()).min(1),

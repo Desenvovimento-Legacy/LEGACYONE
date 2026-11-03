@@ -11,7 +11,7 @@ import type { Actor } from "../../../shared/actor.js";
 import { Dec, sumDec } from "../../../shared/decimal.js";
 import { withTenant } from "../../../shared/db/tenant-tx.js";
 import { newId } from "../../../shared/ids.js";
-import { loadSimplesRules } from "./apuracao.js";
+import { loadSimplesRules, payrollMonths } from "./apuracao.js";
 import { activityIdOf, isFactorR, isGoodsActivity, isServiceActivity, PGDAS_ACTIVITIES, serviceVariant, TAX_CODE } from "./pgdas-activities.js";
 import type { Tax } from "./rules.js";
 
@@ -28,7 +28,9 @@ import type { Tax } from "./rules.js";
  *      todos os estabelecimentos vigentes; original ou retificadora.
  *    O que a IARIS ainda não sabe montar vira bloqueio com o motivo (nunca um
  *    valor inventado): vendas de mercadorias sem leitura dos itens, fator r sem
- *    folha, regime de caixa, ISS de outro município sem o código do município.
+ *    a folha de algum dos 12 meses anteriores, regime de caixa, ISS de outro
+ *    município sem o código do município. Com atividade do fator r, a folha dos
+ *    meses anteriores (declarada ou informada) vai em `folhasSalario`.
  * 2. Conferência com a Receita (botão, consulta cobrada): o mesmo pedido com
  *    indicadorTransmissao = false. A Receita calcula e devolve os valores devidos,
  *    sem transmitir. Iguais ao cálculo da IARIS → PRONTA. O pedido de
@@ -126,7 +128,23 @@ export async function buildPgdasDraft(tx: PoolClient, entityId: string, competen
   const ids = acts.map((a) => a.id).filter((x): x is number => x !== null);
   const services = [...new Set(ids.filter(isServiceActivity))];
   const goods = ids.filter(isGoodsActivity);
-  if (ids.some(isFactorR)) blockers.push("Atividade sujeita ao fator r: falta a folha de salários dos 12 meses anteriores (folha ainda não integrada)");
+  // fator r: folha dos 12 meses anteriores ao PA (desde o início de atividade, se mais recente)
+  let folhasSalario: { pa: number; valor: number }[] | null = null;
+  if (ids.some(isFactorR)) {
+    const payroll = await payrollMonths(tx, entityId);
+    const opened = matriz?.opened ? `${matriz.opened.slice(0, 7)}-01` : null;
+    const months: string[] = [];
+    for (let i = 12; i >= 1; i--) {
+      const c = addMonths(competence, -i);
+      if (!opened || c >= opened) months.push(c);
+    }
+    const missing = months.filter((c) => !payroll.has(c));
+    if (missing.length) blockers.push(`Atividade sujeita ao fator r: falta a folha de salários de ${missing.map(my).join(", ")} (informe a folha com pró-labore e encargos na empresa)`);
+    else {
+      folhasSalario = months.map((c) => ({ pa: Number(ym(c).replace("-", "")), valor: num(payroll.get(c)!.total) }));
+      if (!months.length) notes.push("Fator r no 1º mês de atividade: a Receita usa a folha do próprio mês");
+    }
+  }
   if (goods.length) {
     // itens das notas de saída do mês (agente Fiscal): mostra a separação, mas a montagem das vendas ainda não é automática
     const out = (await tx.query<{ n: number; total: string | null; st: string | null; mono: string | null }>(
@@ -205,7 +223,7 @@ export async function buildPgdasDraft(tx: PoolClient, entityId: string, competen
       valorFixoIcms: null,
       valorFixoIss: null,
       receitasBrutasAnteriores: null,
-      folhasSalario: null,
+      folhasSalario,
       naoOptante: null,
       estabelecimentos,
     },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parsePgdasDeclarationText } from "../src/integrations/integra-contador/pgdas-pdf.js";
-import { calculateSimples, rbt12For } from "../src/modules/tax/simples/engine.js";
+import { calculateSimples, factorR, rbt12For } from "../src/modules/tax/simples/engine.js";
 import { AnnexDefinition, checkAnnex, ParamsDefinition } from "../src/modules/tax/simples/rules.js";
 import { Dec } from "../src/shared/decimal.js";
 import { appPool } from "./helpers.js";
@@ -87,9 +87,51 @@ describe("motor do Simples Nacional", () => {
     const d = await defs();
     const p = { ...base, annex: d.IV, params: d.params, rpa: [{ value: "1000.00" }] };
     expect(calculateSimples({ ...p, rbt12: "5000000.00", rbaBefore: "0.00" })).toMatchObject({ ok: false, reason: expect.stringMatching(/limite/) });
-    expect(calculateSimples({ ...p, rbt12: "4000000.00", rbaBefore: "4400000.00" })).toMatchObject({ ok: false, reason: expect.stringMatching(/Impedido/) });
-    expect(calculateSimples({ ...p, rbt12: "1000000.00", rbaBefore: "0.00", rbaa: "3700000.00" })).toMatchObject({ ok: false, reason: expect.stringMatching(/Impedido/) });
-    expect(calculateSimples({ ...p, rbt12: "3000000.00", rbaBefore: "3600000.00" })).toMatchObject({ ok: false, reason: expect.stringMatching(/sublimite fora da 6ª/) });
+    expect(calculateSimples({ ...p, rbt12: "1000000.00", rbaBefore: "3599000.00", rpa: [{ value: "2000.00", localWithheld: true }] }))
+      .toMatchObject({ ok: false, reason: expect.stringMatching(/Retenção/) });
+  });
+
+  it("impedido de recolher ISS no DAS: só tributos federais, pela faixa da RBT12 (Res. CGSN 140, art. 12)", async () => {
+    const d = await defs();
+    const p = { ...base, annex: d.IV, params: d.params, rpa: [{ value: "1000.00" }] };
+    // excesso de mais de 20% em mês anterior do ano (RBA antes do PA > 4,32 mi), 6ª faixa
+    const a = calculateSimples({ ...p, rbt12: "4000000.00", rbaBefore: "4400000.00" });
+    expect(a).toMatchObject({ ok: true, bracket: 6, total: "123.01", localImpeded: expect.stringMatching(/mais de 20%/) });
+    expect(a.ok && a.taxes).toMatchObject({ IRPJ: "65.81", CSLL: "26.45", COFINS: "25.28", PIS: "5.47", ISS: "0.00" });
+    // ano anterior acima do sublimite, 4ª faixa
+    const b = calculateSimples({ ...p, rbt12: "1000000.00", rbaBefore: "0.00", rbaa: "3700000.00" });
+    expect(b).toMatchObject({ ok: true, bracket: 4, total: "60.13", localImpeded: expect.stringMatching(/ano anterior/) });
+    expect(b.ok && b.taxes).toMatchObject({ IRPJ: "17.84", CSLL: "19.24", COFINS: "18.94", PIS: "4.11", ISS: "0.00" });
+    // início de atividade com excesso de mais de 20% do sublimite proporcional: retroativo
+    const c = calculateSimples({ ...p, rbt12: "1000000.00", rbaBefore: "0.00", monthsInYear: 6, startYearRevenue: "2200000.00" });
+    expect(c).toMatchObject({ ok: true, localImpeded: expect.stringMatching(/retroativo/) });
+    expect(c.ok && c.taxes.ISS).toBe("0.00");
+    // até 20% no ano de início: ainda no DAS (efeito só no ano seguinte)
+    const c2 = calculateSimples({ ...p, rbt12: "1000000.00", rbaBefore: "0.00", monthsInYear: 6, startYearRevenue: "2000000.00" });
+    expect(c2).toMatchObject({ ok: true, localImpeded: null });
+  });
+
+  it("receita do ano passa o sublimite fora da 6ª faixa: parcela acima com ISS pela 5ª faixa no sublimite (art. 24)", async () => {
+    const d = await defs();
+    const r = calculateSimples({ ...base, annex: d.IV, params: d.params, rpa: [{ value: "1000.00" }], rbt12: "3000000.00", rbaBefore: "3600000.00" });
+    expect(r).toMatchObject({ ok: true, bracket: 5, total: "162.82", localImpeded: null });
+    expect(r.ok && r.taxes).toMatchObject({ IRPJ: "35.35", CSLL: "36.10", COFINS: "34.00", PIS: "7.37", ISS: "50.00" });
+    expect(r.ok && r.parcels.map((x) => x.kind)).toEqual(["ACIMA_SUBLIMITE"]);
+    // no mês em que o excesso passa de 20%, o ISS continua no DAS; o aviso diz que sai no mês seguinte
+    const m = calculateSimples({ ...base, annex: d.IV, params: d.params, rpa: [{ value: "100000.00" }], rbt12: "3000000.00", rbaBefore: "4300000.00" });
+    expect(m.ok && m.localImpeded).toBe(null);
+    expect(m.ok && m.notes.join(" ")).toMatch(/mês seguinte/);
+  });
+});
+
+describe("fator r (Res. CGSN 140, art. 26)", () => {
+  const rule = { threshold: "28.00", withoutPayroll: "1.00", withoutRevenue: "28.00" };
+  it("folha ÷ receita: 28% ou mais vai ao Anexo III; abaixo, ao Anexo V", () => {
+    expect(factorR("28000.00", "100000.00", rule)).toEqual({ r: "28.0000", annex: "III", convention: "CALCULADO" });
+    expect(factorR("27999.99", "100000.00", rule)).toMatchObject({ annex: "V" });
+    expect(factorR("0.00", "100000.00", rule)).toEqual({ r: "1.0000", annex: "V", convention: "SEM_FOLHA" });
+    expect(factorR("5000.00", "0.00", rule)).toEqual({ r: "28.0000", annex: "III", convention: "SEM_RECEITA" });
+    expect(factorR("0.00", "0.00", rule)).toMatchObject({ annex: "V", convention: "SEM_FOLHA" });
   });
 });
 

@@ -5,6 +5,7 @@ import { extractText, getDocumentProxy } from "unpdf";
  *   2.1) Discriminativo de Receitas → RPA (mercado interno, externo, total) e RBT12
  *   2.2) Receitas Brutas Anteriores → 2.2.1 Mercado Interno / 2.2.2 Mercado Externo, mês a mês
  *   Regime de Apuração: Competência | Caixa
+ *   2.3) Folha de Salários Anteriores → folha mês a mês (base do fator r)
  *   2.7) débito por atividade (anexo, retenção) e por tributo; sublimite e impedimento
  * Valores em texto com 2 casas (nunca float).
  */
@@ -25,7 +26,7 @@ export function brMoney(s: string): string {
 const MONEY = "(\\d{1,3}(?:\\.\\d{3})*,\\d{2})";
 
 /** Versão do leitor: muda quando a leitura de um PDF já guardado passa a dar resultado diferente. */
-export const PGDAS_PDF_PARSER = "pgdas-pdf-2";
+export const PGDAS_PDF_PARSER = "pgdas-pdf-3";
 
 /**
  * Anexo da atividade: o texto do serviço traz "Anexo X"; comércio e indústria não trazem,
@@ -72,6 +73,10 @@ export interface PgdasDeclarationContent {
   localImpeded: boolean | null;
   activities: DeclaredActivity[];
   months: DeclaredMonth[];
+  /** folha de salários (com encargos) dos meses anteriores ao PA, seção 2.3 */
+  payroll: { competence: string; total: string }[];
+  /** folha do próprio PA, quando a declaração informa (fator r do 1º mês de atividade) */
+  payrollPa: string | null;
 }
 
 const TAX_HEADER = "IRPJ CSLL COFINS PIS\\/Pasep INSS\\/CPP ICMS IPI ISS Total";
@@ -136,6 +141,18 @@ export function parsePgdasDeclarationText(raw: string, fallbackCompetence?: stri
   const idxInt = flat.search(/2\.2\.1\)?\s*Mercado Interno/i);
   const idxExt = flat.search(/2\.2\.2\)?\s*Mercado Externo/i);
   const idxEnd = flat.search(/2\.3\)/);
+  // 2.3) Folha de Salários Anteriores: até a próxima seção numerada (2.4, 2.5…) ou o débito por atividade
+  const idxPay = flat.search(/2\.3\)?\s*Folha de Sal[aá]rios/i);
+  let payEnd = -1;
+  if (idxPay >= 0) {
+    const rest = flat.slice(idxPay + 4);
+    const next = rest.search(/\b2\.(?:[4-9]|1\d)\)|Valor do D[ée]bito por Tributo/i);
+    payEnd = next >= 0 ? idxPay + 4 + next : flat.length;
+  }
+  const payroll = idxPay >= 0
+    ? [...monthPairs(flat.slice(idxPay, payEnd)).entries()].sort(([a], [b]) => a.localeCompare(b)).map(([competence, total]) => ({ competence, total }))
+    : [];
+  const payPaM = new RegExp(`Folha de Sal[aá]rios (?:do PA|no PA|PA)[^0-9]{0,40}?${MONEY}`, "i").exec(flat);
   const internal = idxInt >= 0 ? monthPairs(flat.slice(idxInt, idxExt > idxInt ? idxExt : idxEnd > idxInt ? idxEnd : undefined)) : new Map<string, string>();
   const external = idxExt >= 0 ? monthPairs(flat.slice(idxExt, idxEnd > idxExt ? idxEnd : undefined)) : new Map<string, string>();
 
@@ -164,5 +181,7 @@ export function parsePgdasDeclarationText(raw: string, fallbackCompetence?: stri
     localImpeded: impM ? /sim/i.test(impM[1]!) : null,
     activities: parseActivities(flat),
     months,
+    payroll,
+    payrollPa: payPaM ? brMoney(payPaM[1]!) : null,
   };
 }

@@ -5,6 +5,7 @@ import { fetchLastDeclaration } from "../src/modules/federal/declared-revenue.js
 import { PGDAS_ACTIVITIES } from "../src/modules/tax/simples/pgdas-activities.js";
 import { checkPgdasDraft, PgdasDraftError, pgdasDraftView, preparePgdasDrafts } from "../src/modules/tax/simples/pgdas-draft.js";
 import type { Actor } from "../src/shared/actor.js";
+import { informPayroll } from "../src/modules/tax/simples/payroll.js";
 import { withTenant } from "../src/shared/db/tenant-tx.js";
 import { newId } from "../src/shared/ids.js";
 import { CNPJ_MATRIZ } from "./fixtures/cnpj.js";
@@ -117,5 +118,23 @@ describe("PGDAS-D pronta para transmitir (nada é transmitido)", () => {
     expect(view[0]!.blockers.join(" | ")).toMatch(/fator r/);
     expect(view[0]!.blockers.join(" | ")).toMatch(/Vendas de mercadorias/);
     await expect(checkPgdasDraft({ appPool, integra, metering }, t, view[0]!.id, LUAN)).rejects.toThrow(/bloqueada/);
+
+    // com a folha dos 12 meses anteriores (08/2025 veio da declaração), o fator r deixa de bloquear e a folha vai no pedido
+    const comp = view[0]!.competence;
+    expect(view[0]!.blockers.join(" | ")).toMatch(/falta a folha de salários de 09\/2025/);
+    for (let i = 12; i >= 1; i--) {
+      const d = new Date(`${comp.slice(0, 7)}-01T12:00:00Z`);
+      d.setUTCMonth(d.getUTCMonth() - i);
+      const c = `${d.toISOString().slice(0, 7)}-01`;
+      await informPayroll(appPool, t, { entityId, competence: c, total: "3.000,00", reason: "resumo da folha" }, LUAN);
+    }
+    await preparePgdasDrafts(appPool, t, entityId, "2026-10-12");
+    const again = await withTenant(appPool, t, (tx) => pgdasDraftView(tx, entityId));
+    expect(again[0]!.blockers.join(" | ")).not.toMatch(/fator r/);
+    const folhas = (again[0]!.payload.declaracao as { folhasSalario: { pa: number; valor: number }[] }).folhasSalario;
+    expect(folhas).toHaveLength(12);
+    expect(comp).toBe("2026-09-01");
+    expect(folhas[0]).toEqual({ pa: 202509, valor: 3000 });
+    expect(folhas[11]).toEqual({ pa: 202608, valor: 3000 });
   });
 });

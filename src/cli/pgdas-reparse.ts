@@ -9,6 +9,7 @@ import { isMain } from "../shared/is-main.js";
 /**
  * Relê os PDFs de declaração PGDAS-D já guardados (sem consultar o SERPRO).
  * Uso: pnpm federal:reparse <cnpj> [--texto]
+ *      pnpm federal:reparse --todas   relê os PDFs de todas as empresas (após mudança do leitor)
  *   --completo  mostra o texto inteiro do PDF mais recente
  *   --texto  mostra o trecho "2.1) Discriminativo de Receitas" do PDF mais recente (para ajuste do leitor)
  */
@@ -21,7 +22,13 @@ if (isMain(import.meta.url)) {
   try {
     const t = (await admin.query<{ id: string }>("SELECT id FROM tenant WHERE slug = $1", [slug])).rows[0];
     if (!t) throw new Error(`Escritório ${slug} não existe`);
-    await withTenant(app, t.id, async (tx) => {
+    if (args.includes("--todas")) {
+      const ents = await withTenant(app, t.id, (tx) =>
+        tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM pgdas_declaration_pdf WHERE kind = 'DECLARACAO'"));
+      let pdfs = 0;
+      for (const e of ents.rows) pdfs += (await withTenant(app, t.id, (tx) => reparseDeclarations(tx, e.id))).pdfs;
+      console.log(`✓ ${ents.rows.length} empresa(s), ${pdfs} PDF(s) relido(s)`);
+    } else await withTenant(app, t.id, async (tx) => {
       const e = (await tx.query<{ id: string }>("SELECT id FROM entity WHERE cnpj = $1", [cnpj])).rows[0];
       if (!e) throw new Error(`Empresa ${cnpj} não encontrada`);
       if (args.includes("--completo")) {

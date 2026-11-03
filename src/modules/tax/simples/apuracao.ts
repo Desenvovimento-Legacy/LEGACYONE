@@ -6,7 +6,7 @@ import type { Actor } from "../../../shared/actor.js";
 import { Dec, sumDec } from "../../../shared/decimal.js";
 import { withTenant } from "../../../shared/db/tenant-tx.js";
 import { newId } from "../../../shared/ids.js";
-import { calculateSimples, ENGINE_VERSION, rbt12For, type RevenueSegment, type SimplesResult } from "./engine.js";
+import { calculateSimples, ENGINE_VERSION, factorR, rbt12For, type RevenueSegment, type SimplesResult } from "./engine.js";
 import { AnnexDefinition, ParamsDefinition, TAXES, checkAnnex, type Tax } from "./rules.js";
 
 /**
@@ -18,6 +18,10 @@ import { AnnexDefinition, ParamsDefinition, TAXES, checkAnnex, type Tax } from "
  *   APURACAO    — competência fechada e ainda não declarada: receita do mês pelas
  *                 NFS-e prestadas (sem canceladas); meses anteriores pelo declarado
  *                 (é o que o PGDAS-D usa) e, onde faltar, pelas notas.
+ *
+ * Atividade sujeita ao fator r: o anexo (III ou V) sai da folha de salários dos
+ * meses anteriores (lida das declarações ou informada por pessoa) ÷ receita dos
+ * mesmos meses. Mês sem folha conhecida: não calcula e diz qual mês falta.
  *
  * Só usa tabelas aprovadas pelo responsável técnico. Nada é transmitido.
  */
@@ -179,6 +183,7 @@ interface DeclaredTaxRow {
   revenue: string;
   total: string;
   rbt12: string | null;
+  local_impeded: boolean | null;
   taxes: Record<Tax, string>;
 }
 
@@ -190,7 +195,7 @@ async function declaredTaxes(tx: PoolClient, entityId: string): Promise<Map<stri
         WHERE entity_id = $1 ORDER BY competence, declaration_number DESC NULLS LAST, created_at DESC
      )
      SELECT t.competence::text, t.seq, t.activity, t.annex, t.local_withheld, t.factor_r,
-            t.revenue::text, t.total::text, t.rbt12::text, t.irpj::text, t.csll::text, t.cofins::text, t.pis::text,
+            t.revenue::text, t.total::text, t.rbt12::text, t.local_impeded, t.irpj::text, t.csll::text, t.cofins::text, t.pis::text,
             t.cpp::text, t.icms::text, t.ipi::text, t.iss::text
        FROM pgdas_declared_tax t JOIN last l ON l.pdf_id = t.pdf_id AND l.competence = t.competence
       WHERE t.entity_id = $1
@@ -203,7 +208,7 @@ async function declaredTaxes(tx: PoolClient, entityId: string): Promise<Map<stri
   for (const r of rows) {
     const row: DeclaredTaxRow = {
       competence: r.competence, seq: r.seq, activity: r.activity, annex: r.annex, local_withheld: r.local_withheld, factor_r: r.factor_r,
-      revenue: r.revenue, total: r.total, rbt12: r.rbt12,
+      revenue: r.revenue, total: r.total, rbt12: r.rbt12, local_impeded: r.local_impeded,
       taxes: { IRPJ: r.irpj, CSLL: r.csll, COFINS: r.cofins, PIS: r.pis, CPP: r.cpp, ICMS: r.icms, IPI: r.ipi, ISS: r.iss },
     };
     out.set(r.competence, [...(out.get(r.competence) ?? []), row]);
@@ -240,6 +245,31 @@ async function paidDas(tx: PoolClient, entityId: string): Promise<Map<string, Re
   return out;
 }
 
+export interface PayrollMonth { total: string; source: "INFORMADA" | "DECLARADA" }
+
+/**
+ * Folha de salários (com encargos) por mês: a informada por pessoa vale sobre a
+ * declarada; da declarada, a da declaração mais recente que traz o mês.
+ */
+export async function payrollMonths(tx: PoolClient, entityId: string): Promise<Map<string, PayrollMonth>> {
+  const { rows } = await tx.query<{ competence: string; total: string; source: "INFORMADA" | "DECLARADA" }>(
+    `WITH informed AS (
+       SELECT DISTINCT ON (competence) competence, total FROM payroll_informed
+        WHERE entity_id = $1 ORDER BY competence, created_at DESC, id DESC
+     ), declared AS (
+       SELECT DISTINCT ON (p.competence) p.competence, p.total FROM pgdas_declared_payroll p
+        WHERE p.entity_id = $1
+          AND p.parser = (SELECT max(x.parser) FROM pgdas_declared_payroll x WHERE x.pdf_id = p.pdf_id)
+        ORDER BY p.competence, p.declared_in DESC, p.created_at DESC
+     )
+     SELECT coalesce(i.competence, d.competence)::text AS competence, coalesce(i.total, d.total)::text AS total,
+            CASE WHEN i.competence IS NOT NULL THEN 'INFORMADA' ELSE 'DECLARADA' END AS source
+       FROM informed i FULL JOIN declared d ON d.competence = i.competence`,
+    [entityId],
+  );
+  return new Map(rows.map((r) => [r.competence, { total: Dec.of(r.total).toFixed(2), source: r.source }]));
+}
+
 async function openingMonth(tx: PoolClient, entityId: string): Promise<string | null> {
   const r = await tx.query<{ d: string | null }>(
     "SELECT date_trunc('month', min(opened_at))::date::text AS d FROM establishment WHERE entity_id = $1 AND kind = 'MATRIZ'",
@@ -268,6 +298,7 @@ export interface SimplesComputation {
 
 interface Context {
   months: Map<string, MonthData>;
+  payroll: Map<string, PayrollMonth>;
   declared: Map<string, DeclaredTaxRow[]>;
   paid: Map<string, Record<Tax, string>>;
   opening: string | null;
@@ -312,6 +343,13 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
   for (let c = `${prevYear}-01-01`; c < `${year}-01-01`; c = addMonths(c, 1)) if (!start || c >= start) rbaa = rbaa.add(value(c).v);
   const monthsInYear = start && start.slice(0, 4) === year ? 13 - Number(start.slice(5, 7)) : 12;
   const monthsPrevYear = start && start.slice(0, 4) === prevYear ? 13 - Number(start.slice(5, 7)) : start && start.slice(0, 4) > prevYear ? 0 : 12;
+  // ano de início: receita conhecida do ano inteiro (impedimento retroativo, Res. CGSN 140, art. 12, § 4º)
+  let startYearRevenue: string | undefined;
+  if (start && start.slice(0, 4) === year) {
+    let t = Dec.ZERO;
+    for (let c = start; c < `${Number(year) + 1}-01-01`; c = addMonths(c, 1)) t = t.add(value(c).v);
+    startYearRevenue = t.toFixed(2);
+  }
 
   base.inputs = {
     rpa: rpaTotal,
@@ -322,6 +360,7 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
     rbt12Proportional: r12.proportional,
     rbaBefore: rbaBefore.toFixed(2),
     rbaa: rbaa.toFixed(2),
+    ...(startYearRevenue ? { startYearRevenue } : {}),
     opening: ctx.opening,
     sources: Object.fromEntries(windowValues.map((w) => [ym(w.c), w.src])),
     missingMonths: missing,
@@ -342,14 +381,42 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
   const acts = pickActivities(ctx, competence);
   if (!acts) return { ...base, status: "SEM_ANEXO", reason: "Sem declaração com a atividade (anexo) da empresa: buscar uma declaração do PGDAS-D" };
   base.inputs.activitiesFrom = ym(acts.from);
-  if (acts.rows.some((a) => !a.annex)) return { ...base, status: "SEM_ANEXO", reason: "Atividade da declaração sem anexo identificado" };
-  if (acts.rows.some((a) => a.factor_r)) return { ...base, status: "NAO_SUPORTADO", reason: "Atividade sujeita ao fator r (folha ainda não integrada)" };
+  if (acts.rows.some((a) => !a.annex && !a.factor_r)) return { ...base, status: "SEM_ANEXO", reason: "Atividade da declaração sem anexo identificado" };
   if (mode === "APURACAO" && acts.rows.length > 1) return { ...base, status: "NAO_SUPORTADO", reason: "Mais de uma atividade: a separação da receita das notas por atividade ainda não é automática" };
   if (!rules.params) return { ...base, status: "REGRA_PENDENTE", reason: "Parâmetros do Simples (limite e sublimite) ainda não aprovados" };
-  const missingAnnex = acts.rows.map((a) => a.annex!).filter((a) => !rules.annexes.has(a));
+
+  // Fator r: anexo III ou V pela folha ÷ receita dos meses anteriores (Res. CGSN 140, art. 26)
+  let factorAnnex: "III" | "V" | null = null;
+  const factorNotes: string[] = [];
+  if (acts.rows.some((a) => a.factor_r)) {
+    const rule = rules.params.def.factorR;
+    if (!rule) return { ...base, status: "REGRA_PENDENTE", reason: "Parâmetros do fator r (PARAMETROS v2) ainda não aprovados" };
+    const firstMonth = window.length === 0; // 1º mês de atividade: folha e receita do próprio PA
+    const months = firstMonth ? [competence] : window;
+    const missingPayroll = months.filter((c) => !ctx.payroll.has(c)).map(ym);
+    if (missingPayroll.length)
+      return { ...base, status: "NAO_SUPORTADO", reason: `Fator r: folha de salários sem valor em ${missingPayroll.map((c) => `${c.slice(5, 7)}/${c.slice(0, 4)}`).join(", ")} (informar a folha com pró-labore e encargos, ou buscar a declaração do PGDAS-D)` };
+    const fs = sumDec(months.map((c) => Dec.of(ctx.payroll.get(c)!.total)));
+    const rev = firstMonth ? Dec.of(rpaTotal) : sumDec(windowValues.map((w) => Dec.of(w.v)));
+    const fr = factorR(fs.toFixed(2), rev.toFixed(2), rule);
+    factorAnnex = fr.annex;
+    base.inputs.factorR = {
+      payroll: fs.toFixed(2),
+      revenue: rev.toFixed(2),
+      r: fr.r,
+      annex: fr.annex,
+      convention: fr.convention,
+      firstMonth,
+      payrollSources: Object.fromEntries(months.map((c) => [ym(c), ctx.payroll.get(c)!.source])),
+    };
+    for (const a of acts.rows.filter((x) => x.factor_r && x.annex && x.annex !== fr.annex))
+      factorNotes.push(`Fator r de ${fr.r}% leva ao Anexo ${fr.annex}, mas a declaração informa o Anexo ${a.annex} na atividade ${a.seq}`);
+  }
+  const annexOf = (a: DeclaredTaxRow): string => (a.factor_r ? factorAnnex! : a.annex!);
+  const missingAnnex = [...new Set(acts.rows.map(annexOf))].filter((a) => !rules.annexes.has(a));
   if (missingAnnex.length) return { ...base, status: "REGRA_PENDENTE", reason: `Tabela do Anexo ${missingAnnex.join(", ")} ainda não aprovada` };
 
-  const ruleRefs = [rules.params.ref, ...new Set(acts.rows.map((a) => rules.annexes.get(a.annex!)!.ref))];
+  const ruleRefs = [rules.params.ref, ...new Set(acts.rows.map((a) => rules.annexes.get(annexOf(a))!.ref))];
   base.ruleRefs = ruleRefs;
 
   // Receita por atividade: na conferência, a declarada em cada atividade quando a
@@ -372,7 +439,7 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
   for (const a of acts.rows) {
     const segs = segmentsFor(a);
     const r = calculateSimples({
-      annex: rules.annexes.get(a.annex!)!.def,
+      annex: rules.annexes.get(annexOf(a))!.def,
       params: rules.params.def,
       rpa: segs,
       rbt12: r12.rbt12,
@@ -380,6 +447,7 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
       rbaa: rbaa.toFixed(2),
       monthsInYear,
       monthsPrevYear,
+      startYearRevenue,
     });
     if (!r.ok) return { ...base, status: "NAO_SUPORTADO", reason: r.reason };
     results.push(r);
@@ -392,18 +460,27 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
     ...first,
     taxes,
     total,
-    activities: acts.rows.map((a, i) => ({ seq: a.seq, annex: a.annex, activity: a.activity, result: results[i] })),
+    activities: acts.rows.map((a, i) => ({ seq: a.seq, annex: annexOf(a), declaredAnnex: a.annex, factorR: a.factor_r, activity: a.activity, result: results[i] })),
     notes: [...new Set(results.flatMap((r) => (r.ok ? r.notes : [])))],
   } as SimplesComputation["result"];
 
   const out: SimplesComputation = { ...base, ruleRefs, result, total };
+  const reasons: string[] = [...factorNotes];
   const declaredRbt12 = own ? acts.rows[0]!.rbt12 : null;
   if (declaredRbt12 && !Dec.of(declaredRbt12).sub(r12.rbt12).round(2).isZero()) {
     base.inputs.rbt12Declared = declaredRbt12;
-    out.reason = `RBT12 da declaração (${declaredRbt12}) difere da soma dos meses declarados (${Dec.of(r12.rbt12).toFixed(2)})`;
+    reasons.push(`RBT12 da declaração (${declaredRbt12}) difere da soma dos meses declarados (${Dec.of(r12.rbt12).toFixed(2)})`);
   }
+  const impeded = first.ok ? first.localImpeded : null;
+  base.inputs.localImpeded = impeded;
+  const declaredImpeded = own ? acts.rows[0]!.local_impeded : null;
+  if (declaredImpeded != null && declaredImpeded !== Boolean(impeded))
+    reasons.push(declaredImpeded
+      ? "A declaração marca impedimento de recolher ICMS/ISS no DAS e o cálculo não encontrou o motivo (conferir sublimite e receitas do ano anterior)"
+      : `O cálculo indica impedimento de recolher ICMS/ISS no DAS (${impeded}) e a declaração não`);
+  if (reasons.length) out.reason = reasons.join("; ");
   if (mode === "APURACAO") {
-    if (missing.length) out.reason = `Meses sem receita conhecida (contados como zero): ${missing.join(", ")}`;
+    if (missing.length) out.reason = [`Meses sem receita conhecida (contados como zero): ${missing.join(", ")}`, ...reasons].join("; ");
     return { ...out, status: "CALCULADO" };
   }
   if (!base.reference) return { ...out, status: "SEM_REFERENCIA", reason: out.reason ?? "Sem débito declarado nem DAS pago para comparar" };
@@ -422,6 +499,7 @@ function computeOne(ctx: Context, rules: SimplesRules, competence: string, mode:
 async function computeAll(tx: PoolClient, entityId: string, now: Date, proposed: boolean): Promise<SimplesComputation[]> {
   const ctx: Context = {
     months: await monthlyData(tx, entityId),
+    payroll: await payrollMonths(tx, entityId),
     declared: await declaredTaxes(tx, entityId),
     paid: await paidDas(tx, entityId),
     opening: await openingMonth(tx, entityId),

@@ -41,6 +41,20 @@ async function storeParsed(tx: PoolClient, entityId: string, competence: string,
     );
     months += ins.rowCount ?? 0;
   }
+  // Folha de salários (seção 2.3 e, quando houver, a do próprio PA): base do fator r.
+  const declaredIn = content.period ?? competence;
+  const payroll = [
+    ...content.payroll.map((p) => ({ ...p, source: "ANTERIOR" as const })),
+    ...(content.payrollPa != null ? [{ competence: declaredIn, total: content.payrollPa, source: "PA" as const }] : []),
+  ];
+  for (const p of payroll) {
+    await tx.query(
+      `INSERT INTO pgdas_declared_payroll (id, tenant_id, entity_id, competence, declared_in, pdf_id, source, total, parser)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (tenant_id, pdf_id, competence, parser) DO NOTHING`,
+      [newId(), entityId, p.competence, declaredIn, pdfId, p.source, p.total, PGDAS_PDF_PARSER],
+    );
+  }
   // Débito declarado por atividade (seção 2.7): referência do motor do Simples.
   for (const a of content.activities) {
     await tx.query(

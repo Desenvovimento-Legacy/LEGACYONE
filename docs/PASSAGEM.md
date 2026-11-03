@@ -179,7 +179,11 @@ Além das 10 regras do CLAUDE.md:
 **Aguardando o Luan (decisão humana):**
 1. Aprovar as 8 regras de Lucro Presumido/Real em *Regras e legislação* (sem aprovação o motor `lucro-1` não calcula).
 2. Aprovar as 3 implantações (FURK TECH, FURKINUX, ARES) e confirmar os serviços contratados.
-3. Fila de exceções (57 pendências abertas em 19/10): guias não enviadas de SAFE ON/SABORES, ISS de São Paulo/Barbacena,
+3. Aprovar a **PARAMETROS v2 do Simples** (fator r) em *Regras e legislação*. Até lá, as atividades sujeitas ao fator r
+   ficam com "tabela a aprovar"; a v1 continua valendo para o resto. No PC, depois do `git pull` e da migração 0050,
+   rodar uma vez `node --env-file-if-exists=.env --import tsx src/cli/pgdas-reparse.ts --todas` para ler a folha
+   (seção 2.3) dos PDFs já guardados, sem nova consulta ao SERPRO.
+4. Fila de exceções (57 pendências abertas em 19/10): guias não enviadas de SAFE ON/SABORES, ISS de São Paulo/Barbacena,
    lacunas de NSU, movimento de R$ 650 da SAFE ON, sublimite.
 
 **Técnicas:**

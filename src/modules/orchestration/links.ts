@@ -56,9 +56,9 @@ export const LINKS: Link<LinkDeps>[] = [
   },
   {
     id: "declaracao-simples",
-    on: ["PGDAS_DECLARATION_READ", "FEDERAL_PAYMENTS_SYNCED"],
+    on: ["PGDAS_DECLARATION_READ", "FEDERAL_PAYMENTS_SYNCED", "PAYROLL_INFORMED"],
     agent: "tax",
-    does: "Recalcula o Simples e confere com o débito declarado ou o DAS pago",
+    does: "Recalcula o Simples (fator r com a folha) e confere com o débito declarado ou o DAS pago",
     run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await refreshSimples(pool, tenantId, entityId!, now(deps))) }),
   },
   {
@@ -218,6 +218,7 @@ export const EVENT_LABEL: Record<string, string> = {
   PGDAS_INDEX_SYNCED: "Declarações e DAS buscados na Receita",
   FEDERAL_PAYMENTS_SYNCED: "Pagamentos federais buscados",
   SIMPLES_RULES_APPROVED: "Tabelas do Simples aprovadas",
+  PAYROLL_INFORMED: "Folha de salários informada (fator r)",
   CONTRACTED_SERVICES_DEFINED: "Serviços e início da responsabilidade definidos",
   DIGITAL_CERTIFICATE_REGISTERED: "Certificado A1 registrado no cofre",
   NFSE_TAXES_READ: "Tributos das NFS-e lidos",

@@ -45,6 +45,12 @@ export const ParamsDefinition = z.object({
   sublimit: Money,
   /** tolerância de excesso no ano antes do impedimento (20%) */
   excessTolerance: Pct,
+  /**
+   * Fator r (Res. CGSN 140/2018, art. 26), em %: r ≥ threshold → Anexo III; abaixo → Anexo V.
+   * withoutPayroll = r adotado sem folha; withoutRevenue = r adotado com folha e sem receita.
+   * Ausente (PARAMETROS v1): atividade sujeita ao fator r não é calculada.
+   */
+  factorR: z.object({ threshold: Pct, withoutPayroll: Pct, withoutRevenue: Pct }).optional(),
 });
 export type ParamsDefinition = z.infer<typeof ParamsDefinition>;
 

@@ -31,7 +31,8 @@ import { chartConfig } from "../modules/ledger/chart-config.js";
 import { activeTemplate, importChartTemplate } from "../modules/ledger/chart-template.js";
 import { bankOverview, importBankStatement, StatementError } from "../modules/financial/bank-statements.js";
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
-import { approveSimplesRules, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
+import { approveSimplesRules, payrollMonths, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
+import { informPayroll, PayrollInputError } from "../modules/tax/simples/payroll.js";
 import { nfeItemsOverview, readEntityNfeItems } from "../modules/fiscal/nfe-items.js";
 import { reviewOverview, runReview } from "../modules/review/review.js";
 import {
@@ -1041,9 +1042,27 @@ export function createWebServer(deps: WebDeps) {
         }
         return;
       }
-      // GET /api/empresa/:id/simples — cálculos do motor do Simples (só banco).
+      // GET /api/empresa/:id/simples — cálculos do motor do Simples e folha do fator r (só banco).
       if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "simples") {
-        json(res, 200, { rows: await withTenant(deps.appPool, deps.tenantId, (tx) => simplesOverview(tx, parts[2]!)) });
+        const data = await withTenant(deps.appPool, deps.tenantId, async (tx) => ({
+          rows: await simplesOverview(tx, parts[2]!),
+          payroll: Object.fromEntries(await payrollMonths(tx, parts[2]!)),
+        }));
+        json(res, 200, data);
+        return;
+      }
+      // POST /api/empresa/:id/folha — decisão de pessoa: folha de salários do mês (fator r), auditada.
+      if (req.method === "POST" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "folha") {
+        if (guard("confirmar")) return;
+        try {
+          const b = (await readJson(req)) as Record<string, string>;
+          const r = await informPayroll(deps.appPool, deps.tenantId, { entityId: parts[2]!, competence: b.competencia ?? "", total: b.valor ?? "", reason: b.origem ?? "" }, actor);
+          await deps.orchestrate?.();
+          json(res, 200, r);
+        } catch (err) {
+          if (err instanceof PayrollInputError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/simples/regras") {
