@@ -33,6 +33,7 @@ import { bankOverview, importBankStatement, StatementError } from "../modules/fi
 import { runOrchestrator } from "../platform/orchestrator/orchestrator.js";
 import { approveSimplesRules, payrollMonths, refreshSimples, SimplesActionError, simplesOverview, simplesRulesList } from "../modules/tax/simples/apuracao.js";
 import { informPayroll, PayrollInputError } from "../modules/tax/simples/payroll.js";
+import { LocalTaxError, localTaxesView, refreshAllLocalTaxes, refreshLocalTaxes, setStateIcmsDue } from "../modules/tax/local-taxes.js";
 import { nfeItemsOverview, readEntityNfeItems } from "../modules/fiscal/nfe-items.js";
 import { reviewOverview, runReview } from "../modules/review/review.js";
 import {
@@ -582,10 +583,12 @@ export function createWebServer(deps: WebDeps) {
         const channel = (["WHATSAPP", "EMAIL", "PORTAL", "TELEFONE", "OUTRO"].includes(String(b.canal)) ? b.canal : "OUTRO") as "WHATSAPP";
         const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
         try {
-          json(res, 200, await registerGuideSent(deps.appPool, deps.tenantId, parts[2]!, {
+          const r = await registerGuideSent(deps.appPool, deps.tenantId, parts[2]!, {
             tax: String(b.tributo ?? ""), competence: String(b.competencia ?? ""), channel, sentOn: String(b.data ?? today), amount: b.valor ?? null, dueOn: b.vencimento ?? null,
             documentNumber: b.numero ?? null, file: b.arquivo ? { name: b.arquivo.name, bytes: Buffer.from(b.arquivo.data, "base64") } : null,
-          }, actor, today));
+          }, actor, today);
+          if (/^(ISSP|ICMS):/.test(String(b.tributo))) await refreshLocalTaxes(deps.appPool, deps.tenantId, parts[2]!, today);
+          json(res, 200, r);
         } catch (err) {
           if (err instanceof GuideDispatchError) json(res, 409, { erro: err.message });
           else throw err;
@@ -609,15 +612,38 @@ export function createWebServer(deps: WebDeps) {
       // POST /api/iss-vencimento — pessoa informa o vencimento do ISS retido de um município (com o fundamento).
       if (req.method === "POST" && url.pathname === "/api/iss-vencimento") {
         if (guard("aprovar")) return;
-        const body = (await readJson(req)) as { municipio?: string; nome?: string; dia?: number; ajuste?: string; fundamento?: string };
+        const body = (await readJson(req)) as { municipio?: string; nome?: string; dia?: number; ajuste?: string; fundamento?: string; alcance?: string };
         const adjust = body.ajuste === "PREVIOUS_BUSINESS_DAY" || body.ajuste === "NONE" ? body.ajuste : "NEXT_BUSINESS_DAY";
+        const appliesTo = body.alcance === "PROPRIO" || body.alcance === "AMBOS" ? body.alcance : "RETIDO";
         const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
         try {
-          json(res, 200, await setMunicipalIssDue(deps.appPool, deps.tenantId, { ibge: String(body.municipio ?? ""), name: String(body.nome ?? ""), day: Number(body.dia), adjust, legalBasis: String(body.fundamento ?? "") }, actor, today));
+          const r = await setMunicipalIssDue(deps.appPool, deps.tenantId, { ibge: String(body.municipio ?? ""), name: String(body.nome ?? ""), day: Number(body.dia), adjust, legalBasis: String(body.fundamento ?? ""), appliesTo }, actor, today);
+          const own = appliesTo !== "RETIDO" ? await refreshAllLocalTaxes(deps.appPool, deps.tenantId, today) : { changed: 0 };
+          json(res, 200, { ...r, changed: r.changed + own.changed });
         } catch (err) {
           if (err instanceof IssDueError) json(res, 409, { erro: err.message });
           else throw err;
         }
+        return;
+      }
+      // POST /api/icms-vencimento — pessoa informa o vencimento do ICMS normal de uma UF (com o fundamento).
+      if (req.method === "POST" && url.pathname === "/api/icms-vencimento") {
+        if (guard("aprovar")) return;
+        const body = (await readJson(req)) as { uf?: string; dia?: number; ajuste?: string; fundamento?: string };
+        const adjust = body.ajuste === "PREVIOUS_BUSINESS_DAY" || body.ajuste === "NONE" ? body.ajuste : "NEXT_BUSINESS_DAY";
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        try {
+          json(res, 200, await setStateIcmsDue(deps.appPool, deps.tenantId, { uf: String(body.uf ?? ""), day: Number(body.dia), adjust, legalBasis: String(body.fundamento ?? "") }, actor, today));
+        } catch (err) {
+          if (err instanceof LocalTaxError) json(res, 409, { erro: err.message });
+          else throw err;
+        }
+        return;
+      }
+      // GET /api/empresa/:id/tributos-proprios — ISS próprio e prévia do ICMS (só banco).
+      if (req.method === "GET" && parts[0] === "api" && parts[1] === "empresa" && parts[3] === "tributos-proprios") {
+        const today = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+        json(res, 200, await withTenant(deps.appPool, deps.tenantId, (tx) => localTaxesView(tx, parts[2]!, today)));
         return;
       }
       // POST /api/pgdas/:draftId/conferir — 1 consulta cobrada: a Receita calcula SEM transmitir.

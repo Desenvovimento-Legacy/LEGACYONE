@@ -471,6 +471,7 @@ function viewEmpresa(id) {
         '<section class="card" id="pgdas"><h2>PGDAS-D pronta para transmitir</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="guias"><h2>Guias: DAS do Simples</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ret"><h2>Retenções nas NFS-e tomadas</h2><div class="empty">Carregando…</div></section>' +
+        '<section class="card" id="trib"><h2>ISS e ICMS próprios</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="nfei"><h2>NF-e: CFOP, CST e créditos</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card" id="ctb"><h2>Contabilidade</h2><div class="empty">Carregando…</div></section>' +
         '<section class="card"><h2>Checklist da implantação</h2><div class="scroll"><table><thead><tr><th>Item</th><th>Responsável</th><th>Case</th><th>Situação</th></tr></thead><tbody>' + chk + '</tbody></table></div></section>' +
@@ -494,6 +495,7 @@ function viewEmpresa(id) {
     loadPgdas(id);
     loadGuias(id);
     loadRetencoes(id);
+    loadTributos(id);
     loadNfeItens(id);
     loadContabil(id);
     loadPedido(id);
@@ -1002,6 +1004,62 @@ function loadRetencoes(id) {
     });
     box.querySelectorAll("[data-ret]").forEach(function (a) {
       a.addEventListener("click", function (ev) { ev.preventDefault(); loadRetNotas(id, a.getAttribute("data-ret")); });
+    });
+  }).catch(function (err) { toast(err.message); });
+}
+var LTS = {
+  SEM_IMPOSTO: '<span class="mut">sem imposto</span>',
+  SALDO_CREDOR: '<span class="st ok">saldo credor</span>',
+  A_CONFERIR: '<span class="st wr">a conferir</span>'
+};
+function loadTributos(id) {
+  return getJson("/api/empresa/" + id + "/tributos-proprios").then(function (r) {
+    var box = $("trib"); if (!box) return;
+    if (!r.rows.length) { box.innerHTML = '<h2>ISS e ICMS próprios</h2><div class="empty">Nada a recolher fora do DAS: empresa do Simples sem impedimento, sem regime cadastrado ou sem notas prestadas/emitidas.</div>'; return; }
+    var rows = r.rows.map(function (x) {
+      var dt0 = x.details || {};
+      var what = x.kind === "ISS"
+        ? 'ISS · ' + esc(x.placeName) + '<div class="mut" style="font-size:11px">' + (dt0.notes || 0) + ' nota(s) · base ' + brl(dt0.base || 0) + (dt0.withheldNotes ? ' · ' + dt0.withheldNotes + ' com ISS retido (fora)' : '') + '</div>'
+        : 'ICMS · ' + esc(x.placeName) + ' <span class="mut" style="font-size:11px">(prévia)</span><div class="mut" style="font-size:11px">débitos ' + brl(dt0.debits) + ' − créditos ' + brl(dt0.credits) + (Number(dt0.carryIn) ? ' − saldo anterior ' + brl(dt0.carryIn) : '') + (Number(dt0.carryOut) ? ' · saldo credor ' + brl(dt0.carryOut) : '') + '</div>';
+      var chk = (x.checks || []).map(function (c) { return '<div class="wr" style="font-size:11px">' + esc(c) + '</div>'; }).join("");
+      var pay = x.payment ? d(x.payment.postedOn) + '<div class="mut" style="font-size:11px">' + esc(x.payment.memo) + '</div>' : '<span class="mut">—</span>';
+      var guide = x.guide ? 'enviada ' + d(x.guide.sentOn) : (x.status === "A_VENCER" || x.status === "GUIA_NAO_ENVIADA" || x.status === "PAGAMENTO_NAO_IDENTIFICADO") && x.responsibility !== "ANTERIOR" ? guideForm(id, x.tax, x.competence, x.amount, x.due, "Enviada") : '<span class="mut">—</span>';
+      return '<tr><td>' + mm(x.competence) + '<div class="mut" style="font-size:11px">' + esc(x.why) + '</div></td><td>' + what + chk + '</td><td class="num"><b>' + brl(x.amount) + '</b></td><td>' + (x.due ? d(x.due) : '<span class="mut">—</span>') + (x.dueReason ? '<div class="mut" style="font-size:11px">' + esc(x.dueReason) + '</div>' : '') + '</td><td>' + guide + '</td><td>' + pay + '</td><td>' + (LTS[x.status] || WS[x.status] || esc(x.status)) + '</td></tr>';
+    }).join("");
+    var miss = (r.missingIssDue || []).map(function (m) {
+      return '<div class="form-row only-aprovar" style="margin:4px 0;background:var(--amber-bg);padding:8px;border-radius:6px"><b>ISS próprio em ' + esc(m.name) + '</b>' +
+        '<label>vence no dia<input id="issp-day-' + m.ibge + '" inputmode="numeric" style="width:50px"></label>' +
+        '<label>se não for dia útil<select id="issp-adj-' + m.ibge + '"><option value="PREVIOUS_BUSINESS_DAY">antecipa</option><option value="NEXT_BUSINESS_DAY">prorroga</option><option value="NONE">não muda</option></select></label>' +
+        '<label>vale para<select id="issp-sc-' + m.ibge + '"><option value="AMBOS">próprio e retido</option><option value="PROPRIO">só o próprio</option></select></label>' +
+        '<label>fundamento<input id="issp-law-' + m.ibge + '" placeholder="lei ou decreto municipal" style="width:240px"></label>' +
+        '<button class="warn" data-issp="' + m.ibge + '" data-name="' + esc(m.name) + '">Registrar prazo</button></div>';
+    }).join("") + (r.missingIcmsDue || []).map(function (uf) {
+      return '<div class="form-row only-aprovar" style="margin:4px 0;background:var(--amber-bg);padding:8px;border-radius:6px"><b>ICMS normal em ' + esc(uf) + '</b>' +
+        '<label>vence no dia<input id="icms-day-' + uf + '" inputmode="numeric" style="width:50px"></label>' +
+        '<label>se não for dia útil<select id="icms-adj-' + uf + '"><option value="NEXT_BUSINESS_DAY">prorroga</option><option value="PREVIOUS_BUSINESS_DAY">antecipa</option><option value="NONE">não muda</option></select></label>' +
+        '<label>fundamento<input id="icms-law-' + uf + '" placeholder="RICMS do estado, art. …" style="width:240px"></label>' +
+        '<button class="warn" data-icmsd="' + uf + '">Registrar prazo</button></div>';
+    }).join("");
+    box.innerHTML = '<h2>ISS e ICMS próprios</h2>' + (miss ? '<div style="margin-bottom:8px"><div class="mut" style="font-size:12px">Informe o vencimento uma vez (vale para todas as empresas). A IARIS acompanha o prazo e procura o pagamento no extrato:</div>' + miss + '</div>' : '') +
+      '<div class="scroll"><table><thead><tr><th>Competência</th><th>Tributo</th><th class="num">A recolher</th><th>Vencimento</th><th>Guia ao cliente</th><th>Pagamento</th><th>Situação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="empty">Fora do Simples, ou no Simples impedido pelo sublimite. ISS: o destacado nas NFS-e prestadas sem retenção, por município. ICMS: prévia pelas NF-e (débitos das saídas − créditos das entradas − saldo credor), sem ajustes, CIAP, DIFAL e ST; confira com a EFD. A guia é emitida no portal do município/estado; nada é transmitido.</div>';
+    box.querySelectorAll("[data-issp]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var g = b.getAttribute("data-issp");
+        post("/api/iss-vencimento", "aprovar", { municipio: g, nome: b.getAttribute("data-name"), dia: Number($("issp-day-" + g).value), ajuste: $("issp-adj-" + g).value, alcance: $("issp-sc-" + g).value, fundamento: $("issp-law-" + g).value }).then(function (x) {
+          toast("Prazo registrado. " + x.changed + " situação(ões) atualizada(s).");
+          return loadTributos(id);
+        }).catch(function (e) { toast(e.message); });
+      });
+    });
+    box.querySelectorAll("[data-icmsd]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var uf = b.getAttribute("data-icmsd");
+        post("/api/icms-vencimento", "aprovar", { uf: uf, dia: Number($("icms-day-" + uf).value), ajuste: $("icms-adj-" + uf).value, fundamento: $("icms-law-" + uf).value }).then(function (x) {
+          toast("Prazo registrado. " + x.changed + " situação(ões) atualizada(s).");
+          return loadTributos(id);
+        }).catch(function (e) { toast(e.message); });
+      });
     });
   }).catch(function (err) { toast(err.message); });
 }

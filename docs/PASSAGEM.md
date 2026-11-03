@@ -183,7 +183,10 @@ Além das 10 regras do CLAUDE.md:
    ficam com "tabela a aprovar"; a v1 continua valendo para o resto. No PC, depois do `git pull` e da migração 0050,
    rodar uma vez `node --env-file-if-exists=.env --import tsx src/cli/pgdas-reparse.ts --todas` para ler a folha
    (seção 2.3) dos PDFs já guardados, sem nova consulta ao SERPRO.
-4. Fila de exceções (57 pendências abertas em 19/10): guias não enviadas de SAFE ON/SABORES, ISS de São Paulo/Barbacena,
+4. ISS e ICMS próprios (migração 0051): informar, uma vez por município/UF, o vencimento do ISS próprio
+   (pode valer para próprio e retido) e do ICMS normal, com o fundamento. As pendências `ISSP_DUE_*` e
+   `ICMS_DUE_*` aparecem sozinhas para as empresas fora do Simples (ou impedidas pelo sublimite).
+5. Fila de exceções (57 pendências abertas em 19/10): guias não enviadas de SAFE ON/SABORES, ISS de São Paulo/Barbacena,
    lacunas de NSU, movimento de R$ 650 da SAFE ON, sublimite.
 
 **Técnicas:**

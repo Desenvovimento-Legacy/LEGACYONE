@@ -171,6 +171,17 @@ export const EventContracts = {
       decided_by: z.string(),
     }),
   },
+  LOCAL_TAX_STATUS_CHANGED: {
+    1: z.object({
+      entity_id: z.uuid(),
+      competence: z.iso.date(),
+      tax: z.string().regex(/^(ISSP:\d{7}|ICMS:[A-Z]{2})$/),
+      status: z.string(),
+      amount: z.string(),
+      paid: z.string().nullable(),
+      due: z.iso.date().nullable(),
+    }),
+  },
   PAYROLL_INFORMED: {
     1: z.object({
       entity_id: z.uuid(),

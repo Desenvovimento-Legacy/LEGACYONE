@@ -14,6 +14,7 @@ import { preparePgdasDrafts } from "../tax/simples/pgdas-draft.js";
 import { readEntityNfeItems } from "../fiscal/nfe-items.js";
 import { runReview } from "../review/review.js";
 import { refreshCorporate } from "../tax/corporate/corporate.js";
+import { refreshLocalTaxes } from "../tax/local-taxes.js";
 import { detectTaxRegime } from "../registry/regime-detect.js";
 
 /**
@@ -92,6 +93,14 @@ export const LINKS: Link<LinkDeps>[] = [
     agent: "fiscal",
     does: "Confere o IRRF e o PIS/COFINS/CSLL retidos nas notas tomadas com o DARF pago",
     run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await refreshWithholdings(pool, tenantId, entityId!, today(deps))) }),
+  },
+  {
+    id: "tributos-proprios",
+    on: ["NFSE_TAXES_READ", "NFE_ITEMS_READ", "BANK_STATEMENT_RECEIVED", "SIMPLES_CALCULATED", "CONTRACTED_SERVICES_DEFINED", "TAX_REGIME_DEFINED"],
+    agent: "tax",
+    does: "Calcula o ISS próprio das NFS-e prestadas e a prévia do ICMS (fora do Simples ou com impedimento) e procura o pagamento no extrato",
+    when: (e) => Boolean(e.entity_id),
+    run: async ({ pool, tenantId, entityId, deps }) => ({ ...(await refreshLocalTaxes(pool, tenantId, entityId!, today(deps))) }),
   },
   {
     id: "retencoes-obrigacoes",
@@ -219,6 +228,7 @@ export const EVENT_LABEL: Record<string, string> = {
   FEDERAL_PAYMENTS_SYNCED: "Pagamentos federais buscados",
   SIMPLES_RULES_APPROVED: "Tabelas do Simples aprovadas",
   PAYROLL_INFORMED: "Folha de salários informada (fator r)",
+  LOCAL_TAX_STATUS_CHANGED: "Situação do ISS/ICMS próprio mudou",
   CONTRACTED_SERVICES_DEFINED: "Serviços e início da responsabilidade definidos",
   DIGITAL_CERTIFICATE_REGISTERED: "Certificado A1 registrado no cofre",
   NFSE_TAXES_READ: "Tributos das NFS-e lidos",

@@ -220,14 +220,20 @@ const lastDay = (ym: string) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number
 const addDaysIso = (iso: string, n: number) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const dayDiff = (a: string, b: string) => (Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000;
 
-export interface MunicipalIssDue { ibge: string; name: string; day: number; adjust: DueAdjust; legalBasis: string; validFrom: string; createdBy: string }
+export type IssDueScope = "RETIDO" | "PROPRIO" | "AMBOS";
+export interface MunicipalIssDue { ibge: string; name: string; day: number; adjust: DueAdjust; legalBasis: string; validFrom: string; createdBy: string; appliesTo: IssDueScope }
 
-/** Prazos do ISS retido informados pelo escritório, o mais recente primeiro. */
-export async function municipalIssDue(tx: PoolClient): Promise<MunicipalIssDue[]> {
-  const { rows } = await tx.query<{ municipio_ibge: string; municipio_name: string; day: number; adjust: DueAdjust; legal_basis: string; valid_from: string; created_by: string }>(
-    "SELECT municipio_ibge, municipio_name, day, adjust, legal_basis, valid_from::text, created_by FROM municipal_iss_due ORDER BY valid_from DESC, created_at DESC",
+/**
+ * Prazos do ISS informados pelo escritório, o mais recente primeiro.
+ * `kind` filtra pelo alcance: o ISS retido usa RETIDO ou AMBOS; o próprio, PROPRIO ou AMBOS.
+ */
+export async function municipalIssDue(tx: PoolClient, kind: "RETIDO" | "PROPRIO" = "RETIDO"): Promise<MunicipalIssDue[]> {
+  const { rows } = await tx.query<{ municipio_ibge: string; municipio_name: string; day: number; adjust: DueAdjust; legal_basis: string; valid_from: string; created_by: string; applies_to: IssDueScope }>(
+    `SELECT municipio_ibge, municipio_name, day, adjust, legal_basis, valid_from::text, created_by, applies_to FROM municipal_iss_due
+      WHERE applies_to IN ($1, 'AMBOS') ORDER BY valid_from DESC, created_at DESC`,
+    [kind],
   );
-  return rows.map((r) => ({ ibge: r.municipio_ibge, name: r.municipio_name, day: r.day, adjust: r.adjust, legalBasis: r.legal_basis, validFrom: r.valid_from, createdBy: r.created_by }));
+  return rows.map((r) => ({ ibge: r.municipio_ibge, name: r.municipio_name, day: r.day, adjust: r.adjust, legalBasis: r.legal_basis, validFrom: r.valid_from, createdBy: r.created_by, appliesTo: r.applies_to }));
 }
 
 export class IssDueError extends Error {}
@@ -236,9 +242,9 @@ export class IssDueError extends Error {}
  * Proposta de prazo do ISS retido já pesquisada (fonte oficial do município).
  * Só preenche o formulário: quem registra o prazo continua sendo a pessoa.
  */
-export const ISS_DUE_HINTS: Record<string, { day: number; adjust: DueAdjust; basis: string }> = {
+export const ISS_DUE_HINTS: Record<string, { day: number; adjust: DueAdjust; basis: string; appliesTo?: IssDueScope }> = {
   "3550308": { day: 10, adjust: "PREVIOUS_BUSINESS_DAY", basis: "Prefeitura de São Paulo: ISS retido vence no dia 10 do mês seguinte (IN SF/SUREM nº 08/2011)" },
-  "4106902": { day: 20, adjust: "PREVIOUS_BUSINESS_DAY", basis: "Prefeitura de Curitiba: ISS (inclusive do responsável tributário) vence no dia 20 do mês seguinte, pelo DAM (Decreto nº 1.442/2007)" },
+  "4106902": { day: 20, adjust: "PREVIOUS_BUSINESS_DAY", basis: "Prefeitura de Curitiba: ISS (inclusive do responsável tributário) vence no dia 20 do mês seguinte, pelo DAM (Decreto nº 1.442/2007)", appliesTo: "AMBOS" },
 };
 
 export class GuideDispatchError extends Error {}
@@ -253,7 +259,7 @@ export async function registerGuideSent(
   actor: Actor, today: string,
 ) {
   if (actor.kind !== "USER") throw new GuideDispatchError("Envio de guia ao cliente é registrado por uma pessoa");
-  if (!/^(IRRF|CSRF|SIMPLES|ISS:\d{7})$/.test(input.tax)) throw new GuideDispatchError("Tributo da guia inválido");
+  if (!/^(IRRF|CSRF|SIMPLES|ISS:\d{7}|ISSP:\d{7}|ICMS:[A-Z]{2})$/.test(input.tax)) throw new GuideDispatchError("Tributo da guia inválido");
   if (!/^\d{4}-\d{2}-01$/.test(input.competence)) throw new GuideDispatchError("Competência deve ser AAAA-MM-01");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.sentOn) || input.sentOn > today) throw new GuideDispatchError("Data de envio inválida");
   await withTenant(pool, tenantId, async (tx) => {
@@ -277,10 +283,12 @@ export async function registerGuideSent(
  */
 export async function setMunicipalIssDue(
   pool: Pool, tenantId: string,
-  input: { ibge: string; name: string; day: number; adjust: DueAdjust; legalBasis: string; validFrom?: string },
+  input: { ibge: string; name: string; day: number; adjust: DueAdjust; legalBasis: string; validFrom?: string; appliesTo?: IssDueScope },
   actor: Actor, today: string,
 ) {
   if (actor.kind !== "USER") throw new IssDueError("O prazo do ISS do município é informado por uma pessoa (com o fundamento)");
+  const appliesTo: IssDueScope = input.appliesTo ?? "RETIDO";
+  if (!["RETIDO", "PROPRIO", "AMBOS"].includes(appliesTo)) throw new IssDueError("Alcance do prazo: RETIDO, PROPRIO ou AMBOS");
   if (!/^\d{7}$/.test(input.ibge)) throw new IssDueError("Código IBGE do município com 7 dígitos");
   if (!Number.isInteger(input.day) || input.day < 1 || input.day > 31) throw new IssDueError("Dia do vencimento entre 1 e 31");
   if ((input.legalBasis ?? "").trim().length < 3) throw new IssDueError("Informe o fundamento (lei ou decreto municipal)");
@@ -288,13 +296,14 @@ export async function setMunicipalIssDue(
   const entities = await withTenant(pool, tenantId, async (tx) => {
     const id = newId();
     await tx.query(
-      `INSERT INTO municipal_iss_due (id, tenant_id, municipio_ibge, municipio_name, day, adjust, legal_basis, valid_from, created_by)
-       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (tenant_id, municipio_ibge, valid_from) DO NOTHING`,
-      [id, input.ibge, input.name.trim(), input.day, input.adjust, input.legalBasis.trim(), validFrom, actor.id],
+      `INSERT INTO municipal_iss_due (id, tenant_id, municipio_ibge, municipio_name, day, adjust, legal_basis, valid_from, created_by, applies_to)
+       VALUES ($1, current_tenant(), $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (tenant_id, municipio_ibge, applies_to, valid_from) DO NOTHING`,
+      [id, input.ibge, input.name.trim(), input.day, input.adjust, input.legalBasis.trim(), validFrom, actor.id, appliesTo],
     );
-    await audit(tx, { actor, action: "fiscal.iss_due_set", resourceType: "municipal_iss_due", resourceId: id, data: { ...input, validFrom } });
-    const pend = await tx.query<{ id: string }>("SELECT id FROM pending_item WHERE status = 'OPEN' AND type = $1", [`ISS_DUE_${input.ibge}`]);
+    await audit(tx, { actor, action: "fiscal.iss_due_set", resourceType: "municipal_iss_due", resourceId: id, data: { ...input, validFrom, appliesTo } });
+    const types = [...(appliesTo !== "PROPRIO" ? [`ISS_DUE_${input.ibge}`] : []), ...(appliesTo !== "RETIDO" ? [`ISSP_DUE_${input.ibge}`] : [])];
+    const pend = await tx.query<{ id: string }>("SELECT id FROM pending_item WHERE status = 'OPEN' AND type = ANY($1)", [types]);
     for (const p of pend.rows) await resolvePendingItem(tx, { id: p.id, resolution: `Vencimento informado: dia ${input.day} (${input.legalBasis.trim()})` }, actor);
     return (await tx.query<{ id: string }>("SELECT DISTINCT entity_id AS id FROM nfse_tax WHERE role = 'TOMADA' AND incidence_city = $1 AND iss_withheld > 0", [input.ibge])).rows;
   });
